@@ -1,0 +1,59 @@
+[
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 8,
+    "position": "0000004272:0000000008",
+    "conversation": "a..b@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 10:00:00 +0000",
+      "From: A Stranger <stranger@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <a..b@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "a sender who chose a Message-ID carrying a dot segment"
+    ]
+  },
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 9,
+    "position": "0000004272:0000000009",
+    "conversation": "a/b@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 10:00:00 +0000",
+      "From: A Stranger <stranger@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <a/b@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "a sender who chose a Message-ID carrying a path separator"
+    ]
+  },
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 10,
+    "position": "0000004272:0000000010",
+    "conversation": "a\u0001b@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 10:00:00 +0000",
+      "From: A Stranger <stranger@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <a\u0001b@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "a sender who chose a Message-ID carrying a control byte"
+    ]
+  }
+]

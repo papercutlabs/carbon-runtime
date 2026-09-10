@@ -1,0 +1,14 @@
+Message-ID:
+ <010001a08aa2cd6e-99b4027f-ed2d-4952-95f0-c6d062d78ecf-000000@mail.example.test>
+X-Carbon-Origin: probe
+From: Agent 01 <agent-01@example.test>
+To: agent-01@example.test
+Subject: carbon-email smoke 20260910092517866
+Date: Thu, 10 Sep 2026 09:25:20 +0000
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This is the probe mail of the email adapter smoke, run 20260910092517866. =
+It exists so the mailbox has a message the agent owns, and so the answer =
+that follows is a real reply.

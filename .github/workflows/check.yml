@@ -44,6 +44,9 @@ jobs:
       - name: the history import passes its subset
         run: node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
 
+      - name: the email adapter passes the cases that apply to it
+        run: node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/fixtures
+
       # The copied files are copies. Nothing here edits them; the authority is
       # the private half, whose own test compares the two byte for byte when
       # both checkouts are present. What this can check without that checkout is

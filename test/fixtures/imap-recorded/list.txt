@@ -1,0 +1,6 @@
+* LIST (\NoInferiors \HasNoChildren) "/" "INBOX"
+* LIST (\NoInferiors \HasNoChildren \Sent) "/" "Sent"
+* LIST (\NoInferiors \HasNoChildren \Drafts) "/" "Drafts"
+* LIST (\NoInferiors \HasNoChildren \Archive) "/" "Archive"
+* LIST (\NoInferiors \HasNoChildren \Trash) "/" "Trash"
+* LIST (\NoInferiors \HasNoChildren \Junk) "/" "Spam"
