@@ -97,6 +97,33 @@ export function when(seconds) {
   return null;
 }
 
+// Which tools a turn called, by name and never by argument.
+//
+// A turn's cost was already in the log and what it did was not, so "did the agent
+// actually read the client's system, or did it answer out of the conversation" was
+// a question nobody could settle from outside the box: the only evidence was the
+// process owner and a file's mode. The names settle it. The arguments are
+// deliberately absent, because an argument carries the client's own content and
+// this line is read by anyone who can read the unit's log.
+//
+// On this protocol a tool call is an item on the completed turn. `mcpToolCall`
+// carries the server and the tool; `dynamicToolCall`, which is what the code-mode
+// host produces, carries the tool and a namespace. Anything else is not a tool
+// call and is not counted, so a turn that called nothing logs an empty list rather
+// than nothing at all — "it called no tool" is an answer and it is the one the
+// first real box needed.
+export function toolCallsIn(items) {
+  const calls = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item?.type === 'mcpToolCall') {
+      calls.push({ server: item.server ?? null, tool: item.tool ?? null, status: item.status ?? null });
+    } else if (item?.type === 'dynamicToolCall') {
+      calls.push({ server: item.namespace ?? null, tool: item.tool ?? null, status: item.status ?? null });
+    }
+  }
+  return calls;
+}
+
 export function releaseIdFor(record) {
   return `release-${record.message_id}-${record.revision ?? 0}`;
 }
@@ -509,7 +536,8 @@ export class ReleaseLoop {
     this.log({
       event: 'turn', message_id: record.message_id, release_id: releaseId,
       thread_id: threadId, turn_id: result.turn_id, status: result.status,
-      token_usage: result.token_usage ?? null
+      token_usage: result.token_usage ?? null,
+      tool_calls: toolCallsIn(result.items)
     });
 
     if (result.status !== 'completed') {

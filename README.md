@@ -110,7 +110,7 @@ serves the `reply` tool on loopback. Then, on every pass: poll the channel,
 recover what the last run owed, capture what is pending past the cursors, release
 what the channel's policy allows, and deliver what the model replied.
 
-Seven rules are worth stating on their own.
+Eight rules are worth stating on their own.
 
 1. **The release is written on the record before the turn starts.** A restart
    reads the store, not the harness's files: a release with a sent reply is
@@ -120,7 +120,12 @@ Seven rules are worth stating on their own.
    id a turn carries, so the runtime tells the model which `request_id` to use,
    that id is the release id and is the same on a re-issue, and the store
    answers a repeat rather than sending twice.
-3. **A completed turn is not an answered message.** The reply tool is the one
+3. **A turn's log line says what it cost and which tools it called.** The token
+   breakdown and the tool names, by name and never by argument: an argument
+   carries the client's own content and the log is read by anyone who can read the
+   unit's output. Without the names, "did the agent read the client's system or
+   answer out of the conversation" cannot be settled from outside the box.
+4. **A completed turn is not an answered message.** The reply tool is the one
    door out of a turn, and a model that writes its answer into its own message
    has delivered nothing. So the instruction is the first line and the last line
    of the turn text, and when a turn completes with no outbound record for its
@@ -129,7 +134,7 @@ Seven rules are worth stating on their own.
    that reason on the record. Anything else parks the record with reason
    `no-reply`, and what the model said is kept on the thread record so a person
    can read why it thought it had answered.
-4. **A required tool server that is down holds release, by name.** The status is
+5. **A required tool server that is down holds release, by name.** The status is
    read after the unit's thread is open, because that is the only way the
    harness reports it, and a startup notification re-raises the hold. A server
    the harness lists that no declaration names refuses the start outright.
@@ -144,7 +149,7 @@ Seven rules are worth stating on their own.
    process carries on: the agent still has to read its mailbox, and a required
    server that is not connected holds release by name, which is the same ending a
    server this process started reaches when it dies at hour three.
-5. **A channel is polled on its own interval, and a channel that cannot be read
+6. **A channel is polled on its own interval, and a channel that cannot be read
    holds.** An adapter that has to go and look exports `poll`; the interval is
    the declaration's and is refused at start if it is below the adapter's floor,
    because a mailbox polled too fast earns a lockout that lasts a day. A poll
@@ -153,7 +158,7 @@ Seven rules are worth stating on their own.
    the channel's `poll_failures_before_hold` the channel holds, does no capture,
    no release and no delivery, and a check from outside the box reads the hold
    off that file.
-6. **A record the runtime cannot release is parked, not fatal.** A message with
+7. **A record the runtime cannot release is parked, not fatal.** A message with
    no unit id, or anything else raised while one record is being released, is
    written on that record as a fault, the record's disposition becomes `parked`,
    and the loop takes the next one. Exiting instead would put the unit in a
@@ -161,7 +166,7 @@ Seven rules are worth stating on their own.
    limit; a check from outside the box reads the parked list. Four endings still
    end the process: the harness child exiting, the latch, the lock, and an
    app-server listing a tool server no declaration names.
-7. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
+8. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
    stops the process with exit code 78, which the unit does not restart on, and
    only the next install clears it.
 
