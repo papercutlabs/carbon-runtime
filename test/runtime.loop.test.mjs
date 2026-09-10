@@ -6,7 +6,8 @@ import path from 'node:path';
 
 import { Store } from '../stream/store.mjs';
 import {
-  ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction
+  ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
+  toolCallsIn
 } from '../runtime/loop.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
@@ -508,4 +509,25 @@ test('an adapter whose send is a promise is awaited, not read for a status it ha
   assert.equal(outbound.length, 1);
   assert.equal(outbound[0].delivery.status, 'sent');
   assert.deepEqual(outbound[0].delivery.chunk_ids, ['chunk-1']);
+});
+
+test('the log says which tools a turn called, by name and never by argument', () => {
+  // The names, and nothing beside them. An argument carries the client's own
+  // content, and this line is read by anyone who can read the unit's log.
+  const items = [
+    { type: 'agentMessage', text: 'thinking out loud' },
+    { type: 'mcpToolCall', server: 'client-api', tool: 'lookup_record', status: 'completed', arguments: { reference: 'a private value' } },
+    { type: 'dynamicToolCall', namespace: 'client-api', tool: 'read_record', status: 'completed', arguments: { id: 'another' } },
+    { type: 'commandExecution', command: 'ls' }
+  ];
+  const calls = toolCallsIn(items);
+  assert.deepEqual(calls, [
+    { server: 'client-api', tool: 'lookup_record', status: 'completed' },
+    { server: 'client-api', tool: 'read_record', status: 'completed' }
+  ]);
+  assert.ok(!JSON.stringify(calls).includes('a private value'));
+  // A turn that called nothing says so, because "it called no tool" is the answer
+  // the first real box needed and an absent field is not one.
+  assert.deepEqual(toolCallsIn([]), []);
+  assert.deepEqual(toolCallsIn(undefined), []);
 });
