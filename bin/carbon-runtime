@@ -28,7 +28,7 @@ rendered into that directory by install, and it is read from there:
   <agent-dir>/current/carbon.agent.json   the declaration
   <agent-dir>/store                       the store, and the latch under it
   <agent-dir>/codex-home                  CODEX_HOME: config.toml and the rollouts
-  <agent-dir>/work                        the thread's working directory
+  <agent-dir>/current/repo                the checkout, and the thread's working directory
   <agent-dir>/harness/<version>/codex     the pinned harness binary
 
 Off a box each of those is passed explicitly. Nothing is guessed and nothing has
