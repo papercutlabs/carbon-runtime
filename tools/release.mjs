@@ -23,7 +23,12 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 // What a box needs to run an agent, and nothing else.
 const SHIPPED = [
   'package.json', 'package-lock.json', 'README.md',
-  'schema', 'stream', 'adapters', 'import', 'conformance', 'bin'
+  'schema', 'stream', 'adapters', 'import', 'conformance', 'bin',
+  // The runtime process, the harness it spawns, and the two libraries they
+  // import. `tools/lib` ships and the rest of `tools/` does not: the MCP
+  // scaffold is code the reply tool runs, and the identifier scan and the
+  // release builder are not.
+  'runtime', 'harness', 'lib', 'tools/lib'
 ];
 
 function main(argv) {

@@ -1,0 +1,32 @@
+Where the copied files under this repository came from, and what may be done to them.
+
+source repository   the private half of Carbon, named in that repository's README
+source commit       52ca1514d512246d205407c64d82b3adb8268c75
+copied on           2026-09-10
+
+Copied verbatim, as whole files, with no edit of any kind:
+
+  harness/codex/**        minus verifications/
+  lib/faults.mjs          the fault shape harness/codex/ imports
+  tools/lib/mcp.mjs       the MCP server scaffold the reply tool is served by
+  tools/lib/fault.mjs     what mcp.mjs imports
+  tools/lib/args.mjs      what mcp.mjs imports
+  tools/lib/manifest.mjs  what mcp.mjs imports
+
+Why a copy and not a dependency. The runtime process is the one thing a systemd
+unit starts on a box, and it spawns the harness as its direct child, so the
+harness's code has to be inside the tarball that lands there. The private
+repository holds the machinery and the wisdom; what it renders goes around, and
+this code is a rendering. The private repository stays the authority: its
+test/public-copies.test.mjs compares these files with the ones here, byte for
+byte, whenever both checkouts are present, and fails on any drift.
+
+What is not copied. harness/codex/verifications/ and harness/README.md stay in
+the private repository. They are the record of what the pinned binary actually
+does and the reasoning behind the boundary, which is wisdom rather than a
+rendering, and several of them name the machine the runs were made on, which
+this repository's identifier scan refuses.
+
+How to change one of these files. Change it in the private repository, land it
+there, copy the file here again, and update the source commit above. An edit
+made here is drift and the authority's test fails on it.

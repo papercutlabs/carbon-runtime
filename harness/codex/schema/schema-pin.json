@@ -1,0 +1,14 @@
+{
+  "note": "The app-server protocol carbon's Codex harness is written against. Generated from the pinned binary and checked in, so a version bump fails on a digest rather than at three in the morning on a client box. install regenerates both digests from the binary it just unpacked and refuses on a mismatch.",
+  "codex_version": "codex-cli 0.153.4",
+  "release_tag": "rust-v0.153.4",
+  "generate_command": "codex app-server generate-json-schema --out <dir>",
+  "experimental": false,
+  "document": "codex_app_server_protocol.schemas.json",
+  "document_sha256": "e8284c5cb8157554a3dd1e035aadbd4325aea501af56887e9c2e12eb1b9b9448",
+  "bundle_sha256": "93e2b02132a087be5a8003cdd83421e116eccdabbe9c40b207e1d082fc339507",
+  "bundle_files": 304,
+  "bundle_sha256_is": "sha256 of the bundle manifest: one '<sha256>  <relative path>' line per file, sorted by path, newline terminated. One hex string covers every file the subcommand wrote, and the manifest itself says which file moved.",
+  "generated_on": "2026-09-10",
+  "generated_on_machine": "the build machine, darwin arm64, against the Homebrew-installed codex-cli 0.153.4"
+}

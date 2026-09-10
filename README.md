@@ -34,6 +34,10 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 
 | path | what it is |
 |---|---|
+| `runtime/` | the process a unit starts: the release loop, the reply tool, the tool-server launcher, the adapter registry, the per-adapter lock and the terminal latch |
+| `bin/carbon-runtime` | `run --agent-dir <dir>` on a box; every path explicit off one |
+| `harness/codex/` | a copy of the Codex harness the runtime spawns and drives; `harness/HARNESS-SOURCE` says where it came from and that nothing here edits it |
+| `lib/faults.mjs`, `tools/lib/` | the fault shape and the MCP server scaffold, copied under the same rule |
 | `schema/carbon.message.v1.json` | the vendored record shape; one JSON file per record |
 | `stream/` | the store library: path derivation and containment, the write order, the two cursors, the merge, the arrivals index, the outbound records and the reply fence |
 | `stream/adapter.md` | the adapter contract: the three capabilities, the five operations, the fixtures an adapter ships |
@@ -47,7 +51,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person |
 | `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>` |
 | `test/` | `node --test "test/*.test.mjs"` |
-| `tools/` | the identifier scan and the release build |
+| `tools/` | the MCP scaffold the reply tool is served by, the identifier scan and the release build |
 
 ## The store
 
@@ -87,6 +91,43 @@ Six rules hold it together.
    already `sent` gets the stored chunk ids back and sends nothing; one already
    `pending` is refused; one whose acceptance is `unknown` is never retried,
    because an uncertain send is a person's decision.
+
+## The one process
+
+A box runs one unit per agent and the unit starts one process:
+
+```
+carbon-runtime run --agent-dir /srv/carbon/<agent id>
+```
+
+It reads the declaration install rendered, spawns the pinned harness as its
+direct child and exits non-zero if that child exits, so the unit restarts the
+pair together. It starts the tool servers that hold secrets as the tools user,
+with an environment built from empty. It hosts the adapters in this process,
+takes one lock per adapter and takes over a lock whose holder is not alive. It
+serves the `reply` tool on loopback. Then, on every pass: recover what the last
+run owed, capture what is pending past the cursors, release what the channel's
+policy allows, and deliver what the model replied.
+
+Four rules are worth stating on their own.
+
+1. **The release is written on the record before the turn starts.** A restart
+   reads the store, not the harness's files: a release with a sent reply is
+   done, a release with a pending reply needs the send, a release with no reply
+   is re-issued, and an unknown one is left for a person.
+2. **The request id is the only fence.** The harness does not deduplicate on the
+   id a turn carries, so the runtime tells the model which `request_id` to use,
+   that id is the release id and is the same on a re-issue, and the store
+   answers a repeat rather than sending twice.
+3. **A required tool server that is down holds release, by name.** The status is
+   read after the unit's thread is open, because that is the only way the
+   harness reports it, and a startup notification re-raises the hold. A server
+   the harness lists that no declaration names refuses the start outright.
+4. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
+   stops the process with exit code 78, which the unit does not restart on, and
+   only the next install clears it.
+
+`runtime/proofs/` holds what has been run for real against the pinned harness.
 
 ## Running the check
 
