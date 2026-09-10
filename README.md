@@ -38,8 +38,12 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `stream/` | the store library: path derivation and containment, the write order, the two cursors, the merge, the arrivals index, the outbound records and the reply fence |
 | `stream/adapter.md` | the adapter contract: the three capabilities, the five operations, the fixtures an adapter ships |
 | `adapters/fixture/` | an adapter with no channel, so the conformance check has something to run |
+| `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
+| `import/` | the history import: a zip reader with no dependency, and the map from an export's rows to records |
 | `conformance/cases.mjs` | the seventeen cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
+| `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person |
+| `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>` |
 | `test/` | `node --test "test/*.test.mjs"` |
 | `tools/` | the identifier scan and the release build |
 
@@ -86,6 +90,8 @@ Six rules hold it together.
 
 ```
 node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures
+node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures
+node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
 node bin/carbon-stream check --store /path/to/an/agent/store
 node bin/carbon-stream check --help
 ```
@@ -101,4 +107,11 @@ A box installs a pinned tarball, verified by its sha256, never a clone.
 from a clean checkout, holding what runs on a box and nothing else: no tests, no
 workflow, no tools. It publishes nothing.
 
-Node 22, ES modules, no dependencies.
+## The one dependency
+
+Node 22, ES modules, and exactly one dependency: `@whiskeysockets/baileys`,
+pinned to an exact version in `package.json` and `package-lock.json`, because
+WhatsApp has no other way in that this programme will use. Nothing else here
+loads it — the store library, the conformance check and the import have none —
+and the workflow fails if a second dependency appears or the pin grows a range.
+Why that version, and what it does not fix, is in `adapters/whatsapp/README.md`.

@@ -1,0 +1,154 @@
+#!/usr/bin/env node
+// carbon-whatsapp — pair a device once.
+//
+// This channel has no API key. It has a device that a person links to an account
+// from the phone, once, and an authentication directory that is then a secret
+// the box owner owns. This command is how that link is made: it asks the server
+// for a pairing code and prints it, and the person types that code into their
+// phone under linked devices.
+//
+// It is run by hand, by a person, once per agent. It is not run by install, it
+// is not run by the unit, and nothing here retries.
+
+import fs from 'node:fs';
+import { fault, report } from '../stream/faults.mjs';
+import { isPaired } from '../adapters/whatsapp/auth-state.mjs';
+import { authState, library } from '../adapters/whatsapp/socket.mjs';
+
+const HELP = `carbon-whatsapp — pair one device with a WhatsApp account
+
+Usage:
+  carbon-whatsapp pair --auth-dir <dir> --phone <number>
+
+  --auth-dir <dir>   where the device's authentication state is written. It is
+                     created if it is not there, and it must be a directory only
+                     the agent user can read: everything in it is a credential.
+  --phone <number>   the number to pair with, in international form, digits only
+                     and no leading plus: 15550000000, not +1 555 000 0000.
+
+What happens.
+
+The command connects, asks the server for a pairing code and prints it. On the
+phone, under linked devices, "link with phone number instead", the person types
+that code. The command then waits until the connection opens and the credentials
+are written, and exits.
+
+Everything it writes is written transactionally: to a temporary name in the same
+directory, flushed, renamed over the target, and the directory flushed after. A
+stop at the wrong moment leaves the old file or the new one and never half of
+one. That reduces the risk of a state file written half way. It does not stop the
+server from unlinking the device, and nothing on this box can: that is what the
+terminal latch is for.
+
+Pairing once is the intent. A directory that already holds a paired device is
+refused, so a second run cannot quietly replace a working pairing with a new one
+and orphan the first.
+
+Every argument is explicit and nothing is guessed. Every fault is one JSON line
+of {code, subject, problem, fix}, and any fault exits non-zero.`;
+
+function parse(rest) {
+  const faults = [];
+  const named = { '--auth-dir': null, '--phone': null };
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] in named) named[rest[i]] = rest[++i] ?? null;
+    else {
+      faults.push(fault('UNKNOWN_ARGUMENT', rest[i],
+        'not an argument of carbon-whatsapp pair',
+        'run carbon-whatsapp --help'));
+    }
+  }
+  for (const name of Object.keys(named)) {
+    if (named[name] === null) {
+      faults.push(fault('MISSING_ARGUMENT', name,
+        'this argument has no default and is not guessed',
+        `pass ${name}`));
+    }
+  }
+  const phone = named['--phone'];
+  if (phone !== null && !/^[1-9][0-9]{7,14}$/.test(phone)) {
+    faults.push(fault('PHONE_NOT_INTERNATIONAL', phone,
+      'a number to pair with is written in international form, digits only, no plus and no spaces',
+      'pass --phone 15550000000'));
+  }
+  if (named['--auth-dir'] !== null && isPaired(named['--auth-dir'])) {
+    faults.push(fault('ALREADY_PAIRED', named['--auth-dir'],
+      'this directory already holds a paired device, and pairing again would orphan it',
+      'pair into an empty directory, or unlink the existing device from the phone first'));
+  }
+  return { named, faults };
+}
+
+async function pair(authDir, phone) {
+  fs.mkdirSync(authDir, { recursive: true, mode: 0o700 });
+  const { makeWASocket, fetchLatestBaileysVersion } = await library();
+  const { state, saveCreds } = await authState(authDir);
+  const { version } = await fetchLatestBaileysVersion();
+
+  const socket = makeWASocket({ auth: state, version, printQRInTerminal: false });
+  socket.ev.on('creds.update', saveCreds);
+
+  return new Promise((resolve) => {
+    let asked = false;
+    socket.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+      if (!asked && (connection === 'connecting' || connection === undefined)) {
+        asked = true;
+        try {
+          const code = await socket.requestPairingCode(phone);
+          console.log(JSON.stringify({
+            pairing_code: code,
+            what_now: 'on the phone: linked devices, link with phone number instead, then type this code'
+          }, null, 2));
+        } catch (error) {
+          report([fault('PAIRING_CODE_REFUSED', phone,
+            (error.message ?? String(error)).split('\n')[0],
+            'check the number is the one on the phone and try once more; do not loop')]);
+          resolve(1);
+        }
+        return;
+      }
+      if (connection === 'open') {
+        console.log(JSON.stringify({
+          paired: true,
+          auth_dir: authDir,
+          what_now: 'this directory is now a credential the box owner owns; nothing else reads it'
+        }, null, 2));
+        resolve(0);
+        return;
+      }
+      if (connection === 'close') {
+        report([fault('PAIRING_CLOSED', phone,
+          lastDisconnect?.error?.message ?? 'the connection closed before the pairing completed',
+          'run the command again and type the code before it expires')]);
+        resolve(1);
+      }
+    });
+  });
+}
+
+async function main(argv) {
+  const args = argv.slice(2);
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    console.log(HELP);
+    return args.length === 0 ? 1 : 0;
+  }
+  if (args[0] !== 'pair') {
+    report([fault('UNKNOWN_SUBCOMMAND', args[0],
+      'the only carbon-whatsapp subcommand is pair',
+      'run carbon-whatsapp --help')]);
+    return 1;
+  }
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(HELP);
+    return 0;
+  }
+
+  const { named, faults } = parse(args.slice(1));
+  if (faults.length > 0) {
+    report(faults);
+    return 1;
+  }
+  return pair(named['--auth-dir'], named['--phone']);
+}
+
+process.exitCode = await main(process.argv);

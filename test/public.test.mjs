@@ -37,7 +37,7 @@ test('the scan matches a whole word and not a fragment of one', () => {
 });
 
 test('nothing in this tree can take a client\'s records away', () => {
-  for (const dir of ['stream', 'adapters', 'conformance', 'bin']) {
+  for (const dir of ['stream', 'adapters', 'import', 'conformance', 'bin']) {
     const walk = (at) => {
       for (const name of fs.readdirSync(at)) {
         const full = path.join(at, name);

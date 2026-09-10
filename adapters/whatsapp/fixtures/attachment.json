@@ -1,0 +1,53 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000003",
+    "received_at": "2026-09-10T09:20:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A0000003",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789035600,
+      "pushName": "Ada",
+      "message": {
+        "documentMessage": {
+          "mimetype": "text/plain",
+          "fileName": "august-invoice.txt",
+          "fileLength": 32,
+          "caption": "The invoice is attached."
+        }
+      }
+    },
+    "attachments": [
+      {
+        "bytes": "invoice line 14\ninvoice line 15\n",
+        "mime": "text/plain"
+      }
+    ]
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000004",
+    "received_at": "2026-09-10T09:22:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A0000004",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789035720,
+      "pushName": "Ada",
+      "message": {
+        "imageMessage": {
+          "mimetype": "image/jpeg",
+          "fileLength": 184320,
+          "caption": "And the scan, which may not have come through."
+        }
+      }
+    }
+  }
+]

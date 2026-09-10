@@ -1,0 +1,21 @@
+[
+  {
+    "conversation": "120363000000000001@g.us",
+    "position": "000000000201",
+    "received_at": "2026-09-10T10:20:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "120363000000000001@g.us",
+        "participant": "15550002222@s.whatsapp.net",
+        "participantAlt": "198765432109876@lid",
+        "id": "3EB0G0000001",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789040000,
+      "pushName": "Bo",
+      "message": {
+        "conversation": "Can somebody confirm the delivery window?"
+      }
+    }
+  }
+]

@@ -65,7 +65,11 @@ export function matchesDelivery(context, item, delivery) { /* -> boolean */ }
 //    Returns { status: 'sent' | 'unknown' | 'failed', chunk_ids }. A send whose
 //    acceptance the channel did not confirm is 'unknown' and is never retried.
 //    When context.dry_run is true, which is how the conformance check calls it,
-//    send touches no network and returns invented chunk ids.
+//    send touches no network and returns invented chunk ids, and it returns them
+//    directly rather than as a promise, because the check reads the answer. A
+//    live send cannot answer directly, so it returns a promise and the runtime
+//    awaits it; awaiting the dry run's direct answer is also correct, so one
+//    caller works for both.
 export function send(context, record) { /* -> { status, chunk_ids } */ }
 ```
 

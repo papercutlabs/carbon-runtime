@@ -5,11 +5,22 @@
   "type": "module",
   "license": "UNLICENSED",
   "private": true,
-  "engines": { "node": ">=22" },
-  "bin": { "carbon-stream": "bin/carbon-stream" },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "carbon-stream": "bin/carbon-stream",
+    "carbon-whatsapp": "bin/carbon-whatsapp",
+    "carbon-import": "bin/carbon-import"
+  },
   "scripts": {
     "test": "node --test \"test/*.test.mjs\"",
     "check": "node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures",
+    "check:whatsapp": "node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures",
+    "check:import": "node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures",
     "release": "node tools/release.mjs"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14"
   }
 }

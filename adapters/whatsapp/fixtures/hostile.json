@@ -1,0 +1,55 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000101",
+    "received_at": "2026-09-10T10:00:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "..",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789039200,
+      "pushName": "Ada",
+      "message": {
+        "conversation": "an identifier that is a dot segment"
+      }
+    }
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000102",
+    "received_at": "2026-09-10T10:01:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A/000009",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789039260,
+      "pushName": "Ada",
+      "message": {
+        "conversation": "an identifier carrying a path separator"
+      }
+    }
+  },
+  {
+    "conversation": "15550001111\u0000@s.whatsapp.net",
+    "position": "000000000103",
+    "received_at": "2026-09-10T10:02:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111\u0000@s.whatsapp.net",
+        "id": "3EB0A0000010",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789039320,
+      "pushName": "Ada",
+      "message": {
+        "conversation": "a chat carrying a control byte"
+      }
+    }
+  }
+]

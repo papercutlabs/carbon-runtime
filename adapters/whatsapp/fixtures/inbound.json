@@ -1,0 +1,40 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000001",
+    "received_at": "2026-09-10T09:00:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A0000001",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789034400,
+      "pushName": "Ada",
+      "message": {
+        "conversation": "The invoice for August has two lines we do not recognise."
+      }
+    }
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000002",
+    "received_at": "2026-09-10T09:04:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A0000002",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789034640,
+      "pushName": "Ada",
+      "message": {
+        "extendedTextMessage": {
+          "text": "Lines 14 and 15, to be exact."
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,88 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000401",
+    "received_at": "2026-09-10T10:40:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0H0000001",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789042000,
+      "pushName": "Ada",
+      "message": {
+        "imageMessage": {
+          "mimetype": "image/jpeg",
+          "fileLength": 90000,
+          "caption": "The damaged corner."
+        },
+        "associatedChildMessage": {
+          "message": {
+            "imageMessage": {
+              "mimetype": "image/jpeg",
+              "fileLength": 2400000
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000402",
+    "received_at": "2026-09-10T10:40:01.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0H0000002",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789042001,
+      "pushName": "Ada",
+      "message": {
+        "imageMessage": {
+          "mimetype": "image/jpeg",
+          "fileLength": 2400000
+        },
+        "messageContextInfo": {
+          "messageAssociation": {
+            "associationType": 10,
+            "parentMessageKey": {
+              "remoteJid": "15550001111@s.whatsapp.net",
+              "id": "3EB0H0000001",
+              "fromMe": false
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000403",
+    "received_at": "2026-09-10T10:40:02.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0H0000003",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789042002,
+      "pushName": "Ada",
+      "message": {
+        "associatedChildMessage": {
+          "message": {
+            "imageMessage": {
+              "mimetype": "image/jpeg",
+              "fileLength": 2400000
+            }
+          }
+        }
+      }
+    }
+  }
+]

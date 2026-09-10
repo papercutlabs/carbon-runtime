@@ -1,0 +1,101 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000301",
+    "received_at": "2026-09-10T10:30:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0M0000001",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789041000,
+      "pushName": "Ada",
+      "message": {
+        "imageMessage": {
+          "mimetype": "image/jpeg",
+          "fileLength": 120000,
+          "caption": "The three pallets."
+        },
+        "messageContextInfo": {
+          "messageAssociation": {
+            "associationType": 1,
+            "parentMessageKey": {
+              "remoteJid": "15550001111@s.whatsapp.net",
+              "id": "3EB0ALBUM0001",
+              "fromMe": false
+            },
+            "messageIndex": 0
+          }
+        }
+      }
+    }
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000302",
+    "received_at": "2026-09-10T10:30:01.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0M0000002",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789041001,
+      "pushName": "Ada",
+      "message": {
+        "imageMessage": {
+          "mimetype": "image/jpeg",
+          "fileLength": 120000,
+          "caption": ""
+        },
+        "messageContextInfo": {
+          "messageAssociation": {
+            "associationType": 1,
+            "parentMessageKey": {
+              "remoteJid": "15550001111@s.whatsapp.net",
+              "id": "3EB0ALBUM0001",
+              "fromMe": false
+            },
+            "messageIndex": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000303",
+    "received_at": "2026-09-10T10:30:02.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0M0000003",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789041002,
+      "pushName": "Ada",
+      "message": {
+        "imageMessage": {
+          "mimetype": "image/jpeg",
+          "fileLength": 120000,
+          "caption": ""
+        },
+        "messageContextInfo": {
+          "messageAssociation": {
+            "associationType": 1,
+            "parentMessageKey": {
+              "remoteJid": "15550001111@s.whatsapp.net",
+              "id": "3EB0ALBUM0001",
+              "fromMe": false
+            },
+            "messageIndex": 2
+          }
+        }
+      }
+    }
+  }
+]
