@@ -20,6 +20,8 @@ import { loadAdapter } from './registry.mjs';
 import { startToolServers, stopToolServers } from './tool-servers.mjs';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.mjs';
 import { ReleaseLoop } from './loop.mjs';
+import { pollIntervalFor } from './poll.mjs';
+import { resolveChannel } from './channel.mjs';
 
 // Where each thing lives under an agent directory. Install renders the left-hand
 // side; the runtime reads it and guesses none of it.
@@ -127,10 +129,19 @@ export async function run(options) {
   }
 
   const loaded = [];
-  for (const channel of channels) {
+  const intervalFaults = [];
+  for (const declaredChannel of channels) {
+    const channel = resolveChannel(declaration, declaredChannel);
     const adapter = adapters?.[channel.kind] ?? await loadAdapter(channel.kind);
-    loaded.push({ channel, adapter });
+    // The interval every channel is polled at, decided once, at start, against
+    // the adapter's own floor. It is a refusal rather than a correction, and it
+    // happens before a socket is opened: a declaration that would earn a day's
+    // rate limit must not run for a minute first.
+    const { interval_ms, fault: named } = pollIntervalFor(channel, adapter);
+    if (named) intervalFaults.push(named);
+    loaded.push({ channel, adapter, interval_ms });
   }
+  if (intervalFaults.length > 0) throw new RuntimeFault(intervalFaults);
 
   const locks = [];
   const toolServers = [];
@@ -173,11 +184,12 @@ export async function run(options) {
     let childExit = null;
     session.exit.then((exit) => { childExit = exit; });
 
-    const loops = loaded.map(({ channel, adapter }) => {
+    const loops = loaded.map(({ channel, adapter, interval_ms }) => {
       const loop = new ReleaseLoop({
         declaration, channel, store, storeDir, adapter, harness, session,
         agent: declaration.agent?.id, checkout, log, now
       });
+      loop.intervalMs = interval_ms;
       if (harness.onToolServerStatus) {
         harness.onToolServerStatus(session, () => { loop.toolStatusStale = true; });
       }
@@ -186,10 +198,18 @@ export async function run(options) {
 
     for (const loop of loops) loop.recovering = loop.recover();
 
+    // Each channel keeps its own next-due time, because two channels on one agent
+    // are two different providers with two different floors and one sleep across
+    // both would poll the slower one too often or the faster one too rarely.
+    // Every channel is due at the first sweep; after that, a channel is polled
+    // when its own interval has passed and the process sleeps until whichever is
+    // due first.
+    const dueAt = new Map(loops.map((loop) => [loop, 0]));
     let done = 0;
     while (done < passes) {
       if (childExit) break;
       for (const loop of loops) {
+        if (dueAt.get(loop) > now()) continue;
         try {
           await loop.pass(items(loop.channel));
         } catch (error) {
@@ -197,11 +217,12 @@ export async function run(options) {
           childExit = childExit ?? { code: null, signal: 'unknown' };
           break;
         }
+        dueAt.set(loop, now() + loop.intervalMs);
         if (childExit) break;
       }
       done += 1;
       if (done < passes && !childExit) {
-        await sleep(Math.max(...loaded.map(({ channel }) => channel.poll_interval_ms ?? 1000)));
+        await sleep(Math.max(0, Math.min(...loops.map((loop) => dueAt.get(loop))) - now()));
       }
     }
 

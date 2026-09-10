@@ -57,12 +57,20 @@ a default that points at a real path.
                         user owns.
 
 What it does, in order: refuse if the store is latched; load an adapter for every
-declared channel (${registeredKinds().join(', ')}); take one lock per adapter, taking over a
-lock whose holder is not alive; start the http tool servers as the tools user with
-an environment built from empty; serve the reply tool on loopback; spawn the
-harness as a direct child; then, on every pass, recover what the last run owed,
-capture what is pending, release what policy allows and deliver what the model
-replied.
+declared channel (${registeredKinds().join(', ')}); refuse any channel whose poll_interval_ms is
+below its adapter's floor; take one lock per adapter, taking over a lock whose
+holder is not alive; start the http tool servers as the tools user with an
+environment built from empty; serve the reply tool on loopback; spawn the harness
+as a direct child; then, on every pass, poll the channel, recover what the last
+run owed, capture what is pending, release what policy allows and deliver what the
+model replied.
+
+Each channel is polled on its own poll_interval_ms and the process sleeps until
+whichever channel is due first. An adapter that exports poll goes to the channel;
+one that does not takes what --items hands it. A poll that fails is a named fault
+in the log and a field on the channel, never the end of this process; past the
+channel's poll_failures_before_hold the channel holds and does no work until a
+poll works again, and doctor reports the hold from outside the box.
 
 Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
 

@@ -189,7 +189,10 @@ test('an operator message holds the conversation and releases nothing', async ()
     item(1, 'first'),
     item(2, 'the operator is on it', {
       role: 'operator',
-      hold: { reason: 'the operator answered in the conversation', set_at: '2026-09-10T10:02:00.000Z', release_after_ms: 3600000 }
+      // The hold is set now rather than at a fixed date: a hold expires, so a
+      // date written into the file stops holding on the day it passes and the
+      // test goes red for the calendar rather than for the code.
+      hold: { reason: 'the operator answered in the conversation', set_at: new Date().toISOString(), release_after_ms: 3600000 }
     })
   ]);
   assert.deepEqual(result.released, []);
