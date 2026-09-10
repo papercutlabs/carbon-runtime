@@ -40,7 +40,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `lib/faults.mjs`, `tools/lib/` | the fault shape and the MCP server scaffold, copied under the same rule |
 | `schema/carbon.message.v1.json` | the vendored record shape; one JSON file per record |
 | `stream/` | the store library: path derivation and containment, the write order, the two cursors, the merge, the arrivals index, the outbound records and the reply fence |
-| `stream/adapter.md` | the adapter contract: the three capabilities, the five operations, the fixtures an adapter ships |
+| `stream/adapter.md` | the adapter contract: the three capabilities, the five operations, the optional poll, the fixtures an adapter ships |
 | `adapters/fixture/` | an adapter with no channel, so the conformance check has something to run |
 | `adapters/email/` | the email adapter: IMAP and SMTP through `curl`, a MIME reader of ours, threading by `References`; its own README is the contract |
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
@@ -105,11 +105,11 @@ direct child and exits non-zero if that child exits, so the unit restarts the
 pair together. It starts the tool servers that hold secrets as the tools user,
 with an environment built from empty. It hosts the adapters in this process,
 takes one lock per adapter and takes over a lock whose holder is not alive. It
-serves the `reply` tool on loopback. Then, on every pass: recover what the last
-run owed, capture what is pending past the cursors, release what the channel's
-policy allows, and deliver what the model replied.
+serves the `reply` tool on loopback. Then, on every pass: poll the channel,
+recover what the last run owed, capture what is pending past the cursors, release
+what the channel's policy allows, and deliver what the model replied.
 
-Four rules are worth stating on their own.
+Five rules are worth stating on their own.
 
 1. **The release is written on the record before the turn starts.** A restart
    reads the store, not the harness's files: a release with a sent reply is
@@ -123,7 +123,16 @@ Four rules are worth stating on their own.
    read after the unit's thread is open, because that is the only way the
    harness reports it, and a startup notification re-raises the hold. A server
    the harness lists that no declaration names refuses the start outright.
-4. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
+4. **A channel is polled on its own interval, and a channel that cannot be read
+   holds.** An adapter that has to go and look exports `poll`; the interval is
+   the declaration's and is refused at start if it is below the adapter's floor,
+   because a mailbox polled too fast earns a lockout that lasts a day. A poll
+   that fails is a named fault in the log and a field on
+   `channels/<account>/<kind>.channel.json`, never the end of the process; past
+   the channel's `poll_failures_before_hold` the channel holds, does no capture,
+   no release and no delivery, and a check from outside the box reads the hold
+   off that file.
+5. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
    stops the process with exit code 78, which the unit does not restart on, and
    only the next install clears it.
 

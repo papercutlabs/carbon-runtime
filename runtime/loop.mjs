@@ -1,9 +1,12 @@
 // The release loop: what turns records in the store into turns of the model, and
 // turns of the model into messages on a channel.
 //
-// One pass over one channel does four things in this order, and the order is the
+// One pass over one channel does five things in this order, and the order is the
 // point:
 //
+//   poll      ask the adapter what the channel has. An adapter that goes and
+//             looks, a mailbox or a chat session, answers here; one whose items
+//             are handed to it, the fixture, has nothing to do and says so.
 //   recover   read the store, not the harness's files, and decide what a restart
 //             owes: a reply written and never sent, a release opened and never
 //             answered, a send whose fate nobody knows.
@@ -20,6 +23,10 @@ import { fault, RuntimeFault } from './faults.mjs';
 import { StreamFault } from '../stream/store.mjs';
 import { latch } from './latch.mjs';
 import { REPLY_SERVER_NAME } from './reply-tool.mjs';
+import {
+  failuresBeforeHold, holdFault, pollFault, pollState,
+  recordPollFailure, recordPollSuccess
+} from './poll.mjs';
 
 // The unit of work a record belongs to. One harness thread per unit, named by the
 // unit's id: a conversation, or a record in the client's own system when the
@@ -219,6 +226,49 @@ export class ReleaseLoop {
         'check that install rendered it into config.toml, and that the name matches'));
     }
     if (faults.length > 0) throw new RuntimeFault(faults);
+  }
+
+  // ---- poll ---------------------------------------------------------------
+
+  // Ask the adapter what the channel has. An adapter that exports `poll` goes to
+  // the channel; one that does not takes what the caller hands it, which is what
+  // the fixture adapter and the conformance check do.
+  //
+  // Nothing here throws. A poll that failed is a fault written on the channel and
+  // logged, and the pass that follows it works on what the store already holds,
+  // because a mail server that is down for a minute must not take the agent's
+  // unanswered messages down with it.
+  async poll(handed = []) {
+    if (typeof this.adapter.poll !== 'function') {
+      return { polled: false, items: handed, holding: false, failures: 0 };
+    }
+    const at = new Date(this.now()).toISOString();
+    const threshold = failuresBeforeHold(this.channel);
+    let result;
+    try {
+      result = await this.adapter.poll(this.context());
+    } catch (error) {
+      const cause = pollFault(this.channel, error);
+      const state = recordPollFailure(this.store, this.channel.account, this.channel.kind,
+        { at, cause, threshold });
+      this.log({ event: 'poll.failed', channel: this.channel.kind, account: this.channel.account,
+        consecutive_failures: state.consecutive_failures, holding: state.holding, fault: cause });
+      if (state.holding) this.log({ event: 'poll.hold', fault: holdFault(this.channel, state) });
+      return { polled: true, items: [], holding: state.holding, failures: state.consecutive_failures, fault: cause };
+    }
+    const items = result?.items ?? [];
+    const before = pollState(this.store, this.channel.account, this.channel.kind);
+    recordPollSuccess(this.store, this.channel.account, this.channel.kind, { at, items: items.length });
+    if (before.holding) {
+      this.log({ event: 'poll.hold_cleared', channel: this.channel.kind, account: this.channel.account });
+    }
+    // A poll that read nothing is the ordinary case and says nothing; a poll that
+    // found something says how much, so a log answers "when did the agent last
+    // see anything" without a store walk.
+    if (items.length > 0) {
+      this.log({ event: 'poll', channel: this.channel.kind, account: this.channel.account, items: items.length });
+    }
+    return { polled: true, items, holding: false, failures: 0 };
   }
 
   // ---- recover ------------------------------------------------------------
@@ -450,12 +500,25 @@ export class ReleaseLoop {
 
   // ---- one pass -----------------------------------------------------------
 
-  async pass(items = []) {
-    const captured = this.capture(items);
+  async pass(handed = []) {
+    const polled = await this.poll(handed);
+    // A held channel does no work at all this pass: not capture, which has
+    // nothing new to write; not release, because the agent would answer into a
+    // channel it cannot read; and not delivery, because a send on a channel whose
+    // reads are failing is the send that lands `unknown` and is never retried.
+    // What was recovered stays recovered and is re-issued on the pass after the
+    // channel comes back.
+    if (polled.holding) {
+      return {
+        captured: [], parked: [], released: [], held: [], holding: [`${this.channel.kind}:${this.channel.account}`],
+        delivered: [], poll: polled
+      };
+    }
+    const captured = this.capture(polled.items);
     const recovered = this.recovering ?? { reissue: [] };
     this.recovering = null;
     const released = await this.releasePass({ reissue: recovered.reissue });
     const delivered = this.deliver();
-    return { ...captured, ...released, delivered };
+    return { ...captured, ...released, delivered, poll: polled };
   }
 }

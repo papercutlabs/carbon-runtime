@@ -73,6 +73,30 @@ export function matchesDelivery(context, item, delivery) { /* -> boolean */ }
 export function send(context, record) { /* -> { status, chunk_ids } */ }
 ```
 
+## The sixth operation, optional: poll
+
+The five operations above work on items somebody already has. `poll` is how an
+adapter that has to go and look gets them.
+
+```js
+// 6. Go to the channel and return what is there.
+//    Returns { items }, in this adapter's own item shape, plus whatever else the
+//    adapter wants to tell its own caller. It may be async. It throws on a
+//    failure, in the fault shape, and the runtime handles the throw: a failed
+//    poll is a named fault in the log and a field on the channel, never the end
+//    of the process, and a run of failures past the channel's declared count
+//    holds the channel until a poll works again.
+//
+//    An adapter that exports `poll` is polled by the release loop on the
+//    channel's `poll_interval_ms`. One that does not is handed its items by its
+//    caller, which is what the fixture adapter and the conformance check do.
+export function poll(context) { /* -> { items: [item] } */ }
+
+// A floor, when this channel's provider has one. The runtime refuses a
+// declaration below it at start, by name, and never quietly raises it.
+export const POLL_INTERVAL_FLOOR_MS = 30000;
+```
+
 ## The context
 
 The check, and the runtime, pass one object:
@@ -82,7 +106,9 @@ The check, and the runtime, pass one object:
 | `store` | the open `Store` |
 | `agent` | the agent id |
 | `account` | the account this adapter is bound to |
-| `items` | the channel's items, as the check's fixtures give them |
+| `channel` | the declaration's block for this channel, with its `transport` keys merged in and every secret reference resolved to a path |
+| `declaration` | the whole agent declaration |
+| `items` | the channel's items: what `poll` returned, or what the check's fixtures give |
 | `dry_run` | true when `send` must not touch a network |
 | `now` | the moment the caller is working at, in milliseconds |
 
