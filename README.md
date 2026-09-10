@@ -132,7 +132,15 @@ Five rules are worth stating on their own.
    the channel's `poll_failures_before_hold` the channel holds, does no capture,
    no release and no delivery, and a check from outside the box reads the hold
    off that file.
-5. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
+5. **A record the runtime cannot release is parked, not fatal.** A message with
+   no unit id, or anything else raised while one record is being released, is
+   written on that record as a fault, the record's disposition becomes `parked`,
+   and the loop takes the next one. Exiting instead would put the unit in a
+   restart loop that meets the same record every time and reaches the start
+   limit; a check from outside the box reads the parked list. Four endings still
+   end the process: the harness child exiting, the latch, the lock, and an
+   app-server listing a tool server no declaration names.
+6. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
    stops the process with exit code 78, which the unit does not restart on, and
    only the next install clears it.
 

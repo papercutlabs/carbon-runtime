@@ -220,6 +220,27 @@ export class Store {
     return this.capture(parked, options);
   }
 
+  // A record that was captured and then could not be released. Parking it is
+  // what keeps one record the runtime cannot handle from stopping the channel:
+  // the fault is written on the record where the next reader looks for it, the
+  // record is never released again, and the loop moves to the next one.
+  parkFailed(record, faults) {
+    const all = Array.isArray(faults) ? faults : [faults];
+    const places = this.paths(record);
+    const on_disk = JSON.parse(fs.readFileSync(places.record, 'utf8'));
+    const written = {
+      ...on_disk,
+      disposition: 'parked',
+      adapter_fields: {
+        ...(on_disk.adapter_fields ?? {}),
+        park_reason: all.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('; '),
+        park_faults: all
+      }
+    };
+    writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
+    return written;
+  }
+
   setDisposition(record, disposition) {
     const places = this.paths(record);
     const on_disk = JSON.parse(fs.readFileSync(places.record, 'utf8'));

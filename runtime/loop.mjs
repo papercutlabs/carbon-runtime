@@ -19,7 +19,7 @@
 // Nothing here knows what a channel is. The adapter is the channel and the
 // declaration is the policy.
 
-import { fault, RuntimeFault } from './faults.mjs';
+import { fault, RuntimeFault, EXIT } from './faults.mjs';
 import { StreamFault } from '../stream/store.mjs';
 import { latch } from './latch.mjs';
 import { REPLY_SERVER_NAME } from './reply-tool.mjs';
@@ -116,6 +116,34 @@ export function turnInput(record, releaseId) {
     '',
     `Reply by calling the reply tool once, with conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}.`
   ].join('\n');
+}
+
+// Which faults end the process, and which one record's release.
+//
+// A record the runtime cannot release is one record: a message with no unit id,
+// a body the turn builder refuses, anything else raised while this record is
+// being released. Exiting on it puts systemd in a restart loop that meets the
+// same record every time and reaches the start limit, which is what happened the
+// first time a real message landed on a box. So the record is parked with the
+// fault written on it, doctor names it, and the channel keeps working.
+//
+// Three endings are not about a record and still end the process: the harness
+// child exiting mid-turn (EXIT.HARNESS_EXITED), the terminal latch
+// (EXIT.LATCHED), and the lock (EXIT.LOCK_HELD), each of which carries its own
+// exit code on the fault. One more is a refusal about the whole agent rather
+// than one message: an app-server listing tool servers nobody declared is an
+// agent that is not the agent the declaration describes, and parking messages
+// under it would answer with tools nobody granted.
+const ENDS_THE_PROCESS = new Set([
+  'HARNESS_CHILD_EXITED_MID_TURN',
+  'TOOL_SERVER_UNDECLARED',
+  'TOOL_SERVER_NOT_LISTED'
+]);
+
+export function endsTheProcess(error) {
+  if (!(error instanceof RuntimeFault)) return true;
+  if (error.exitCode !== EXIT.FAULT) return true;
+  return (error.faults ?? []).some((f) => ENDS_THE_PROCESS.has(f.code));
 }
 
 export class ReleaseLoop {
@@ -352,12 +380,13 @@ export class ReleaseLoop {
       const waiting = this.store.rebuild()
         .filter((r) => r.direction === 'inbound' && !r.release && r.historical !== true)
         .map((r) => r.message_id);
-      return { released: [], held: waiting, holding };
+      return { released: [], held: waiting, parked: [], holding };
     }
 
     const now = this.now();
     const released = [];
     const held = [];
+    const parked = [];
     const reissued = new Set(reissue);
     const records = this.store.rebuild()
       .filter((r) => r.direction === 'inbound')
@@ -372,7 +401,17 @@ export class ReleaseLoop {
           continue;
         }
       }
-      const outcome = await this.releaseOne(record, { reissue: again });
+      let outcome;
+      try {
+        outcome = await this.releaseOne(record, { reissue: again });
+      } catch (error) {
+        if (endsTheProcess(error)) throw error;
+        const faults = error.faults;
+        this.store.parkFailed(this.store.read(record.conversation_id, record.message_id, record.revision), faults);
+        this.log({ event: 'release.parked', message_id: record.message_id, faults });
+        parked.push(record.message_id);
+        continue;
+      }
       // The status of the tool servers can only be read once a thread is open,
       // so the first candidate of a run opens the thread and then finds out
       // whether it may go. A hold discovered there holds this record too.
@@ -389,7 +428,7 @@ export class ReleaseLoop {
         if (this.holdFaults.length > 0) break;
       }
     }
-    return { released, held, holding: this.holdFaults.map((f) => f.subject) };
+    return { released, held, parked, holding: this.holdFaults.map((f) => f.subject) };
   }
 
   async releaseOne(record, { reissue = false } = {}) {
@@ -519,6 +558,10 @@ export class ReleaseLoop {
     this.recovering = null;
     const released = await this.releasePass({ reissue: recovered.reissue });
     const delivered = this.deliver();
-    return { ...captured, ...released, delivered, poll: polled };
+    // Two things park a record: a payload the adapter could not read, and a
+    // release that faulted. One pass can do both, so the lists are joined rather
+    // than one spreading over the other.
+    const parked = [...captured.parked, ...released.parked];
+    return { ...captured, ...released, parked, delivered, poll: polled };
   }
 }

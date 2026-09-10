@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { Store } from '../stream/store.mjs';
 import { ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when } from '../runtime/loop.mjs';
+import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
 import { fakeHarness } from './fake-harness.mjs';
 import * as fixture from '../adapters/fixture/index.mjs';
@@ -308,4 +309,71 @@ test('a quiet channel waits for the quiet window, and a mention channel waits fo
   const mention = { kind: 'fixture', account: ACCOUNT, release: 'mention', mention: '@agent' };
   assert.equal(releaseDecision(declaration(), mention, store, record, { now: at }).release, false);
   assert.equal(releaseDecision(declaration(), mention, store, { ...record, body: 'hello @agent' }, { now: at }).release, true);
+});
+
+// ---- a record the runtime cannot release ---------------------------------
+
+// The first real message on a box crashed the runtime here: the declaration
+// keyed the unit of work on a field an emailed message does not carry, the
+// release threw, the process exited, systemd restarted it onto the same record
+// and reached the start limit. One record must never do that.
+const CLIENT_RECORD = () => declaration({
+  unit_of_work: { kind: 'client_record', id_from: 'tracker.master_job.id' }
+});
+
+test('a record whose release faults is parked, and the channel keeps working', async () => {
+  const { loop, store } = makeLoop({ decl: CLIENT_RECORD(), onTurn: (s) => answering(s) });
+
+  const result = await loop.pass([
+    item(1, 'no job id on this one'),
+    item(2, 'this one names its job', { extra: { tracker: { master_job: { id: 'JOB-4' } } } })
+  ]);
+
+  assert.deepEqual(result.parked, [`${ACCOUNT}:c1:1`]);
+  assert.deepEqual(result.released.map((r) => r.message_id), [`${ACCOUNT}:c1:2`]);
+
+  const parked = store.rebuild().find((r) => r.message_id === `${ACCOUNT}:c1:1`);
+  assert.equal(parked.disposition, 'parked');
+  assert.equal(parked.adapter_fields.park_faults[0].code, 'UNIT_ID_ABSENT');
+  assert.match(parked.adapter_fields.park_reason, /UNIT_ID_ABSENT/);
+  assert.ok(!parked.release, 'a record that never reached a turn carries no release');
+});
+
+test('a parked record is not tried again on the next pass', async () => {
+  let turns = 0;
+  const { loop } = makeLoop({
+    decl: CLIENT_RECORD(),
+    onTurn: (s) => (session, params) => { turns += 1; return answering(s)(session, params); }
+  });
+
+  await loop.pass([item(1, 'no job id on this one')]);
+  const second = await loop.pass([]);
+
+  assert.deepEqual(second.parked, []);
+  assert.deepEqual(second.released, []);
+  assert.equal(turns, 0, 'the parked record was released after all');
+});
+
+test('the terminal latch still ends the process rather than parking a record', async () => {
+  const { loop } = makeLoop({ onTurn: () => () => 'failed' });
+
+  await assert.rejects(
+    () => loop.pass([item(1, 'the model refuses this permanently')]),
+    (error) => error.exitCode === EXIT.LATCHED && error.faults[0].code === 'TURN_FAILED'
+  );
+});
+
+test('an app-server listing a tool server nobody declared still ends the process', async () => {
+  const { loop } = makeLoop({
+    onTurn: (s) => answering(s),
+    statuses: () => [
+      { name: 'carbon-reply', runtimeStatus: 'connected' },
+      { name: 'connected-apps', runtimeStatus: 'connected' }
+    ]
+  });
+
+  await assert.rejects(
+    () => loop.pass([item(1, 'anything')]),
+    (error) => error.faults.some((f) => f.code === 'TOOL_SERVER_UNDECLARED')
+  );
 });
