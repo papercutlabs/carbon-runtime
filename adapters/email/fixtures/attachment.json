@@ -1,0 +1,63 @@
+[
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 4,
+    "position": "0000004272:0000000004",
+    "conversation": "aug-invoice-001@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 09:20:00 +0000",
+      "From: Ada Vance <ada@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <aug-invoice-004@example.test>",
+      "References: <aug-invoice-001@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: multipart/mixed; boundary=\"b1\"",
+      "",
+      "--b1",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "The two lines are attached.",
+      "--b1",
+      "Content-Type: text/plain; charset=utf-8; name=\"invoice-lines.txt\"",
+      "Content-Disposition: attachment; filename=\"invoice-lines.txt\"",
+      "Content-Transfer-Encoding: base64",
+      "",
+      "aW52b2ljZSBsaW5lIDE0Cmludm9pY2UgbGluZSAxNQo=",
+      "--b1--"
+    ]
+  },
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 5,
+    "position": "0000004272:0000000005",
+    "conversation": "aug-invoice-001@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 09:22:00 +0000",
+      "From: Ada Vance <ada@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <aug-invoice-005@example.test>",
+      "References: <aug-invoice-001@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: multipart/mixed; boundary=\"b2\"",
+      "",
+      "--b2",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "And the scan, which is past what this channel writes to disk.",
+      "--b2",
+      "Content-Type: application/pdf; name=\"delivery-note.pdf\"",
+      "Content-Disposition: attachment; filename=\"delivery-note.pdf\"",
+      "Content-Transfer-Encoding: base64",
+      "",
+      "dGhlIHNjYW4gb2YgdGhlIHNpZ25lZCBkZWxpdmVyeSBub3RlLCBwYWdlIG9uZSBvZiBvbmUsIHdo",
+      "aWNoIGlzIGxhcmdlciB0aGFuIHRoaXMgY2hhbm5lbCB3cml0ZXMgdG8gZGlzawo=",
+      "--b2--"
+    ]
+  }
+]

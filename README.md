@@ -38,10 +38,12 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `stream/` | the store library: path derivation and containment, the write order, the two cursors, the merge, the arrivals index, the outbound records and the reply fence |
 | `stream/adapter.md` | the adapter contract: the three capabilities, the five operations, the fixtures an adapter ships |
 | `adapters/fixture/` | an adapter with no channel, so the conformance check has something to run |
+| `adapters/email/` | the email adapter: IMAP and SMTP through `curl`, a MIME reader of ours, threading by `References`; its own README is the contract |
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
 | `import/` | the history import: a zip reader with no dependency, and the map from an export's rows to records |
 | `conformance/cases.mjs` | the seventeen cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
+| `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person |
 | `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>` |
 | `test/` | `node --test "test/*.test.mjs"` |

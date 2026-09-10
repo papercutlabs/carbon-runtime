@@ -1,0 +1,268 @@
+#!/usr/bin/env node
+// carbon-email — the live smoke for the email adapter.
+//
+// The conformance check proves the adapter against recorded messages and never
+// touches a network. This command is the other half: it proves that the same
+// code reaches a real mailbox, reads a real message and gets a real mail
+// accepted by a real server. It is run by hand, against a mailbox that exists
+// for this, and it writes into a store you name.
+
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fault, report } from '../stream/faults.mjs';
+import { Store, StreamFault } from '../stream/store.mjs';
+import { ingest } from '../conformance/cases.mjs';
+import * as adapter from '../adapters/email/index.mjs';
+import { TransportFault, listMailboxes, sendMessage } from '../adapters/email/curl.mjs';
+
+const HELP = `carbon-email — reach a real mailbox with the email adapter, once, by hand
+
+Usage:
+  carbon-email smoke --netrc <file> --imap-host <host> --smtp-host <host>
+                     --account <address> --store <dir>
+                     [--mailbox <name>] [--send-to <address>] [--wait-ms <n>]
+
+  --netrc <file>      the netrc file the mailbox's owner placed, holding one
+                      machine line per host. curl reads it; this command never
+                      opens it and never prints it.
+  --imap-host <host>  the IMAP host, reached on 993 over TLS
+  --smtp-host <host>  the SMTP host, reached on 465 over TLS
+  --account <address> the mailbox address, which is also the netrc login
+  --store <dir>       where the records land; created 0700 if it is not there
+  --mailbox <name>    the mailbox to read; INBOX when not given
+  --send-to <address> send as well as read. Without it nothing is sent.
+  --wait-ms <n>       how long to wait for the sent mail to come back; 90000
+                      when not given, polled at the adapter's floor
+
+What it does, in order:
+
+  1. lists the mailboxes this account has
+  2. reads the mailbox status and the (uidvalidity, uid) watermark the store
+     holds, and fetches what sits past it
+  3. captures the newest message it found, through the same store library and
+     the same write order the runtime uses
+  4. with --send-to, sends one plain probe mail to that address, waits for it to
+     arrive, captures it, and then answers it: the reply is written pending
+     before the send, goes out with In-Reply-To and References from the message
+     it answers, and its sent Message-IDs are written back as the chunk ids
+
+Two mails leave, not one, and that is deliberate: the probe gives the mailbox
+something the agent owns, and the answer is the send that the store fences and
+records. A send whose acceptance the server did not confirm is recorded unknown
+and is never retried here or anywhere.
+
+Nothing in this command reads, prints or copies the credential. Every fault is
+one JSON line of {code, subject, problem, fix} and any fault exits non-zero.`;
+
+function parse(args) {
+  const wanted = ['netrc', 'imap-host', 'smtp-host', 'account', 'store', 'mailbox', 'send-to', 'wait-ms'];
+  const values = {};
+  const faults = [];
+  for (let i = 0; i < args.length; i++) {
+    const name = args[i].startsWith('--') ? args[i].slice(2) : null;
+    if (name === null || !wanted.includes(name)) {
+      faults.push(fault('UNKNOWN_ARGUMENT', args[i], 'not an argument of carbon-email smoke', 'run carbon-email --help'));
+      continue;
+    }
+    values[name] = args[++i];
+  }
+  for (const name of ['netrc', 'imap-host', 'smtp-host', 'account', 'store']) {
+    if (values[name] === undefined) {
+      faults.push(fault('MISSING_ARGUMENT', `--${name}`,
+        'this command takes every argument explicitly and guesses none',
+        `pass --${name} <value>`));
+    }
+  }
+  if (values.netrc !== undefined && !fs.existsSync(values.netrc)) {
+    faults.push(fault('NETRC_MISSING', values.netrc,
+      'there is no file at this path, and this command does not create one',
+      'the mailbox owner places the netrc file, readable by this user alone'));
+  }
+  return { values, faults };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function channelOf(values) {
+  return {
+    mailbox: values.mailbox ?? 'INBOX',
+    imap_host: values['imap-host'],
+    smtp_host: values['smtp-host'],
+    netrc: values.netrc,
+    poll_interval_ms: adapter.POLL_INTERVAL_FLOOR_MS,
+    max_attachment_bytes: 5000000,
+    max_part_bytes: 65536,
+    addresses: []
+  };
+}
+
+function describe(written) {
+  const record = written.record;
+  return `      ${record.message_id}  role ${record.role}  ${record.disposition}  body ${Buffer.byteLength(record.body ?? '')} bytes  attachments ${record.attachments.length}`;
+}
+
+async function smoke(values) {
+  const store = Store.open(values.store);
+  const channel = channelOf(values);
+  const context = {
+    store, adapter,
+    agent: 'smoke',
+    account: values.account,
+    channel,
+    items: [],
+    dry_run: false,
+    now: Date.now()
+  };
+
+  console.log('1  mailboxes');
+  const mailboxes = listMailboxes({ netrc: channel.netrc, host: channel.imap_host, port: 993 });
+  console.log(`      ${mailboxes.length} mailboxes: ${mailboxes.join(', ')}`);
+
+  console.log('2  the watermark, and what sits past it');
+  let polled = adapter.poll(context);
+  console.log(`      uidvalidity ${polled.uidvalidity}  read from uid ${polled.from_uid}  ${polled.items.length} messages${polled.rescanned ? '  (re-scanned: the mailbox renumbered)' : ''}`);
+
+  let newest = null;
+  if (polled.items.length > 0) {
+    console.log('3  the newest message, captured');
+    const item = polled.items[polled.items.length - 1];
+    const written = ingest(context, [item]);
+    adapter.consume(context, item);
+    newest = written[0];
+    console.log(describe(newest));
+  } else {
+    console.log('3  the mailbox is empty, so nothing was captured');
+  }
+
+  if (values['send-to'] === undefined) {
+    console.log('4  no --send-to, so nothing was sent');
+    return 0;
+  }
+
+  console.log('4  a probe mail out');
+  const stamp = new Date().toISOString().replace(/[^0-9]/g, '');
+  const probeId = `carbon.smoke.${stamp}@${values.account.split('@')[1]}`;
+  const probe = adapter.buildMessage({
+    from: values.account,
+    to: [values['send-to']],
+    subject: `carbon-email smoke ${stamp}`,
+    messageId: probeId,
+    date: new Date(),
+    origin: 'probe',
+    body: `This is the probe mail of the email adapter smoke, run ${stamp}. It exists so the mailbox has a message the agent owns, and so the answer that follows is a real reply.`
+  });
+  const probeFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-smoke-')), 'probe.eml');
+  fs.writeFileSync(probeFile, probe, { mode: 0o600 });
+  const sent = sendMessage({
+    netrc: channel.netrc, host: channel.smtp_host, port: 465,
+    from: values.account, to: [values['send-to']], file: probeFile
+  });
+  fs.rmSync(probeFile, { force: true });
+  console.log(`      ${probeId}  ${Buffer.byteLength(probe)} bytes  ${sent.status}${sent.exit === 0 ? '' : ` (curl exit ${sent.exit})`}`);
+  if (sent.status !== 'sent') {
+    report([fault('PROBE_NOT_SENT', probeId,
+      `the probe mail was not accepted: ${sent.status}${sent.detail ? ` — ${sent.detail}` : ''}`,
+      'a failed probe is a transport problem; an unknown one is a person\'s decision and is not retried here')]);
+    return 1;
+  }
+
+  console.log('5  waiting for it to come back');
+  const deadline = Date.now() + Number(values['wait-ms'] ?? 90000);
+  let arrived = null;
+  while (arrived === null && Date.now() < deadline) {
+    await sleep(adapter.POLL_INTERVAL_FLOOR_MS);
+    context.now = Date.now();
+    polled = adapter.poll(context);
+    for (const item of polled.items) {
+      const written = ingest(context, [item]);
+      adapter.consume(context, item);
+      for (const one of written) {
+        console.log(describe(one));
+        // The probe is recognised by the run stamp in its body, not by its
+        // Message-ID: a provider may replace the Message-ID it was given, and
+        // this one does.
+        if (one.record.direction === 'inbound' && (one.record.body ?? '').includes(stamp)) arrived = one.record;
+      }
+    }
+  }
+  if (arrived === null) {
+    report([fault('PROBE_NEVER_ARRIVED', probeId,
+      'the probe mail was accepted by the server and has not come back to this mailbox within the wait',
+      'raise --wait-ms, or check that --send-to is this same mailbox')]);
+    return 1;
+  }
+
+  console.log('6  the answer, written pending and then sent');
+  const request_id = `smoke-${stamp}`;
+  const text = 'This is the recorded reply of the email adapter smoke. It was written to the store as a pending outbound record before any part of it reached the network, and it carries In-Reply-To and References from the message it answers.';
+  const record = {
+    schema: 'carbon.message.v1',
+    agent: context.agent,
+    source: 'email',
+    account: values.account,
+    conversation_id: arrived.conversation_id,
+    conversation_kind: 'thread',
+    message_id: `${arrived.conversation_id}:${request_id}`,
+    platform_message_id: request_id,
+    revision: 0,
+    direction: 'outbound',
+    role: 'agent',
+    sender_id: values.account,
+    received_at: new Date().toISOString(),
+    body: text,
+    attachments: [],
+    historical: false,
+    reply_to: arrived.platform_message_id,
+    disposition: 'captured',
+    delivery: {
+      request_id,
+      status: 'pending',
+      text_sha256: crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+    }
+  };
+  const written = store.reply(record);
+  console.log(`      pending on disk: ${store.relative(written.file)}`);
+  const outcome = adapter.send({ ...context, recipients: [values['send-to']] }, written.record);
+  if (outcome.status === 'sent') store.markSent(request_id, outcome.chunk_ids);
+  else if (outcome.status === 'unknown') store.markUnknown(request_id);
+  else store.markFailed(request_id);
+  console.log(`      ${outcome.status}  chunk ids: ${outcome.chunk_ids.join(', ') || '(none)'}`);
+  return outcome.status === 'sent' ? 0 : 1;
+}
+
+async function main(argv) {
+  const args = argv.slice(2);
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    console.log(HELP);
+    return args.length === 0 ? 1 : 0;
+  }
+  if (args[0] !== 'smoke') {
+    report([fault('UNKNOWN_SUBCOMMAND', args[0], 'the only carbon-email subcommand is smoke', 'run carbon-email --help')]);
+    return 1;
+  }
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(HELP);
+    return 0;
+  }
+  const { values, faults } = parse(args.slice(1));
+  if (faults.length > 0) {
+    report(faults);
+    return 1;
+  }
+  try {
+    return await smoke(values);
+  } catch (error) {
+    if (error instanceof TransportFault || error instanceof StreamFault) report(error.faults);
+    else {
+      report([fault('SMOKE_FAILED', error.name ?? 'error', (error.message ?? String(error)).split('\n')[0],
+        'read the step the output stopped at')]);
+    }
+    return 1;
+  }
+}
+
+process.exitCode = await main(process.argv);

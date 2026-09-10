@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+// A stand-in for curl that replays recorded responses, so the email adapter's
+// tests reach no network.
+//
+// The adapter speaks to a mail server only through curl, and only through the
+// argument shapes in adapters/email/curl.mjs. So a test points
+// CARBON_EMAIL_CURL at this file and CARBON_EMAIL_RECORDED at a directory of
+// responses recorded from a real server, and the adapter runs unchanged.
+//
+// The response a call gets is chosen by what the call asks for:
+//
+//   an imaps URL ending in ;UID=n     <recorded>/fetch-<n>.txt
+//   a STATUS request                  <recorded>/status.txt
+//   UID SEARCH UNSEEN                 <recorded>/search-unseen.txt
+//   any other UID SEARCH              <recorded>/search.txt
+//   a UID STORE request               <recorded>/store.txt
+//   an smtps URL                      <recorded>/send.txt
+//   anything else                     <recorded>/list.txt
+//
+// A file named <slug>.exit beside it holds the exit code to return, so a test
+// can record a timeout or a login denial as easily as a success. A slug with no
+// file exits 78, which no real curl returns, so a test that asks for something
+// nobody recorded fails loudly rather than passing on an empty response.
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+const dir = process.env.CARBON_EMAIL_RECORDED;
+if (!dir) {
+  process.stderr.write('curl shim: CARBON_EMAIL_RECORDED names no directory\n');
+  process.exit(78);
+}
+
+const args = process.argv.slice(2);
+const value = (name) => {
+  const at = args.indexOf(name);
+  return at === -1 ? null : args[at + 1];
+};
+
+const url = value('--url') ?? '';
+const request = value('--request') ?? '';
+
+let slug = 'list';
+const uid = url.match(/;UID=(\d+)/);
+if (url.startsWith('smtps://')) slug = 'send';
+else if (uid) slug = `fetch-${uid[1]}`;
+else if (/^STATUS\b/i.test(request)) slug = 'status';
+else if (/^UID SEARCH UNSEEN$/i.test(request)) slug = 'search-unseen';
+else if (/^UID SEARCH\b/i.test(request)) slug = 'search';
+else if (/^UID STORE\b/i.test(request)) slug = 'store';
+
+const body = path.join(dir, `${slug}.txt`);
+if (!fs.existsSync(body)) {
+  process.stderr.write(`curl shim: nothing recorded for ${slug}\n`);
+  process.exit(78);
+}
+process.stdout.write(fs.readFileSync(body));
+
+const exitFile = path.join(dir, `${slug}.exit`);
+process.exit(fs.existsSync(exitFile) ? Number(fs.readFileSync(exitFile, 'utf8').trim()) : 0);
