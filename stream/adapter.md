@@ -97,6 +97,7 @@ ships a fixtures directory that carries all of them:
 
 | file | what it holds |
 |---|---|
+| `context.json` | the agent id and the account the check runs as, as `{"agent": "...", "account": "..."}` |
 | `inbound.json` | two or more ordinary inbound items in one conversation |
 | `edit.json` | one item that is a revision of the first `inbound.json` item |
 | `attachment.json` | one item with an attachment, one whose download failed |
