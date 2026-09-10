@@ -1,0 +1,200 @@
+#!/usr/bin/env node
+// carbon-runtime — the process a systemd unit starts, and the only one.
+//
+// On a box it is started with one argument, the agent directory, because install
+// rendered everything else into that directory. Off a box every path is passed
+// explicitly, because a local run has no install behind it and a default that
+// guesses is how a test run writes into a live store.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.mjs';
+import { run, placesUnder, readDeclaration } from '../runtime/index.mjs';
+import { REPLY_PORT } from '../runtime/reply-tool.mjs';
+import { registeredKinds } from '../runtime/registry.mjs';
+import * as codex from '../harness/codex/index.mjs';
+
+const HELP = `carbon-runtime — run one client agent: the harness, the adapters and the release loop
+
+Usage:
+  carbon-runtime run --agent-dir <dir>
+  carbon-runtime run --declaration <file> --store <dir> --codex-home <dir> --checkout <dir>
+                     [--binary <path>] [--harness-root <dir>] [--tools-user <user>]
+                     [--reply-port <n>] [--items <file>] [--passes <n>]
+
+On a box there is one form: --agent-dir. Everything the runtime needs was
+rendered into that directory by install, and it is read from there:
+
+  <agent-dir>/current/carbon.agent.json   the declaration
+  <agent-dir>/store                       the store, and the latch under it
+  <agent-dir>/codex-home                  CODEX_HOME: config.toml and the rollouts
+  <agent-dir>/work                        the thread's working directory
+  <agent-dir>/harness/<version>/codex     the pinned harness binary
+
+Off a box each of those is passed explicitly. Nothing is guessed and nothing has
+a default that points at a real path.
+
+  --agent-dir <dir>     the agent's directory on a box; the other paths follow from it
+  --declaration <file>  the declaration to run from
+  --store <dir>         the store this agent writes into
+  --codex-home <dir>    CODEX_HOME for the harness child
+  --checkout <dir>      the working directory a thread is opened on
+  --binary <path>       the harness binary, when it is not under --harness-root
+  --harness-root <dir>  where the pinned binaries are unpacked, one directory per version
+  --tools-user <user>   run the secret-holding tool servers as this user, through sudo;
+                        without it they run as the user running this command, which is
+                        what a local run wants and what a box never does
+  --reply-port <n>      the loopback port the reply tool listens on (default ${REPLY_PORT},
+                        which is the number install renders into config.toml)
+  --items <file>        a JSON array of channel items, read again on every pass, for a
+                        channel whose adapter takes its items from the caller
+  --passes <n>          stop after this many passes, instead of running until the unit
+                        stops it
+  --no-provider-key     do not read the declared provider key and pass nothing to the
+                        harness child, because the harness already holds its own
+                        authentication in --codex-home. A box never uses this: there
+                        the key is a secret file the declaration names and the tools
+                        user owns.
+
+What it does, in order: refuse if the store is latched; load an adapter for every
+declared channel (${registeredKinds().join(', ')}); take one lock per adapter, taking over a
+lock whose holder is not alive; start the http tool servers as the tools user with
+an environment built from empty; serve the reply tool on loopback; spawn the
+harness as a direct child; then, on every pass, recover what the last run owed,
+capture what is pending, release what policy allows and deliver what the model
+replied.
+
+Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
+
+  0   stopped cleanly, having run the passes asked for
+  1   a refusal: nothing started
+  ${EXIT.HARNESS_EXITED}  the harness child exited; the unit restarts the pair
+  ${EXIT.LOCK_HELD}  another runtime is alive and holds an adapter's lock
+  ${EXIT.LATCHED}  the terminal latch: a person decides, and carbon install clears it`;
+
+const BOOLEAN_FLAGS = ['no-provider-key'];
+const FLAGS = ['agent-dir', 'declaration', 'store', 'codex-home', 'checkout', 'binary',
+  'harness-root', 'tools-user', 'reply-port', 'items', 'passes'];
+
+function parse(argv) {
+  const args = {};
+  const faults = [];
+  for (let i = 0; i < argv.length; i++) {
+    const name = argv[i].startsWith('--') ? argv[i].slice(2) : null;
+    if (name && BOOLEAN_FLAGS.includes(name)) {
+      args[name] = true;
+      continue;
+    }
+    if (name && FLAGS.includes(name)) {
+      const value = argv[++i];
+      if (value === undefined) {
+        faults.push(fault('ARGUMENT_WITHOUT_VALUE', argv[i - 1], 'this argument was given with no value', 'give it a value'));
+        continue;
+      }
+      args[name] = value;
+      continue;
+    }
+    faults.push(fault('UNKNOWN_ARGUMENT', argv[i], 'not an argument of carbon-runtime run', 'run carbon-runtime --help'));
+  }
+  return { args, faults };
+}
+
+function places(args, faults) {
+  if (args['agent-dir']) {
+    for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'harness-root']) {
+      if (args[name]) {
+        faults.push(fault('ARGUMENTS_CONFLICT', `--${name}`,
+          '--agent-dir says where everything is, so a second path for the same thing is two answers to one question',
+          'pass --agent-dir alone, or pass every path explicitly'));
+      }
+    }
+    const under = placesUnder(path.resolve(args['agent-dir']));
+    return {
+      declarationPath: under.declaration,
+      storeDir: under.store,
+      codexHome: under.codexHome,
+      checkout: under.checkout,
+      harnessRoot: under.harnessRoot
+    };
+  }
+  for (const name of ['declaration', 'store', 'codex-home', 'checkout']) {
+    if (!args[name]) {
+      faults.push(fault('MISSING_ARGUMENT', `--${name}`,
+        'a run without --agent-dir names every path itself, and this one is missing',
+        'pass --agent-dir <dir>, or pass --declaration, --store, --codex-home and --checkout'));
+    }
+  }
+  return {
+    declarationPath: args.declaration ? path.resolve(args.declaration) : null,
+    storeDir: args.store ? path.resolve(args.store) : null,
+    codexHome: args['codex-home'] ? path.resolve(args['codex-home']) : null,
+    checkout: args.checkout ? path.resolve(args.checkout) : null,
+    harnessRoot: args['harness-root'] ? path.resolve(args['harness-root']) : null
+  };
+}
+
+async function main(argv) {
+  const rest = argv.slice(2);
+  if (rest.length === 0 || rest[0] === '--help' || rest[0] === '-h') {
+    console.log(HELP);
+    return rest.length === 0 ? 1 : 0;
+  }
+  if (rest[0] !== 'run') {
+    report([fault('UNKNOWN_SUBCOMMAND', rest[0], 'the only carbon-runtime subcommand is run', 'run carbon-runtime --help')]);
+    return 1;
+  }
+  if (rest.includes('--help') || rest.includes('-h')) {
+    console.log(HELP);
+    return 0;
+  }
+
+  const { args, faults } = parse(rest.slice(1));
+  const where = places(args, faults);
+  if (faults.length > 0) {
+    report(faults);
+    return 1;
+  }
+
+  const declaration = readDeclaration(where.declarationPath);
+  const itemsFile = args.items ? path.resolve(args.items) : null;
+  const readItems = () => {
+    if (!itemsFile || !fs.existsSync(itemsFile)) return [];
+    return JSON.parse(fs.readFileSync(itemsFile, 'utf8'));
+  };
+
+  const log = (line) => process.stdout.write(JSON.stringify({ at: new Date().toISOString(), ...line }) + '\n');
+
+  return run({
+    declaration,
+    declarationPath: where.declarationPath,
+    storeDir: where.storeDir,
+    codexHome: where.codexHome,
+    checkout: where.checkout,
+    harnessRoot: where.harnessRoot,
+    binary: args.binary ? path.resolve(args.binary) : null,
+    toolsUser: args['tools-user'] ?? null,
+    replyPort: args['reply-port'] ? Number(args['reply-port']) : REPLY_PORT,
+    passes: args.passes ? Number(args.passes) : Infinity,
+    withProviderKey: args['no-provider-key'] !== true,
+    harness: codex,
+    items: readItems,
+    log
+  });
+}
+
+main(process.argv).then((code) => { process.exitCode = code; }).catch((error) => {
+  if (error instanceof RuntimeFault) {
+    report(error.faults);
+    process.exitCode = error.exitCode;
+    return;
+  }
+  if (error?.fault) {
+    report(error.faults ?? [error.fault]);
+    process.exitCode = EXIT.FAULT;
+    return;
+  }
+  report([fault('RUNTIME_THREW', 'carbon-runtime', error?.message ?? String(error),
+    'this is a fault the runtime does not name; the stack is on stderr')]);
+  process.stderr.write(`${error?.stack ?? error}\n`);
+  process.exitCode = EXIT.FAULT;
+});

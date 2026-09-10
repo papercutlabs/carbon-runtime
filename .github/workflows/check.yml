@@ -44,12 +44,22 @@ jobs:
       - name: the history import passes its subset
         run: node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
 
+      # The copied files are copies. Nothing here edits them; the authority is
+      # the private half, whose own test compares the two byte for byte when
+      # both checkouts are present. What this can check without that checkout is
+      # that the provenance file still names a commit, and that nothing has been
+      # added to the copied trees that the authority does not have.
+      - name: the copied harness says where it came from
+        run: |
+          grep -qE "^source commit +[0-9a-f]{40}$" harness/HARNESS-SOURCE
+          test ! -d harness/codex/verifications
+
       # A client agent keeps what arrived. There is no path here that deletes a
       # record, and this is what keeps it that way: a library that grows one
       # takes a client's evidence with it.
       - name: no path that drops a client's records
         run: |
-          if grep -rniE "prune|retention" stream adapters import conformance bin; then
+          if grep -rniE "prune|retention" stream adapters import conformance bin runtime; then
             echo "the lines above would take a client's records away; this repository has no such path"
             exit 1
           fi
