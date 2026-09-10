@@ -175,13 +175,32 @@ export function restoreUnseen({ netrc, host, port = 993, mailbox, uids }) {
     'a person reading this mailbox will see them as read; nothing was lost from the store')];
 }
 
+// How the connection to the submission port is encrypted. `implicit` is TLS from
+// the first byte, which is smtps and port 465; `starttls` is a plain connection
+// upgraded by the STARTTLS command, which is port 587. Both are named because
+// neither is guessable from the port alone and because the choice is not ours: a
+// box may be unable to open 465 at all. Hetzner blocks 25 and 465 outbound by
+// default and leaves 587 open, which is how this came up, and no reply could
+// leave the first box until it did.
+//
+// There is no third value. A plain, unencrypted submission is not offered, so
+// `--ssl-reqd` is always passed on the starttls path: a server that cannot
+// upgrade gets no credential.
+export const SMTP_SECURITY = ['implicit', 'starttls'];
+
 // The send. The message is handed to curl as a file, so no part of it and no
 // part of the credential sits on a command line.
-export function sendMessage({ netrc, host, port = 465, from, to, file, timeout_ms = 120000 }) {
+export function sendMessage({ netrc, host, port = 465, security = 'implicit', from, to, file, timeout_ms = 120000 }) {
+  if (!SMTP_SECURITY.includes(security)) {
+    throw new TransportFault([fault('SMTP_SECURITY_UNKNOWN', String(security),
+      `a submission connection is ${SMTP_SECURITY.join(' or ')}, and this channel asks for something else`,
+      `declare smtp_security as ${SMTP_SECURITY.join(' or ')} on the channel's transport`)]);
+  }
   const args = [
     '--silent', '--show-error',
     '--netrc-file', netrc,
-    '--url', `smtps://${host}:${port}`,
+    '--url', security === 'implicit' ? `smtps://${host}:${port}` : `smtp://${host}:${port}`,
+    ...(security === 'starttls' ? ['--ssl-reqd'] : []),
     '--mail-from', from
   ];
   for (const recipient of to) args.push('--mail-rcpt', recipient);

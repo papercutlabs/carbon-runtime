@@ -12,6 +12,7 @@ export const VOCABULARY = [
   'thread.named',
   'turn.started',
   'turn.completed',
+  'turn.token_usage',
   'message.delta',
   'item.started',
   'item.completed',
@@ -25,6 +26,11 @@ const MAP = new Map([
   ['thread/name/updated', 'thread.named'],
   ['turn/started', 'turn.started'],
   ['turn/completed', 'turn.completed'],
+  // The token breakdown arrives as its own notification, carrying the thread and
+  // the turn it belongs to, so it correlates like everything else. The params are
+  // carried whole and never re-spelled: what a turn cost is read off the record
+  // the provider sent, not off a number carbon computed.
+  ['thread/tokenUsage/updated', 'turn.token_usage'],
   ['item/agentMessage/delta', 'message.delta'],
   ['item/started', 'item.started'],
   ['item/completed', 'item.completed'],

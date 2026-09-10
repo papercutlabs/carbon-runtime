@@ -19,7 +19,12 @@ export const PINNED_SCHEMA_PIN = path.join(PINNED_SCHEMA_DIR, 'schema-pin.json')
 export const REQUESTS = {
   start: ['initialize', 'thread/start', 'thread/name/set', 'thread/resume'],
   turn: ['turn/start', 'turn/steer', 'turn/interrupt'],
-  tools: ['mcpServerStatus/list']
+  tools: ['mcpServerStatus/list'],
+  // Its own group rather than a name added to `tools`, because it asks a different
+  // question. `tools` is about the servers carbon rendered from the declaration;
+  // this reads back what the harness itself found in the working directory it was
+  // given, by its own conventions, and carbon neither renders nor names it.
+  skills: ['skills/list']
 };
 
 // Notifications carbon listens for. Anything else the app-server sends is logged
@@ -29,6 +34,10 @@ export const NOTIFICATIONS = [
   'thread/name/updated',
   'turn/started',
   'turn/completed',
+  // What a turn cost, on the wire rather than estimated afterwards. It is one of
+  // the two reasons the plan chose this protocol, and a notification carbon does
+  // not listen for is a cost nobody can report.
+  'thread/tokenUsage/updated',
   'item/started',
   'item/completed',
   'item/agentMessage/delta',

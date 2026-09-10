@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { run } from '../runtime/index.mjs';
+import { PROVIDER_AUTH, providerKey, run } from '../runtime/index.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { takeLock, lockFile, commandLineOf } from '../runtime/lock.mjs';
 import { latch, refuseIfLatched } from '../runtime/latch.mjs';
@@ -31,8 +31,8 @@ function declaration() {
     model: 'fake-model',
     effort: 'low',
     sandbox: { mode: 'workspace-write', network: false },
-    provider: { name: 'openai', api_key_ref: 'provider_api_key' },
-    secrets: [{ name: 'provider_api_key', path: '/nowhere/key', purpose: 'the model provider key' }],
+    provider: { name: 'openai', auth: 'chatgpt' },
+    secrets: [],
     tool_servers: [],
     channels: [{ kind: 'fixture', account: ACCOUNT, release: 'immediate', poll_interval_ms: 10 }],
     unit_of_work: { kind: 'conversation', id_from: 'conversation_id', idle_close_ms: 1000 },
@@ -227,4 +227,27 @@ test('the reply tool answers over loopback and writes a pending record', async (
   } finally {
     await served.close();
   }
+});
+
+// How a client agent authenticates, as the declaration says rather than as a flag.
+// Ruled 10 September: a client agent runs on a ChatGPT login and never on an API
+// key, and that login is the harness's own auth file under CODEX_HOME. So the
+// runtime passes nothing on that path, reads no file, and puts no credential in
+// this process's environment.
+test('a chatgpt login is the harness\'s own business, and the runtime passes nothing', () => {
+  assert.equal(providerKey({ provider: { name: 'openai', auth: 'chatgpt' } }), null);
+});
+
+test('an api key is read from the file the declaration names, and passed under the provider\'s own name', () => {
+  const key = providerKey({
+    provider: { name: 'openai', auth: 'api_key', api_key_ref: 'provider_api_key' },
+    secrets: [{ name: 'provider_api_key', path: '/srv/carbon/example/secrets/key', purpose: 'the key' }]
+  });
+  assert.deepEqual(key, { path: '/srv/carbon/example/secrets/key', env: 'OPENAI_API_KEY' });
+});
+
+test('a declaration that names neither way of authenticating is refused by name', () => {
+  assert.throws(() => providerKey({ provider: { name: 'openai' } }),
+    (error) => error.faults.some((f) => f.code === 'PROVIDER_AUTH_UNKNOWN'));
+  assert.deepEqual(PROVIDER_AUTH, ['chatgpt', 'api_key']);
 });

@@ -43,6 +43,11 @@ export {
   onToolServerStatus
 } from './tools.mjs';
 
+// One read beside the six operations: which skills the harness found for itself in
+// a working directory. It is not a seventh operation, because nothing depends on
+// it to run an agent; it is how a caller records what the agent was carrying.
+export { listSkills } from './skills.mjs';
+
 export { EventStream, mapNotification, VOCABULARY } from './events.mjs';
 
 export {

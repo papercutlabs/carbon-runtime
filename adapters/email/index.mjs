@@ -55,6 +55,9 @@ export const DEFAULTS = {
   mailbox: 'INBOX',
   imap_port: 993,
   smtp_port: 465,
+  // TLS from the first byte. A channel whose box cannot open 465 declares
+  // starttls and port 587 instead; see SMTP_SECURITY in ./curl.mjs.
+  smtp_security: 'implicit',
   poll_interval_ms: POLL_INTERVAL_FLOOR_MS,
   max_attachment_bytes: 25000000,
   max_part_bytes: 65536,
@@ -442,6 +445,7 @@ export function send(context, record) {
         netrc: channel.netrc,
         host: channel.smtp_host,
         port: channel.smtp_port,
+        security: channel.smtp_security,
         from: context.account,
         to: recipients,
         file
