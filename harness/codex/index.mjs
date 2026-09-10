@@ -30,7 +30,9 @@ export {
   policyFor,
   workspaceWritePolicy,
   readOnlyPolicy,
-  inputItems
+  inputItems,
+  agentMessageFrom,
+  tokenUsageFrom
 } from './turn.mjs';
 
 export { inject, createInjectLog, INJECT_FAULT_CODE } from './inject.mjs';

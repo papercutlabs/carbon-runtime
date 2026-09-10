@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { Store } from '../stream/store.mjs';
-import { ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when } from '../runtime/loop.mjs';
+import {
+  ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction
+} from '../runtime/loop.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
 import { fakeHarness } from './fake-harness.mjs';
@@ -376,4 +378,88 @@ test('an app-server listing a tool server nobody declared still ends the process
     () => loop.pass([item(1, 'anything')]),
     (error) => error.faults.some((f) => f.code === 'TOOL_SERVER_UNDECLARED')
   );
+});
+
+// ---- a completed turn is not an answered message -------------------------
+
+// The first real message on a box was answered well and delivered nothing: the
+// model wrote its answer into its own message and never called the reply tool.
+// The runtime asks once, and then decides.
+function said(text) {
+  return () => (session, params, n) => ({ status: 'completed', agent_message: `${text} (turn ${n})` });
+}
+
+test('a turn that delivers nothing is followed up once, and the follow-up reply is delivered', async () => {
+  const { loop, store, dir } = makeLoop({
+    onTurn: (s) => {
+      const handle = replyHandler({ store: s, agent: AGENT });
+      return (session, params, n) => {
+        // The first turn answers in its own message; the follow-up calls the tool
+        // with the request id it was given the first time.
+        if (n === 1) return { status: 'completed', agent_message: 'Sure, here is the answer.' };
+        handle({ conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId.replace(/-follow-up$/, ''), text: 'the answer' });
+        return { status: 'completed', agent_message: 'Sent.' };
+      };
+    }
+  });
+
+  const result = await loop.pass([item(1, 'a question')]);
+
+  assert.equal(result.released[0].reply, 'replied-after-follow-up');
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
+  assert.deepEqual(result.parked, []);
+
+  const thread = JSON.parse(fs.readFileSync(path.join(dir, 'threads', `${ACCOUNT}~3Ac1.json`), 'utf8'));
+  assert.equal(thread.turns.length, 2, 'exactly one follow-up');
+  assert.equal(thread.turns[0].agent_message, 'Sure, here is the answer.');
+  assert.equal(store.rebuild().find((r) => r.direction === 'inbound').disposition, 'captured');
+});
+
+test('a turn that answers NO_REPLY closes the release with that reason and delivers nothing', async () => {
+  const { loop, store } = makeLoop({ onTurn: () => (session, params, n) => ({
+    status: 'completed',
+    agent_message: n === 1 ? 'Nothing to do here.' : '  NO_REPLY\n'
+  }) });
+
+  const result = await loop.pass([item(1, 'an automated bounce')]);
+
+  assert.equal(result.released[0].reply, 'no-reply-declared');
+  assert.deepEqual(result.delivered, []);
+  assert.deepEqual(result.parked, []);
+
+  const record = store.rebuild().find((r) => r.direction === 'inbound');
+  assert.equal(record.disposition, 'captured');
+  assert.equal(record.adapter_fields.reply_outcome, 'no-reply-declared');
+  assert.ok(record.release.completed_at, 'the release stays open');
+});
+
+test('a follow-up that neither replies nor says NO_REPLY parks the record with reason no-reply', async () => {
+  const { loop, store } = makeLoop({ onTurn: said('I have already answered above.') });
+
+  const result = await loop.pass([item(1, 'a question')]);
+
+  assert.equal(result.released[0].reply, 'parked-no-reply');
+  assert.deepEqual(result.delivered, []);
+
+  const record = store.rebuild().find((r) => r.direction === 'inbound');
+  assert.equal(record.disposition, 'parked');
+  assert.equal(record.adapter_fields.park_reason, 'no-reply');
+  assert.equal(record.adapter_fields.park_faults[0].code, 'REPLY_ABSENT');
+});
+
+test('a turn that calls the reply tool is never followed up', async () => {
+  const { loop, harness } = makeLoop({ onTurn: (s) => answering(s) });
+
+  const result = await loop.pass([item(1, 'a question')]);
+
+  assert.equal(harness.session.turns.length, 1, 'a reply was followed up anyway');
+  assert.equal(result.released[0].reply, 'replied');
+});
+
+test('the reply instruction is the first line and the last line of the turn', () => {
+  const record = { conversation_id: 'c-9', sender_id: 'someone', received_at: '2026-09-10T10:00:00.000Z', body: 'hello' };
+  const lines = turnInput(record, 'release-1').split('\n');
+  const instruction = replyInstruction(record, 'release-1');
+  assert.equal(lines[0], instruction);
+  assert.equal(lines.at(-1), instruction);
 });

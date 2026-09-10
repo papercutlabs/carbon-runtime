@@ -224,7 +224,7 @@ export class Store {
   // what keeps one record the runtime cannot handle from stopping the channel:
   // the fault is written on the record where the next reader looks for it, the
   // record is never released again, and the loop moves to the next one.
-  parkFailed(record, faults) {
+  parkFailed(record, faults, { reason = null } = {}) {
     const all = Array.isArray(faults) ? faults : [faults];
     const places = this.paths(record);
     const on_disk = JSON.parse(fs.readFileSync(places.record, 'utf8'));
@@ -233,10 +233,21 @@ export class Store {
       disposition: 'parked',
       adapter_fields: {
         ...(on_disk.adapter_fields ?? {}),
-        park_reason: all.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('; '),
+        park_reason: reason ?? all.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('; '),
         park_faults: all
       }
     };
+    writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
+    return written;
+  }
+
+  // Fields carbon itself puts on a record after it was captured. They go under
+  // adapter_fields, which is the one place the message schema carries keys it
+  // does not name, and they never touch what the adapter wrote.
+  annotate(record, fields) {
+    const places = this.paths(record);
+    const on_disk = JSON.parse(fs.readFileSync(places.record, 'utf8'));
+    const written = { ...on_disk, adapter_fields: { ...(on_disk.adapter_fields ?? {}), ...fields } };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
     return written;
   }

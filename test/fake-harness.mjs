@@ -58,6 +58,10 @@ export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] } 
         completed_at: result.completed_at ?? new Date().toISOString(),
         error: result.error ?? null,
         items: [],
+        // What the model said, as the real harness reads it off the turn. A fake
+        // that could not express this could not test the rule that reads it.
+        agent_message: result.agent_message ?? null,
+        token_usage: result.token_usage ?? null,
         events: []
       };
     },

@@ -104,8 +104,21 @@ export function releaseIdFor(record) {
 // What the model is given. The envelope is small on purpose: the body, who it is
 // from, and the two identifiers a reply needs. The request_id is in the text
 // because the fence only works if the model uses the id the runtime chose.
+//
+// The instruction is the first line and the last line, because a model that
+// answers in its own message rather than through the tool has read the body and
+// forgotten the frame, and the two positions a long input is read at are its
+// start and its end. The first real message on a box was answered exactly that
+// way: a completed turn, a good answer, and nothing that ever left the machine.
+export function replyInstruction(record, releaseId) {
+  return `Reply by calling the reply tool once, with conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}. Nothing you write outside that tool call reaches anyone.`;
+}
+
 export function turnInput(record, releaseId) {
+  const instruction = replyInstruction(record, releaseId);
   return [
+    instruction,
+    '',
     `A message arrived on conversation ${record.conversation_id}.`,
     `from: ${record.sender_name ?? record.sender_id}`,
     `received_at: ${record.received_at}`,
@@ -114,8 +127,29 @@ export function turnInput(record, releaseId) {
     '',
     record.body ?? '',
     '',
-    `Reply by calling the reply tool once, with conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}.`
+    instruction
   ].join('\n');
+}
+
+// The one follow-up. A turn that completed and delivered nothing gets asked once,
+// on its own thread, in words that leave the model two ways out and no third: call
+// the tool, or say that no reply is due.
+export const NO_REPLY = 'NO_REPLY';
+
+// How much of the model's own message is kept on the thread record. Enough to
+// read what it said and why it thought that was an answer; not the whole turn,
+// because a store is not a transcript.
+export const AGENT_MESSAGE_KEPT = 300;
+
+export function followUpInput(record, releaseId) {
+  return [
+    'Your last message was not delivered: nothing reaches the contact except a call to the reply tool.',
+    `Call reply now with conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}, or answer exactly ${NO_REPLY} if no reply is due.`
+  ].join('\n');
+}
+
+export function saidNoReply(text) {
+  return typeof text === 'string' && text.trim() === NO_REPLY;
 }
 
 // Which faults end the process, and which one record's release.
@@ -452,16 +486,55 @@ export class ReleaseLoop {
     }
     this.log({ event: 'release', message_id: record.message_id, release_id: releaseId, thread_id: threadId, reissue });
 
+    const { result, completedAt } = await this.takeTurn({
+      unitId, threadId, releaseId,
+      input: turnInput(record, releaseId),
+      clientUserMessageId: releaseId
+    });
+
+    // The status is recorded verbatim. `failed` is the model's own permanent
+    // refusal of this input, so it closes the release, marks the record and takes
+    // the terminal-latch path; `interrupted` is the box going away and is left
+    // open for the next start to re-issue.
+    if (result.status === 'failed') {
+      this.store.setDisposition(this.store.read(record.conversation_id, record.message_id, record.revision), 'permanent-error');
+      this.store.completeRelease(record, completedAt);
+      throw latch(this.store, this.channel.account, this.channel.kind, fault('TURN_FAILED', record.message_id,
+        `the model reported the turn failed: ${JSON.stringify(result.error ?? null)}`,
+        'read the turn on the thread this record names, fix the cause, and run carbon install to clear the latch.'));
+    }
+    if (result.status !== 'completed') {
+      return { message_id: record.message_id, release_id: releaseId, status: result.status, turn_id: result.turn_id };
+    }
+
+    // A completed turn is not an answered message. The one door out of a turn is
+    // the reply tool, and a model that wrote a good answer into its own message
+    // has delivered nothing at all. So the runtime asks once, on the same thread,
+    // and then decides rather than hoping.
+    const reply = await this.ensureReply(record, {
+      unitId, threadId, releaseId, result, completedAt
+    });
+    this.store.completeRelease(record, completedAt);
+    return {
+      message_id: record.message_id, release_id: releaseId,
+      status: result.status, turn_id: result.turn_id, reply: reply.outcome
+    };
+  }
+
+  // One turn, and the thread record it writes. The record carries what the turn
+  // cost and the first of what the model said, because the question asked about a
+  // turn that delivered nothing is "what did it say", and nothing else keeps it.
+  async takeTurn({ unitId, threadId, releaseId, input, clientUserMessageId }) {
     const result = await this.harness.turn(this.session, {
       threadId,
-      input: turnInput(record, releaseId),
+      input,
       effort: this.declaration.effort,
       model: this.declaration.model,
       sandboxPolicy: this.harness.policyFor(this.declaration.sandbox?.mode, {
         writableRoots: [this.storeDir],
         networkAccess: this.declaration.sandbox?.network === true
       }),
-      clientUserMessageId: releaseId,
+      clientUserMessageId,
       timeoutMs: this.declaration.limits?.max_turn_ms
     });
 
@@ -478,25 +551,77 @@ export class ReleaseLoop {
         release_id: releaseId,
         turn_id: result.turn_id,
         status: result.status,
-        completed_at: completedAt
+        completed_at: completedAt,
+        token_usage: result.token_usage ?? null,
+        agent_message: typeof result.agent_message === 'string'
+          ? result.agent_message.slice(0, AGENT_MESSAGE_KEPT)
+          : null
       }]
     });
+    return { result, completedAt };
+  }
 
-    // The status is recorded verbatim. `failed` is the model's own permanent
-    // refusal of this input, so it closes the release, marks the record and takes
-    // the terminal-latch path; `interrupted` is the box going away and is left
-    // open for the next start to re-issue.
-    if (result.status === 'failed') {
-      this.store.setDisposition(this.store.read(record.conversation_id, record.message_id, record.revision), 'permanent-error');
-      this.store.completeRelease(record, completedAt);
-      throw latch(this.store, this.channel.account, this.channel.kind, fault('TURN_FAILED', record.message_id,
-        `the model reported the turn failed: ${JSON.stringify(result.error ?? null)}`,
-        'read the turn on the thread this record names, fix the cause, and run carbon install to clear the latch.'));
+  // Whether this release produced anything for the contact. The reply tool writes
+  // the outbound record under the release id it was fenced on, so that record is
+  // the whole answer and the model's own message is not evidence of anything.
+  hasOutbound(record, releaseId) {
+    return this.store.recordsIn(record.conversation_id)
+      .some((r) => r.direction === 'outbound' && r.delivery?.request_id === releaseId);
+  }
+
+  // The one follow-up, and the three ways it can end.
+  async ensureReply(record, { unitId, threadId, releaseId, result, completedAt }) {
+    if (this.hasOutbound(record, releaseId)) return { outcome: 'replied' };
+
+    this.log({
+      event: 'reply.absent', message_id: record.message_id, release_id: releaseId,
+      said: typeof result.agent_message === 'string' ? result.agent_message.slice(0, AGENT_MESSAGE_KEPT) : null
+    });
+
+    const followUp = await this.takeTurn({
+      unitId, threadId, releaseId,
+      input: followUpInput(record, releaseId),
+      // The protocol's id, not the reply tool's: the follow-up is a second turn
+      // and carries its own, while the reply the model is being asked for is
+      // still fenced on the release id it was given the first time.
+      clientUserMessageId: `${releaseId}-follow-up`
+    });
+
+    if (this.hasOutbound(record, releaseId)) {
+      this.log({ event: 'reply.after_follow_up', message_id: record.message_id, release_id: releaseId });
+      return { outcome: 'replied-after-follow-up' };
     }
-    if (result.status === 'completed') {
-      this.store.completeRelease(record, completedAt);
+
+    // Said so, plainly: no reply is due. That closes the release with the reason
+    // on the record, and is not a failure of anything.
+    if (saidNoReply(followUp.result.agent_message)) {
+      this.markReplyOutcome(record, 'no-reply-declared');
+      this.log({ event: 'reply.none_due', message_id: record.message_id, release_id: releaseId });
+      return { outcome: 'no-reply-declared' };
     }
-    return { message_id: record.message_id, release_id: releaseId, status: result.status, turn_id: result.turn_id };
+
+    // Asked once, told plainly, and still nothing left the machine. The record is
+    // parked so that a person is the next thing that happens to it.
+    const cause = fault('REPLY_ABSENT', record.message_id,
+      'the turn completed and the follow-up completed, and neither wrote a reply nor answered NO_REPLY, so nothing reached the contact',
+      `read the thread record's agent_message for this release; the model must call the reply tool or answer ${NO_REPLY}`);
+    this.store.parkFailed(
+      this.store.read(record.conversation_id, record.message_id, record.revision),
+      cause, { reason: 'no-reply' }
+    );
+    this.log({
+      event: 'reply.parked', message_id: record.message_id, release_id: releaseId,
+      said: typeof followUp.result.agent_message === 'string'
+        ? followUp.result.agent_message.slice(0, AGENT_MESSAGE_KEPT) : null
+    });
+    return { outcome: 'parked-no-reply' };
+  }
+
+  // The reason a release closed with no message, written where the record is
+  // rather than only in a log a restart rotates away.
+  markReplyOutcome(record, outcome) {
+    const on_disk = this.store.read(record.conversation_id, record.message_id, record.revision);
+    this.store.annotate(on_disk, { reply_outcome: outcome });
   }
 
   // ---- deliver ------------------------------------------------------------
