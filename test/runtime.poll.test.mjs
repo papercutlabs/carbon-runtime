@@ -39,9 +39,8 @@ function declaration(channel = {}) {
     model: 'fake-model',
     effort: 'low',
     sandbox: { mode: 'workspace-write', network: false },
-    provider: { name: 'openai', api_key_ref: 'provider_api_key' },
+    provider: { name: 'openai', auth: 'chatgpt' },
     secrets: [
-      { name: 'provider_api_key', path: '/nowhere/key', purpose: 'the model provider key' },
       { name: 'mailbox_netrc', path: '/nowhere/netrc', purpose: 'the mailbox credential' }
     ],
     tool_servers: [],
@@ -248,7 +247,6 @@ test('the runtime refuses to start a channel declared below its adapter\'s floor
     checkout: dir,
     harnessRoot: dir,
     binary: '/nowhere/codex',
-    withProviderKey: false,
     harness: fakeHarness({ statuses: REPLY_LISTED }),
     adapters: { email },
     passes: 1

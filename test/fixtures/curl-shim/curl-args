@@ -1,0 +1,7 @@
+#!/usr/bin/env node
+// A stand-in for curl that writes the arguments it was given to the file named by
+// CARBON_EMAIL_ARGS and exits 0. It is how a test reads the command the adapter
+// built without a mail server and without a credential.
+import fs from 'node:fs';
+fs.writeFileSync(process.env.CARBON_EMAIL_ARGS, JSON.stringify(process.argv.slice(2)));
+process.exit(Number(process.env.CARBON_EMAIL_ARGS_EXIT ?? 0));

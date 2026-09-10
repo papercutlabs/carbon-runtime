@@ -50,11 +50,13 @@ a default that points at a real path.
                         channel whose adapter takes its items from the caller
   --passes <n>          stop after this many passes, instead of running until the unit
                         stops it
-  --no-provider-key     do not read the declared provider key and pass nothing to the
-                        harness child, because the harness already holds its own
-                        authentication in --codex-home. A box never uses this: there
-                        the key is a secret file the declaration names and the tools
-                        user owns.
+
+How the agent authenticates is the declaration's, not a flag. With
+provider.auth chatgpt, which is what a client agent runs on, this process passes
+nothing: the harness reads its own auth file out of --codex-home and refreshes it
+there, and that file is written once by a device login run as the agent user on
+the box. With provider.auth api_key the runtime reads the file api_key_ref names
+and passes it to the harness child alone.
 
 What it does, in order: refuse if the store is latched; load an adapter for every
 declared channel (${registeredKinds().join(', ')}); refuse any channel whose poll_interval_ms is
@@ -80,7 +82,7 @@ Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
   ${EXIT.LOCK_HELD}  another runtime is alive and holds an adapter's lock
   ${EXIT.LATCHED}  the terminal latch: a person decides, and carbon install clears it`;
 
-const BOOLEAN_FLAGS = ['no-provider-key'];
+const BOOLEAN_FLAGS = [];
 const FLAGS = ['agent-dir', 'declaration', 'store', 'codex-home', 'checkout', 'binary',
   'harness-root', 'tools-user', 'reply-port', 'items', 'passes'];
 
@@ -183,7 +185,6 @@ async function main(argv) {
     toolsUser: args['tools-user'] ?? null,
     replyPort: args['reply-port'] ? Number(args['reply-port']) : REPLY_PORT,
     passes: args.passes ? Number(args.passes) : Infinity,
-    withProviderKey: args['no-provider-key'] !== true,
     harness: codex,
     items: readItems,
     log

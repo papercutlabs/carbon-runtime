@@ -57,14 +57,37 @@ export function readDeclaration(file) {
   }
 }
 
-// The provider key reaches the app-server child and nothing else. The variable it
-// arrives under is the provider's own, which is why the mapping is here and not
-// in the declaration: a client repository does not get to name an environment
-// variable in this process.
+// How the agent authenticates to its model provider, as the declaration says.
+//
+// Ruled 10 September: a client agent runs on a ChatGPT login and never on an API
+// key. Whose account that is depends on the engagement and is not this file's
+// business. The login lives in the harness's own auth file under CODEX_HOME,
+// written once by a
+// device login run as the agent user on the box and refreshed by the harness
+// itself. The runtime therefore passes nothing: it does not read that file, does
+// not copy it, and does not put a credential in this process's environment.
+//
+// `auth: api_key` remains, because a client mandating their own API account is a
+// thing that will happen and the carrier is one field. On that path the runtime
+// reads the file `api_key_ref` names and passes it to the app-server child alone.
+//
+// The variable a key arrives under is the provider's own, which is why the mapping
+// is here and not in the declaration: a client repository does not get to name an
+// environment variable in this process.
 const PROVIDER_KEY_ENV = { openai: 'OPENAI_API_KEY' };
 
+export const PROVIDER_AUTH = ['chatgpt', 'api_key'];
+
+// Returns the key file and the variable to pass it under, or null when the
+// harness authenticates itself.
 export function providerKey(declaration) {
   const provider = declaration.provider ?? {};
+  if (provider.auth === 'chatgpt') return null;
+  if (provider.auth !== 'api_key') {
+    throw new RuntimeFault(fault('PROVIDER_AUTH_UNKNOWN', String(provider.auth),
+      `a client agent authenticates by ${PROVIDER_AUTH.join(' or ')}, and this declaration says something else`,
+      `declare provider.auth as ${PROVIDER_AUTH.join(' or ')}`));
+  }
   const name = PROVIDER_KEY_ENV[provider.name];
   if (!name) {
     throw new RuntimeFault(fault('PROVIDER_UNKNOWN', String(provider.name),
@@ -109,11 +132,6 @@ export async function run(options) {
   const {
     declaration, declarationPath, storeDir, codexHome, checkout, harnessRoot,
     binary = null, toolsUser = null, replyPort = REPLY_PORT,
-    // A box always passes a provider key: the declaration names the secret and
-    // the runtime reads it at start. A local run against a harness that already
-    // holds its own authentication in CODEX_HOME passes false, and then no key
-    // is read and none reaches the child.
-    withProviderKey = true,
     harness, adapters = null, items = () => [],
     passes = Infinity, log = () => {}, now = () => Date.now()
   } = options;
@@ -169,12 +187,16 @@ export async function run(options) {
     reply = await serveReplyTool({ store, agent: declaration.agent?.id, port: replyPort });
     log({ event: 'reply_tool.listening', url: reply.url });
 
-    const key = withProviderKey ? providerKey(declaration) : { path: undefined, env: undefined };
+    // Nothing is passed on the ChatGPT path. The harness reads its own auth file
+    // out of CODEX_HOME and refreshes it there, which is why that directory is
+    // writable by the agent user and why install checks the file's presence and
+    // never its contents.
+    const key = providerKey(declaration);
     session = await harness.connect({
       binary: harnessBinary(declaration, { harnessRoot, binary }),
       codexHome,
-      providerKeyPath: key.path,
-      providerKeyEnvName: key.env,
+      providerKeyPath: key?.path,
+      providerKeyEnvName: key?.env,
       onEvent: (event) => log({ event: 'harness', kind: event.kind, thread_id: event.threadId, turn_id: event.turnId }),
       onStderr: () => {}
     });
