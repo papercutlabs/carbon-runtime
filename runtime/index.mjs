@@ -2,8 +2,9 @@
 //
 // It spawns the pinned harness as its direct child and exits non-zero if that
 // child exits, so systemd restarts the pair together in one cgroup. It starts the
-// tool servers that hold secrets, as the tools user. It hosts the adapters in
-// this process, takes one lock per adapter, and runs the release loop. It serves
+// tool servers that run as the agent user, and waits for the ones that run under
+// their own unit as the tools user. It hosts the adapters in this process, takes
+// one lock per adapter, and runs the release loop. It serves
 // the `reply` tool on loopback. It refuses to start when the store is latched, and
 // it latches and stops when it meets an ending a restart cannot help.
 //
@@ -17,7 +18,7 @@ import { fault, report, RuntimeFault, EXIT } from './faults.mjs';
 import { refuseIfLatched } from './latch.mjs';
 import { takeLock, releaseLock } from './lock.mjs';
 import { loadAdapter } from './registry.mjs';
-import { startToolServers, stopToolServers } from './tool-servers.mjs';
+import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.mjs';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.mjs';
 import { ReleaseLoop } from './loop.mjs';
 import { pollIntervalFor } from './poll.mjs';
@@ -131,7 +132,7 @@ function isChildExit(error) {
 export async function run(options) {
   const {
     declaration, declarationPath, storeDir, codexHome, checkout, harnessRoot,
-    binary = null, toolsUser = null, replyPort = REPLY_PORT,
+    binary = null, replyPort = REPLY_PORT,
     harness, adapters = null, items = () => [],
     passes = Infinity, log = () => {}, now = () => Date.now()
   } = options;
@@ -181,8 +182,16 @@ export async function run(options) {
       }
     }
 
-    toolServers.push(...startToolServers(declaration, { declarationPath, toolsUser }));
+    toolServers.push(...startToolServers(declaration, { declarationPath }));
     for (const server of toolServers) log({ event: 'tool_server.started', name: server.name, url: server.url });
+
+    // The servers this process does not start. They run under their own units as
+    // the tools user, so what there is to do here is wait for the address the
+    // declaration names to answer before the first turn asks the harness to
+    // connect to it. One that never answers is reported and the process carries
+    // on: the agent still has to read its mailbox, and a required server that is
+    // not connected holds release by name.
+    await awaitToolServers(declaration, { log });
 
     reply = await serveReplyTool({ store, agent: declaration.agent?.id, port: replyPort });
     log({ event: 'reply_tool.listening', url: reply.url });
