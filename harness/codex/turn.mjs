@@ -107,6 +107,20 @@ export async function turn(session, {
   }
   const completed = await awaitCompletion(session, threadId, turnId, { timeoutMs });
   const stream = session.stream.forTurn(threadId, turnId);
+
+  // The turn's items, from the completion when it carries them and from the item
+  // notifications when it does not. `items` is a required field on the Turn record
+  // and `itemsView` is what says how much of it was loaded; on a real turn the
+  // completion arrived with `items` empty, so a caller reading only that field
+  // learns nothing at all about what the turn did. The same records reach this
+  // connection as `item/completed` notifications, correlated by the same two ids,
+  // and this stream already holds them.
+  const streamed = stream
+    .filter((event) => event.kind === 'item.completed')
+    .map((event) => event.params?.item)
+    .filter(Boolean);
+  const items = (completed.items ?? []).length > 0 ? completed.items : streamed;
+
   return {
     thread_id: threadId,
     turn_id: turnId,
@@ -116,7 +130,8 @@ export async function turn(session, {
     completed_at: completed.completedAt ?? null,
     duration_ms: completed.durationMs ?? null,
     error: completed.error ?? null,
-    items: completed.items ?? [],
+    items,
+    items_view: completed.itemsView ?? null,
     agent_message: agentMessageFrom(completed, stream),
     token_usage: tokenUsageFrom(stream),
     events: stream.map((e) => e.kind)
