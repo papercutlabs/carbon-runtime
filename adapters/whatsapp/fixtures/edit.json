@@ -1,0 +1,30 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000001",
+    "received_at": "2026-09-10T09:05:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0E0000001",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789034700,
+      "pushName": "Ada",
+      "message": {
+        "protocolMessage": {
+          "key": {
+            "remoteJid": "15550001111@s.whatsapp.net",
+            "id": "3EB0A0000001",
+            "fromMe": false
+          },
+          "type": 14,
+          "editedMessage": {
+            "conversation": "The invoice for August has three lines we do not recognise."
+          }
+        }
+      }
+    }
+  }
+]

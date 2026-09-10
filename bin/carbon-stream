@@ -116,9 +116,15 @@ function checkStore(dir) {
   return 0;
 }
 
+// An adapter is named by its directory, which holds index.mjs, or by its module.
+// A module may be named with or without its extension, because an adapter that
+// is one file is written in a command line beside adapters that are directories
+// and the difference is not one a caller should have to remember.
 async function loadAdapter(adapterPath) {
   const resolved = path.resolve(adapterPath);
-  const target = fs.statSync(resolved).isDirectory() ? path.join(resolved, 'index.mjs') : resolved;
+  let target = resolved;
+  if (!fs.existsSync(resolved)) target = `${resolved}.mjs`;
+  else if (fs.statSync(resolved).isDirectory()) target = path.join(resolved, 'index.mjs');
   return import(pathToFileURL(target).href);
 }
 

@@ -1,0 +1,20 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000005",
+    "received_at": "2026-09-10T09:30:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0B0000005",
+        "fromMe": true
+      },
+      "messageTimestamp": 1789036200,
+      "pushName": "the operator",
+      "message": {
+        "conversation": "I am on this one, hold off."
+      }
+    }
+  }
+]

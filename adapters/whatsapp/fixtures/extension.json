@@ -1,0 +1,47 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000007",
+    "received_at": "2026-09-10T09:50:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A0000007",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789038600,
+      "pushName": "Ada",
+      "message": {
+        "conversation": "A newer adapter wrote a field this schema does not name."
+      }
+    },
+    "extra": {
+      "channel_priority": "high",
+      "channel_labels": [
+        "billing"
+      ]
+    }
+  },
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000008",
+    "received_at": "2026-09-10T09:52:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A0000008",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789038720,
+      "pushName": "Ada",
+      "message": {
+        "conversation": "A declared field of the wrong type."
+      }
+    },
+    "wrong_type": {
+      "revision": "one"
+    }
+  }
+]

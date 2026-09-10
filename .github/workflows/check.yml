@@ -11,18 +11,45 @@ jobs:
         with:
           node-version: '22'
 
+      # The one dependency this repository has is the WhatsApp library, pinned
+      # exactly. Installing from the lockfile is what proves the pin resolves,
+      # and --ignore-scripts is what keeps a dependency's install script out of
+      # the build. The tests themselves load no dependency: the adapter's rules
+      # run against recorded events.
+      - name: install the one pinned dependency
+        run: npm ci --ignore-scripts
+
+      - name: the dependency is pinned exactly, and there is only one
+        run: |
+          node -e '
+            const declared = require("./package.json").dependencies ?? {};
+            const names = Object.keys(declared);
+            if (names.length !== 1 || names[0] !== "@whiskeysockets/baileys") {
+              throw new Error("this repository has exactly one dependency and it is the WhatsApp library");
+            }
+            if (!/^[0-9]/.test(declared[names[0]])) {
+              throw new Error("the dependency is pinned to an exact version, with no range");
+            }
+          '
+
       - name: node --test
         run: node --test "test/*.test.mjs"
 
       - name: the fixture adapter passes the seventeen cases
         run: node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures
 
+      - name: the WhatsApp adapter passes its subset
+        run: node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures
+
+      - name: the history import passes its subset
+        run: node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
+
       # A client agent keeps what arrived. There is no path here that deletes a
       # record, and this is what keeps it that way: a library that grows one
       # takes a client's evidence with it.
       - name: no path that drops a client's records
         run: |
-          if grep -rniE "prune|retention" stream adapters conformance bin; then
+          if grep -rniE "prune|retention" stream adapters import conformance bin; then
             echo "the lines above would take a client's records away; this repository has no such path"
             exit 1
           fi

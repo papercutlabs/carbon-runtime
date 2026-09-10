@@ -21,7 +21,10 @@ import { fault, report } from '../stream/faults.mjs';
 const ROOT = path.resolve(import.meta.dirname, '..');
 
 // What a box needs to run an agent, and nothing else.
-const SHIPPED = ['package.json', 'README.md', 'schema', 'stream', 'adapters', 'conformance', 'bin'];
+const SHIPPED = [
+  'package.json', 'package-lock.json', 'README.md',
+  'schema', 'stream', 'adapters', 'import', 'conformance', 'bin'
+];
 
 function main(argv) {
   const args = argv.slice(2);

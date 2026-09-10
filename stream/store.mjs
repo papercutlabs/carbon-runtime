@@ -55,7 +55,12 @@ function fsyncDir(dir) {
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
-function writeAtomic(file, data, mode = FILE_MODE) {
+// Exported because an adapter keeps state of its own beside the captures — a
+// channel's connection state, a chat-key map, a terminal latch — and that state
+// is written by the same rule as a record: temp, fsync, rename, fsync the
+// directory. There is one write order in this library and no adapter invents a
+// second one.
+export function writeAtomic(file, data, mode = FILE_MODE) {
   const dir = path.dirname(file);
   const temp = path.join(dir, `.temp-${process.pid}-${tempCounter++}`);
   const fd = fs.openSync(temp, 'wx', mode);

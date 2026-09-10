@@ -1,0 +1,14 @@
+[
+  {
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "message_id": "false_15550001111@c.us_9004",
+    "sender_jid": "15550001111@s.whatsapp.net",
+    "sender_name": "Ada",
+    "text": "The report never arrived.",
+    "message_type": "chat",
+    "from_me": false,
+    "timestamp": "2025-04-02T11:03:00.000Z",
+    "has_media": false
+  }
+]

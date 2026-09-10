@@ -1,0 +1,22 @@
+[
+  {
+    "conversation": "189234567890123@lid",
+    "position": "000000000006",
+    "received_at": "2026-09-10T09:40:00.000Z",
+    "event": {
+      "key": {
+        "remoteJid": "15550001111@s.whatsapp.net",
+        "remoteJidAlt": "189234567890123@lid",
+        "id": "3EB0A0000006",
+        "fromMe": false
+      },
+      "messageTimestamp": 1789036800,
+      "pushName": "Ada",
+      "message": {
+        "someMessageKindThatDidNotExistWhenThisWasWritten": {
+          "payload": "unreadable"
+        }
+      }
+    }
+  }
+]
