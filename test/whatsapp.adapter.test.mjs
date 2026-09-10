@@ -214,6 +214,10 @@ test('a send whose acceptance nobody knows is unknown, and only a refused one fa
   assert.equal(adapter.outcomeOf({ output: { statusCode: 428 } }, 2), 'unknown');
 });
 
+// A send with no socket handed over now asks live.mjs for the connection the
+// poll opened, so the refusal names what is actually missing: this channel
+// declares no authentication directory, and without one there is no connection
+// to open and nothing to send on.
 test('a live send is refused when there is nothing to send on', async () => {
   const running = context({ dry_run: false });
   await assert.rejects(
@@ -222,7 +226,7 @@ test('a live send is refused when there is nothing to send on', async () => {
       body: 'short',
       delivery: { request_id: 'req-0002' }
     }),
-    (error) => error.faults[0].code === 'TRANSPORT_ABSENT'
+    (error) => error.faults[0].code === 'CHANNEL_AUTH_DIR_ABSENT'
   );
 });
 

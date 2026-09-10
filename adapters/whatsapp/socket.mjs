@@ -34,11 +34,27 @@ export async function authState(dir) {
   return makeTransactionalAuthState(dir, { initAuthCreds, BufferJSON, proto });
 }
 
-// One arrival ordinal per event, zero padded so the store's lexicographic
-// ordering is the channel's ordering. A revision carries the position of the
-// message it replaces, which is what puts it below the message cursor.
-export function position(ordinal) {
-  return String(ordinal).padStart(12, '0');
+// The position the store orders and the cursors compare, and it has to survive a
+// restart. A per-process counter does not: the first proof of this channel
+// restarted the runtime and every message that arrived afterwards was numbered 1
+// again, sat below the cursor the previous run had left, and was polled forever
+// and never captured. So the position is the server's own timestamp for the
+// event, which is the channel's ordering and is the same number after a restart,
+// with a counter after it to separate two events in one second.
+export function position(ordinal, at = Date.now()) {
+  const seconds = Math.floor(Number(at) || 0);
+  return `${String(seconds).padStart(12, '0')}-${String(ordinal).padStart(6, '0')}`;
+}
+
+// The moment the server put on the event, in seconds. The library hands it back
+// as a number or as a long, and an event without one is placed at the moment it
+// was read, which is the only other time this process knows about.
+export function stampOf(event, now = Date.now()) {
+  const stamp = event?.messageTimestamp;
+  const seconds = typeof stamp === 'object' && stamp !== null
+    ? Number(stamp.low ?? stamp.toNumber?.() ?? NaN)
+    : Number(stamp);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : Math.floor(now / 1000);
 }
 
 // Open the channel.
@@ -115,7 +131,7 @@ export async function openChannel({
     const items = [];
     for (const event of messages) {
       const item = {
-        position: position(++ordinal),
+        position: position(++ordinal, stampOf(event)),
         received_at: new Date().toISOString(),
         event
       };

@@ -141,7 +141,7 @@ test('a re-issued release produces one reply, because the request id is the fenc
   loop.session = second.session;
   loop.threads.clear();
   await loop.releasePass({ reissue: recovered.reissue });
-  loop.deliver();
+  await loop.deliver();
 
   const outbound = store.rebuild().filter((r) => r.direction === 'outbound');
   assert.equal(outbound.length, 1, 'the re-issue produced a second reply');
@@ -482,4 +482,30 @@ test('what a turn cost is in the log, because the store is not readable from out
   assert.ok(turn, `no turn line in ${JSON.stringify(lines.map((l) => l.event))}`);
   assert.equal(turn.status, 'completed');
   assert.deepEqual(turn.token_usage, { input: 100, cached: 40, output: 7, reasoning: 3 });
+});
+
+// The defect this test exists for cost the first live WhatsApp reply: the loop
+// called an adapter whose send is asynchronous, read a status off the promise it
+// got back, found none, and wrote the send down as failed. The store said the
+// message was answered and the contact had nothing.
+test('an adapter whose send is a promise is awaited, not read for a status it has not got', async () => {
+  const { loop, store } = makeLoop({ onTurn: (s) => answering(s) });
+  const sent = [];
+  loop.adapter = {
+    ...fixture,
+    send: async (context, record) => {
+      await new Promise((settled) => setTimeout(settled, 5));
+      sent.push(record.delivery.request_id);
+      return { status: 'sent', chunk_ids: ['chunk-1'] };
+    }
+  };
+
+  const result = await loop.pass([item(1, 'first')]);
+
+  assert.equal(sent.length, 1, 'the adapter was not asked to send');
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
+  const outbound = store.rebuild().filter((r) => r.direction === 'outbound');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].delivery.status, 'sent');
+  assert.deepEqual(outbound[0].delivery.chunk_ids, ['chunk-1']);
 });

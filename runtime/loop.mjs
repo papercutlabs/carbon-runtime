@@ -638,14 +638,20 @@ export class ReleaseLoop {
   // Every outbound record the reply tool wrote and the channel has not taken. The
   // record exists before the transport is called, so a process that dies during a
   // send leaves a pending row rather than a message nobody can account for.
-  deliver() {
+  // Async because a live send is: the dry run answers directly and a real one
+  // returns a promise, and awaiting the direct answer is also correct, so one
+  // caller works for both. Not awaiting it is what the first live WhatsApp reply
+  // cost: the promise was read for a `status` it did not have yet, the send was
+  // written down as failed, and the message never left the box while the store
+  // said the turn was answered.
+  async deliver() {
     const sent = [];
     for (const record of this.store.rebuild()) {
       if (record.direction !== 'outbound') continue;
       if (record.delivery?.status !== 'pending') continue;
       let outcome;
       try {
-        outcome = this.adapter.send(this.context(), record);
+        outcome = await this.adapter.send(this.context(), record);
       } catch (error) {
         // A transport that threw did not tell us whether the message arrived.
         // That is `unknown`, and an unknown send is never retried.
@@ -691,7 +697,7 @@ export class ReleaseLoop {
     const recovered = this.recovering ?? { reissue: [] };
     this.recovering = null;
     const released = await this.releasePass({ reissue: recovered.reissue });
-    const delivered = this.deliver();
+    const delivered = await this.deliver();
     // Two things park a record: a payload the adapter could not read, and a
     // release that faulted. One pass can do both, so the lists are joined rather
     // than one spreading over the other.
