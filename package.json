@@ -12,7 +12,8 @@
     "carbon-runtime": "bin/carbon-runtime",
     "carbon-stream": "bin/carbon-stream",
     "carbon-whatsapp": "bin/carbon-whatsapp",
-    "carbon-import": "bin/carbon-import"
+    "carbon-import": "bin/carbon-import",
+    "carbon-tool-server": "bin/carbon-tool-server"
   },
   "scripts": {
     "test": "node --test \"test/*.test.mjs\"",

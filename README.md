@@ -102,8 +102,9 @@ carbon-runtime run --agent-dir /srv/carbon/<agent id>
 
 It reads the declaration install rendered, spawns the pinned harness as its
 direct child and exits non-zero if that child exits, so the unit restarts the
-pair together. It starts the tool servers that hold secrets as the tools user,
-with an environment built from empty. It hosts the adapters in this process,
+pair together. It starts the http tool servers that run as the agent user, with an
+environment built from empty, and waits for the ones that run under their own unit
+as the tools user to answer on loopback. It hosts the adapters in this process,
 takes one lock per adapter and takes over a lock whose holder is not alive. It
 serves the `reply` tool on loopback. Then, on every pass: poll the channel,
 recover what the last run owed, capture what is pending past the cursors, release
@@ -132,6 +133,17 @@ Seven rules are worth stating on their own.
    read after the unit's thread is open, because that is the only way the
    harness reports it, and a startup notification re-raises the hold. A server
    the harness lists that no declaration names refuses the start outright.
+
+   A server the declaration marks `runs_as: tools` is not started by this process
+   at all. A child inherits its parent's Unix account, and this process's account
+   is the agent's, which is the account the model's own shell runs as, so no
+   arrangement of children ever produced a server the agent user could not read
+   the credentials of. Such a server runs under its own systemd unit as the tools
+   user, started by `bin/carbon-tool-server`, and what this process does is wait
+   for its loopback address to answer. One that never answers is reported and this
+   process carries on: the agent still has to read its mailbox, and a required
+   server that is not connected holds release by name, which is the same ending a
+   server this process started reaches when it dies at hour three.
 5. **A channel is polled on its own interval, and a channel that cannot be read
    holds.** An adapter that has to go and look exports `poll`; the interval is
    the declaration's and is refused at start if it is below the adapter's floor,

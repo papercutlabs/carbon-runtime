@@ -10,7 +10,10 @@ import { EXIT } from '../runtime/faults.mjs';
 import { takeLock, lockFile, commandLineOf } from '../runtime/lock.mjs';
 import { latch, refuseIfLatched } from '../runtime/latch.mjs';
 import { loadAdapter, registeredKinds } from '../runtime/registry.mjs';
-import { environmentFor, commandFor, secretEnvName } from '../runtime/tool-servers.mjs';
+import {
+  environmentFor, commandFor, secretEnvName, serversToStart, serversToAwait,
+  awaitToolServers, toolsUserServer, serverNameFromInstance
+} from '../runtime/tool-servers.mjs';
 import { serveReplyTool } from '../runtime/reply-tool.mjs';
 import { Store } from '../stream/store.mjs';
 import { fakeHarness } from './fake-harness.mjs';
@@ -171,9 +174,10 @@ test('a tool server\'s environment is built from empty, and holds paths and neve
   decl.secrets.push({ name: 'client_api_credentials', path: '/srv/carbon/agent/secrets/client-api', purpose: 'the client API credential' });
   decl.runtime = { env: [{ name: 'CLIENT_TOOL_STATE_ROOT', value: '/srv/carbon/agent/work/tool-state' }] };
   const server = {
-    name: 'client-api', transport: 'http',
+    name: 'client-api', transport: 'http', runs_as: 'tools',
     command: '/srv/carbon/agent/current/repo/tools/client-api/server.mjs',
-    url: 'http://127.0.0.1:8731/mcp', cwd: '/srv/carbon/agent', read_only: false, required: true,
+    url: 'http://127.0.0.1:8731/mcp', cwd: '/srv/carbon/agent/current/repo/tools/client-api',
+    read_only: false, required: true,
     secret_refs: ['client_api_credentials']
   };
   const env = environmentFor(decl, server);
@@ -182,15 +186,88 @@ test('a tool server\'s environment is built from empty, and holds paths and neve
     CLIENT_TOOL_STATE_ROOT: '/srv/carbon/agent/work/tool-state'
   });
 
-  const asTools = commandFor(decl, server, { declarationPath: '/srv/carbon/agent/current/carbon.agent.json', toolsUser: 'carbon-tools' });
-  assert.equal(asTools.command, 'sudo');
-  assert.deepEqual(asTools.args.slice(0, 4), ['-u', 'carbon-tools', 'env', '-i']);
-  assert.ok(asTools.args.includes('--port'));
-  assert.equal(asTools.args[asTools.args.indexOf('--port') + 1], '8731');
+  // The account is the unit's, not an argument here: there is no sudo on this
+  // path any more, because a tools-user server is never a child of this process.
+  const line = commandFor(decl, server, { declarationPath: '/srv/carbon/agent/current/carbon.agent.json' });
+  assert.equal(line.command, process.execPath);
+  assert.equal(line.args[0], server.command);
+  assert.ok(line.args.includes('--port'));
+  assert.equal(line.args[line.args.indexOf('--port') + 1], '8731');
+  assert.equal(line.args[line.args.indexOf('--host') + 1], '127.0.0.1');
+});
 
-  const local = commandFor(decl, server, { declarationPath: '/x/carbon.agent.json', toolsUser: null });
-  assert.equal(local.command, process.execPath);
-  assert.equal(local.args[0], server.command);
+test('the runtime starts the agent-user servers and waits for the tools-user ones', async () => {
+  const decl = declaration();
+  decl.secrets.push({ name: 'client_api_credentials', path: '/srv/carbon/agent/secrets/client-api', purpose: 'x' });
+  decl.tool_servers = [
+    {
+      name: 'client-api', transport: 'http', runs_as: 'tools',
+      command: '/srv/carbon/agent/current/repo/tools/client-api/server.mjs',
+      url: 'http://127.0.0.1:8731/mcp', cwd: '/srv/carbon/agent/current/repo/tools/client-api',
+      read_only: false, required: true, secret_refs: ['client_api_credentials']
+    },
+    {
+      name: 'client-read', transport: 'http', runs_as: 'agent',
+      command: '/srv/carbon/agent/current/repo/tools/client-read/server.mjs',
+      url: 'http://127.0.0.1:8732/mcp', cwd: '/srv/carbon/agent/current/repo/tools/client-read',
+      read_only: true, required: false, secret_refs: []
+    },
+    {
+      name: 'client-stdio', transport: 'stdio', runs_as: 'agent',
+      command: '/srv/carbon/agent/current/repo/tools/client-stdio/server.mjs',
+      cwd: '/srv/carbon/agent/current/repo', read_only: true, required: false, secret_refs: []
+    }
+  ];
+  // The server with a unit of its own is never started here, and it is the only
+  // one waited for. Getting this backwards is the whole failure: a credential
+  // held by a child of this process is a credential the model's shell can reach.
+  assert.deepEqual(serversToStart(decl).map((s) => s.name), ['client-read']);
+  assert.deepEqual(serversToAwait(decl).map((s) => s.name), ['client-api']);
+
+  // A required server that never answers is reported and does not stop the
+  // process: the agent still has to read its mailbox, and release is held by
+  // name while it is down.
+  const lines = [];
+  const silent = await awaitToolServers(decl, {
+    timeoutMs: 10, intervalMs: 1, now: (() => { let t = 0; return () => (t += 6); })(),
+    sleep: async () => {}, probe: async () => false, log: (line) => lines.push(line)
+  });
+  assert.deepEqual(silent, [{ name: 'client-api', url: 'http://127.0.0.1:8731/mcp', answered: false, required: true }]);
+  assert.equal(lines[0].event, 'tool_server.silent');
+  assert.equal(lines[0].fault.code, 'TOOL_SERVER_UNIT_SILENT');
+
+  const up = await awaitToolServers(decl, { probe: async () => true, log: (line) => lines.push(line) });
+  assert.deepEqual(up.map((s) => s.answered), [true]);
+  assert.equal(lines[1].event, 'tool_server.answered');
+});
+
+test('the tool unit launcher takes only a tools-user http server, and reads its name off the instance', () => {
+  const decl = declaration();
+  decl.agent = { id: 'example-agent', client: 'Example' };
+  decl.secrets.push({ name: 'client_api_credentials', path: '/srv/carbon/agent/secrets/client-api', purpose: 'x' });
+  decl.tool_servers = [
+    {
+      name: 'client-api', transport: 'http', runs_as: 'tools',
+      command: '/x/server.mjs', url: 'http://127.0.0.1:8731/mcp', cwd: '/x',
+      read_only: false, required: true, secret_refs: ['client_api_credentials']
+    },
+    {
+      name: 'client-read', transport: 'http', runs_as: 'agent',
+      command: '/y/server.mjs', url: 'http://127.0.0.1:8732/mcp', cwd: '/y',
+      read_only: true, required: false, secret_refs: []
+    }
+  ];
+  // Both halves of an instance name may hold a hyphen, so the split is against
+  // the agent id and never against the first hyphen.
+  assert.equal(serverNameFromInstance('example-agent-client-api', 'example-agent'), 'client-api');
+  assert.throws(() => serverNameFromInstance('other-agent-client-api', 'example-agent'),
+    (error) => error.faults[0].code === 'TOOL_UNIT_INSTANCE_UNREADABLE');
+
+  assert.equal(toolsUserServer(decl, 'client-api').name, 'client-api');
+  assert.throws(() => toolsUserServer(decl, 'client-read'),
+    (error) => error.faults[0].code === 'TOOL_SERVER_NOT_A_TOOLS_SERVER');
+  assert.throws(() => toolsUserServer(decl, 'nobody'),
+    (error) => error.faults[0].code === 'TOOL_SERVER_UNDECLARED');
 });
 
 test('the reply tool answers over loopback and writes a pending record', async () => {

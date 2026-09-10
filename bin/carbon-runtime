@@ -19,7 +19,7 @@ const HELP = `carbon-runtime — run one client agent: the harness, the adapters
 Usage:
   carbon-runtime run --agent-dir <dir>
   carbon-runtime run --declaration <file> --store <dir> --codex-home <dir> --checkout <dir>
-                     [--binary <path>] [--harness-root <dir>] [--tools-user <user>]
+                     [--binary <path>] [--harness-root <dir>]
                      [--reply-port <n>] [--items <file>] [--passes <n>]
 
 On a box there is one form: --agent-dir. Everything the runtime needs was
@@ -41,9 +41,6 @@ a default that points at a real path.
   --checkout <dir>      the working directory a thread is opened on
   --binary <path>       the harness binary, when it is not under --harness-root
   --harness-root <dir>  where the pinned binaries are unpacked, one directory per version
-  --tools-user <user>   run the secret-holding tool servers as this user, through sudo;
-                        without it they run as the user running this command, which is
-                        what a local run wants and what a box never does
   --reply-port <n>      the loopback port the reply tool listens on (default ${REPLY_PORT},
                         which is the number install renders into config.toml)
   --items <file>        a JSON array of channel items, read again on every pass, for a
@@ -61,8 +58,9 @@ and passes it to the harness child alone.
 What it does, in order: refuse if the store is latched; load an adapter for every
 declared channel (${registeredKinds().join(', ')}); refuse any channel whose poll_interval_ms is
 below its adapter's floor; take one lock per adapter, taking over a lock whose
-holder is not alive; start the http tool servers as the tools user with an
-environment built from empty; serve the reply tool on loopback; spawn the harness
+holder is not alive; start the http tool servers that run as the agent user, with
+an environment built from empty; wait for the ones that run under their own unit as
+the tools user to answer on loopback; serve the reply tool on loopback; spawn the harness
 as a direct child; then, on every pass, poll the channel, recover what the last
 run owed, capture what is pending, release what policy allows and deliver what the
 model replied.
@@ -84,7 +82,7 @@ Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
 
 const BOOLEAN_FLAGS = [];
 const FLAGS = ['agent-dir', 'declaration', 'store', 'codex-home', 'checkout', 'binary',
-  'harness-root', 'tools-user', 'reply-port', 'items', 'passes'];
+  'harness-root', 'reply-port', 'items', 'passes'];
 
 function parse(argv) {
   const args = {};
@@ -182,7 +180,6 @@ async function main(argv) {
     checkout: where.checkout,
     harnessRoot: where.harnessRoot,
     binary: args.binary ? path.resolve(args.binary) : null,
-    toolsUser: args['tools-user'] ?? null,
     replyPort: args['reply-port'] ? Number(args['reply-port']) : REPLY_PORT,
     passes: args.passes ? Number(args.passes) : Infinity,
     harness: codex,
