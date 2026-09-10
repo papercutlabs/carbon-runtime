@@ -1,0 +1,26 @@
+[
+  {
+    "id": "m-0001",
+    "conversation": "room-7",
+    "position": "0001",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "sender_name": "Ada",
+    "at": "2026-09-10T09:00:00.000Z",
+    "text": "The invoice for August has two lines we do not recognise.",
+    "raw": "from: ada@examplecorp.test\nsubject: August invoice\n\nThe invoice for August has two lines we do not recognise."
+  },
+  {
+    "id": "m-0002",
+    "conversation": "room-7",
+    "position": "0002",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "sender_name": "Ada",
+    "at": "2026-09-10T09:04:00.000Z",
+    "text": "Lines 14 and 15, to be exact.",
+    "raw": "from: ada@examplecorp.test\nsubject: Re: August invoice\n\nLines 14 and 15, to be exact."
+  }
+]

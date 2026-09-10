@@ -1,0 +1,17 @@
+[
+  {
+    "id": "m-0005",
+    "conversation": "room-7",
+    "position": "0005",
+    "revision": 0,
+    "role": "operator",
+    "sender": "operator@examplecorp.test",
+    "at": "2026-09-10T09:30:00.000Z",
+    "text": "I am on this one, hold off.",
+    "hold": {
+      "reason": "the operator answered in the conversation",
+      "set_at": "2026-09-10T09:30:00.000Z",
+      "release_after_ms": 3600000
+    }
+  }
+]

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papercutlabs.com/carbon/schema/carbon.message.v1.json",
+  "title": "carbon.message.v1",
+  "description": "One JSON file per record. Every inbound adapter and every import writes this shape. A declared field of the wrong type is refused; an adapter's own undeclared fields are carried in the extension object so a newer adapter never parks a message on a strict key check.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "agent", "source", "account", "conversation_id", "conversation_kind", "message_id", "platform_message_id", "revision", "direction", "role", "sender_id", "received_at", "body", "attachments", "historical", "disposition"],
+  "properties": {
+    "schema": { "const": "carbon.message.v1" },
+    "agent": { "type": "string", "minLength": 1 },
+    "source": { "enum": ["email", "whatsapp", "import:carbon-capture"] },
+    "account": { "type": "string", "minLength": 1 },
+    "conversation_id": { "type": "string", "minLength": 1, "description": "Channel-native, namespaced by account." },
+    "conversation_kind": { "enum": ["direct", "group", "thread"] },
+    "message_id": { "type": "string", "minLength": 1, "description": "<conversation_id>:<platform_message_id>; the dedup key everywhere." },
+    "platform_message_id": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "direction": { "enum": ["inbound", "outbound"] },
+    "role": { "enum": ["contact", "operator", "agent", "system"] },
+    "sender_id": { "type": "string", "minLength": 1 },
+    "sender_name": { "type": "string" },
+    "sent_at": { "type": "string", "minLength": 1 },
+    "received_at": { "type": "string", "minLength": 1 },
+    "body": { "type": "string" },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "mime", "bytes", "sha256"],
+        "properties": {
+          "file": { "type": "string", "minLength": 1 },
+          "mime": { "type": "string", "minLength": 1 },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "download_failed": { "type": "boolean" }
+        }
+      }
+    },
+    "raw": { "type": "string", "description": "Path to the appended raw line beside the record." },
+    "historical": { "type": "boolean" },
+    "reply_to": { "type": "string" },
+    "disposition": { "enum": ["captured", "held", "parked", "policy-drop", "unsupported", "permanent-error"] },
+    "hold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "set_at"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "set_at": { "type": "string", "minLength": 1 },
+        "release_after_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["released_at", "thread_id", "turn_id"],
+      "description": "Absent until the record is released. Set with no completed_at means an open release.",
+      "properties": {
+        "released_at": { "type": "string", "minLength": 1 },
+        "thread_id": { "type": "string", "minLength": 1 },
+        "turn_id": { "type": "string", "minLength": 1 },
+        "completed_at": { "type": "string", "minLength": 1 }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "status", "text_sha256"],
+      "description": "Outbound only. unknown is never retried.",
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["pending", "sent", "unknown", "failed"] },
+        "text_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "chunk_ids": { "type": "array", "items": { "type": "string" } },
+        "completed_at": { "type": "string", "minLength": 1 }
+      }
+    },
+    "adapter_fields": {
+      "type": "object",
+      "description": "The one place unknown keys are carried. An adapter puts fields this schema does not name here; they are stored and released untouched, never validated, never interpreted by anything downstream.",
+      "additionalProperties": true
+    }
+  }
+}

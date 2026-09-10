@@ -1,0 +1,13 @@
+[
+  {
+    "id": "m-9001",
+    "conversation": "room-7",
+    "position": "9001",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "at": "2025-04-02T11:00:00.000Z",
+    "text": "This one came out of the client's own export.",
+    "historical": true
+  }
+]

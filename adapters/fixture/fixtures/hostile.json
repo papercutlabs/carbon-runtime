@@ -1,0 +1,32 @@
+[
+  {
+    "id": "..",
+    "conversation": "room-7",
+    "position": "0101",
+    "revision": 0,
+    "role": "contact",
+    "sender": "stranger@examplecorp.test",
+    "at": "2026-09-10T10:00:00.000Z",
+    "text": "an identifier that is a dot segment"
+  },
+  {
+    "id": "m/0009",
+    "conversation": "room-7",
+    "position": "0102",
+    "revision": 0,
+    "role": "contact",
+    "sender": "stranger@examplecorp.test",
+    "at": "2026-09-10T10:01:00.000Z",
+    "text": "an identifier carrying a path separator"
+  },
+  {
+    "id": "m-0010",
+    "conversation": "room\u0000-7",
+    "position": "0103",
+    "revision": 0,
+    "role": "contact",
+    "sender": "stranger@examplecorp.test",
+    "at": "2026-09-10T10:02:00.000Z",
+    "text": "a conversation carrying a control byte"
+  }
+]
