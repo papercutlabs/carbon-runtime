@@ -1,6 +1,6 @@
 {
   "name": "carbon-runtime",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "The part of Carbon that runs on a box: the store library, the adapters, the reply tool and the process a unit starts.",
   "type": "module",
   "license": "UNLICENSED",
