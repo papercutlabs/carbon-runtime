@@ -44,6 +44,9 @@ jobs:
       - name: the history import passes its subset
         run: node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
 
+      - name: the email adapter passes the cases that apply to it
+        run: node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/fixtures
+
       # A client agent keeps what arrived. There is no path here that deletes a
       # record, and this is what keeps it that way: a library that grows one
       # takes a client's evidence with it.

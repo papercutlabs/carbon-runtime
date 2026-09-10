@@ -1,0 +1,51 @@
+[
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 11,
+    "position": "0000004272:0000000011",
+    "conversation": "aug-invoice-001@example.test",
+    "extra": {
+      "x-invoice-run": "august-2026",
+      "x-ledger-code": "4471"
+    },
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 09:50:00 +0000",
+      "From: Ada Vance <ada@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <aug-invoice-011@example.test>",
+      "References: <aug-invoice-001@example.test>",
+      "X-Invoice-Run: august-2026",
+      "X-Ledger-Code: 4471",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "A sender whose mail system writes headers this schema does not name."
+    ]
+  },
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 12,
+    "position": "0000004272:0000000012",
+    "conversation": "aug-invoice-001@example.test",
+    "wrong_type": {
+      "revision": "one"
+    },
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 09:52:00 +0000",
+      "From: Ada Vance <ada@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <aug-invoice-012@example.test>",
+      "References: <aug-invoice-001@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "A declared field of the wrong type, which no mail server produces and the fixture must still present."
+    ]
+  }
+]

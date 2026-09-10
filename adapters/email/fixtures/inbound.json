@@ -1,0 +1,42 @@
+[
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 1,
+    "position": "0000004272:0000000001",
+    "conversation": "aug-invoice-001@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 09:00:00 +0000",
+      "From: Ada Vance <ada@example.test>",
+      "To: agent-01@example.test",
+      "Subject: August invoice",
+      "Message-ID: <aug-invoice-001@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "The invoice for August has two lines we do not recognise."
+    ]
+  },
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 3,
+    "position": "0000004272:0000000003",
+    "conversation": "aug-invoice-001@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 09:04:00 +0000",
+      "From: Ada Vance <ada@example.test>",
+      "To: agent-01@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <aug-invoice-003@example.test>",
+      "In-Reply-To: <aug-invoice-001@example.test>",
+      "References: <aug-invoice-001@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Lines 14 and 15, to be exact."
+    ]
+  }
+]

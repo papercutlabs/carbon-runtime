@@ -1,0 +1,19 @@
+Message-ID:
+ <010001a08aa7bc62-77d4fec2-374e-42e0-91ed-232f89258fd9-000000@mail.example.test>
+X-Carbon-Origin: agent
+In-Reply-To:
+ <010001a08aa7188d-4dbd6f52-b125-4ca1-b17e-ab32e2acd8c9-000000@mail.example.test>
+References:
+ <010001a08aa7188d-4dbd6f52-b125-4ca1-b17e-ab32e2acd8c9-000000@mail.example.test>
+From: Agent 01 <agent-01@example.test>
+To: agent-01@example.test
+Subject: Re: carbon-email smoke 20260910092958983
+Date: Thu, 10 Sep 2026 09:30:43 +0000
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This is the recorded reply of the email adapter smoke. It was written to =
+the store as a pending outbound record before any part of it reached the =
+network, and it carries In-Reply-To and References from the message it =
+answers.

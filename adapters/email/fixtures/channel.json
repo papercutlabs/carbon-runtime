@@ -1,0 +1,18 @@
+{
+  "mailbox": "INBOX",
+  "imap_host": "imap.example.test",
+  "imap_port": 993,
+  "smtp_host": "smtp.example.test",
+  "smtp_port": 465,
+  "netrc": "/srv/carbon/agent-01/secrets/mail.netrc",
+  "addresses": [
+    "billing@example.test"
+  ],
+  "poll_interval_ms": 30000,
+  "max_attachment_bytes": 64,
+  "max_part_bytes": 400,
+  "release": "immediate",
+  "hold": {
+    "release_after_ms": 3600000
+  }
+}

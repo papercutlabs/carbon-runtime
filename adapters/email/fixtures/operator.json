@@ -1,0 +1,23 @@
+[
+  {
+    "mailbox": "INBOX",
+    "uidvalidity": 4272,
+    "uid": 6,
+    "position": "0000004272:0000000006",
+    "conversation": "aug-invoice-001@example.test",
+    "rfc822": [
+      "Delivered-To: agent-01@example.test",
+      "Date: Thu, 10 Sep 2026 09:30:00 +0000",
+      "From: agent-01@example.test",
+      "To: ada@example.test",
+      "Subject: Re: August invoice",
+      "Message-ID: <op-0006@example.test>",
+      "In-Reply-To: <aug-invoice-001@example.test>",
+      "References: <aug-invoice-001@example.test>",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Ada, I am on this one. Give me until the afternoon."
+    ]
+  }
+]
