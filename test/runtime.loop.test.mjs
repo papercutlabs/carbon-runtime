@@ -463,3 +463,23 @@ test('the reply instruction is the first line and the last line of the turn', ()
   assert.equal(lines[0], instruction);
   assert.equal(lines.at(-1), instruction);
 });
+
+test('what a turn cost is in the log, because the store is not readable from outside the box', async () => {
+  const lines = [];
+  const { loop } = makeLoop({
+    onTurn: (s) => (session, params) => {
+      replyHandler({ store: s, agent: AGENT })({
+        conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer'
+      });
+      return { status: 'completed', token_usage: { input: 100, cached: 40, output: 7, reasoning: 3 } };
+    }
+  });
+  loop.log = (line) => lines.push(line);
+
+  await loop.pass([item(1, 'a question')]);
+
+  const turn = lines.find((l) => l.event === 'turn');
+  assert.ok(turn, `no turn line in ${JSON.stringify(lines.map((l) => l.event))}`);
+  assert.equal(turn.status, 'completed');
+  assert.deepEqual(turn.token_usage, { input: 100, cached: 40, output: 7, reasoning: 3 });
+});

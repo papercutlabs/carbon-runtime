@@ -503,6 +503,15 @@ export class ReleaseLoop {
         `the model reported the turn failed: ${JSON.stringify(result.error ?? null)}`,
         'read the turn on the thread this record names, fix the cause, and run carbon install to clear the latch.'));
     }
+    // What the turn cost, in the log rather than only on the thread record: the
+    // thread record lives in the store, which a check from outside the box cannot
+    // read, and "what did that answer cost" is a question asked from outside.
+    this.log({
+      event: 'turn', message_id: record.message_id, release_id: releaseId,
+      thread_id: threadId, turn_id: result.turn_id, status: result.status,
+      token_usage: result.token_usage ?? null
+    });
+
     if (result.status !== 'completed') {
       return { message_id: record.message_id, release_id: releaseId, status: result.status, turn_id: result.turn_id };
     }
