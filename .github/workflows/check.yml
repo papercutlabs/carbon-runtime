@@ -70,7 +70,18 @@ jobs:
       - name: no client, internal, machine or person name in a public tree
         run: node tools/scan-identifiers.mjs .
 
-      - name: the release tarball builds
+      # A box has no registry and no reason to reach one, so the dependency ships
+      # inside the tarball. This is the step that would have caught the first
+      # release, which installed onto a box with no node_modules at all and a
+      # WhatsApp channel that could not start.
+      - name: the release tarball builds, and carries its dependency
         run: |
           node tools/release.mjs --out "$RUNNER_TEMP/dist"
           ls "$RUNNER_TEMP"/dist/carbon-runtime-*.tar.gz.sha256
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          tar -xzf "$RUNNER_TEMP"/dist/carbon-runtime-*.tar.gz -C "$RUNNER_TEMP/unpacked"
+          cd "$RUNNER_TEMP/unpacked"
+          node -e 'import("@whiskeysockets/baileys").then((m) => {
+            if (typeof m.makeWASocket !== "function") throw new Error("the tarball carries a WhatsApp library that does not load");
+          })'
+          node bin/carbon-runtime --help > /dev/null
