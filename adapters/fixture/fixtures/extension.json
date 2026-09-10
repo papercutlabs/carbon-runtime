@@ -1,0 +1,31 @@
+[
+  {
+    "id": "m-0007",
+    "conversation": "room-7",
+    "position": "0007",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "at": "2026-09-10T09:50:00.000Z",
+    "text": "A newer adapter wrote a field this schema does not name.",
+    "extra": {
+      "channel_priority": "high",
+      "channel_labels": [
+        "billing"
+      ]
+    }
+  },
+  {
+    "id": "m-0008",
+    "conversation": "room-7",
+    "position": "0008",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "at": "2026-09-10T09:52:00.000Z",
+    "text": "A declared field of the wrong type.",
+    "wrong_type": {
+      "revision": "one"
+    }
+  }
+]

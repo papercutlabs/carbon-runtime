@@ -1,0 +1,19 @@
+# The words this repository refuses, as sha256 of the lowercased word, one per line.
+# They are hashed and not written out because several of them are the very
+# identifiers that must not appear in a public tree: a plaintext list of client
+# names would be the leak it is meant to prevent. The readable list lives in the
+# private repository, and tools/scan-identifiers.mjs hashes each word of each
+# line here and compares. Hashing a short word is not secrecy, only the removal
+# of a plain reading; nothing here depends on it being more than that.
+0e27150cb1fc10c8366e5924160b7d3c36bc045edf614989b5134136bd719188
+21bd015e3675d54677332426de0a99b2c7cbf7aa8835d310704d7c446d363118
+4636013913ca130e01ace4238c9d465d2c188251178728cb86a11197a009d1c5
+67d2cf92494a51d19dfa444183a47336e6e8901b94671264f2cc5df7b0087282
+7640da40298286a6e462d5a80f1c608b0df8660fb13bd5aad0f32b6db68b42c0
+84556665a75f591c69928d6a43042b57a609f5ed894c615f9dd119c54ce90d18
+9d0c52ae7023170cf8437d8683aeee910389238e7792b12c08f04f15c305ca9a
+abafdaabda006dac4914367d34965a2aca304b1e1075906c68912975ec5bb5e8
+c03bfdf22ed8432eefc47d2cfa993e1891bb3d19338f83358b34384bbe405adb
+d3ba05945ead0214d187cc0b52da7bb4149e50104cf0669ea17274c7fec72965
+da0daaba4b156961c049ab4b85b6d0bcba2872200b7dedb4aa77f9208c601444
+f0d9991c5e47e0d26a350c1618bd3154cd0f9f2461d3df671a753c393fe7a6a7

@@ -1,0 +1,36 @@
+[
+  {
+    "id": "m-0003",
+    "conversation": "room-7",
+    "position": "0003",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "at": "2026-09-10T09:20:00.000Z",
+    "text": "The invoice is attached.",
+    "attachments": [
+      {
+        "bytes": "invoice line 14\ninvoice line 15\n",
+        "mime": "text/plain"
+      }
+    ]
+  },
+  {
+    "id": "m-0004",
+    "conversation": "room-7",
+    "position": "0004",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "at": "2026-09-10T09:22:00.000Z",
+    "text": "And the scan, which may not have come through.",
+    "attachments": [
+      {
+        "file": "captures/unavailable/scan.pdf",
+        "mime": "application/pdf",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "download_failed": true
+      }
+    ]
+  }
+]

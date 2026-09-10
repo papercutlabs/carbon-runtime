@@ -1,0 +1,14 @@
+[
+  {
+    "id": "m-0001",
+    "conversation": "room-7",
+    "position": "0001",
+    "revision": 1,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "sender_name": "Ada",
+    "at": "2026-09-10T09:11:00.000Z",
+    "text": "The invoice for August has three lines we do not recognise.",
+    "raw": "edited: The invoice for August has three lines we do not recognise."
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "m-0006",
+    "conversation": "room-7",
+    "position": "0006",
+    "revision": 0,
+    "role": "contact",
+    "sender": "ada@examplecorp.test",
+    "at": "2026-09-10T09:40:00.000Z",
+    "malformed": true,
+    "reason": "the payload declares a content transfer encoding this adapter does not read",
+    "raw": "content-transfer-encoding: invented\n\n(unreadable body)"
+  }
+]

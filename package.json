@@ -1,0 +1,15 @@
+{
+  "name": "carbon-runtime",
+  "version": "0.1.0",
+  "description": "The part of Carbon that runs on a box: the store library, the adapters, the reply tool and the process a unit starts.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "bin": { "carbon-stream": "bin/carbon-stream" },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "check": "node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures",
+    "release": "node tools/release.mjs"
+  }
+}

@@ -1,0 +1,193 @@
+#!/usr/bin/env node
+// carbon-stream — the conformance check for the store contract.
+//
+// An adapter is a thing that passes its subset of the seventeen cases. This is
+// the command that says whether it does.
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { fault, report } from '../stream/faults.mjs';
+import { Store, StreamFault } from '../stream/store.mjs';
+import { CASES, casesFor, rebuildAgainstIndex } from '../conformance/cases.mjs';
+
+const TOP_HELP = `carbon-stream — check an adapter, or a live store, against the stream contract
+
+Usage:
+  carbon-stream check --adapter <path> --fixtures <dir>
+  carbon-stream check --store <dir>
+
+  --adapter <path>    an ES module exporting capabilities and the five
+                      operations stream/adapter.md names
+  --fixtures <dir>    the directory of channel items the cases feed the adapter,
+                      including context.json, which names the agent and the
+                      account the check runs as
+  --store <dir>       a live store; runs case 11 alone, the rebuild against the
+                      index, which is what a restart proof reads
+
+Every argument is explicit and nothing is guessed. Each case prints its number,
+its verdict and its name; a failing case prints its faults as JSON lines of
+{code, subject, problem, fix}. Any failure exits non-zero.
+
+The cases run are the ones that apply to what the adapter declared in
+capabilities: inbound, outbound, import, in any combination. A source that only
+produces is never asked about replies.
+
+The seventeen cases:
+${CASES.map((c) => `  ${String(c.number).padStart(2)}  ${c.name} [${c.capabilities.join(', ')}]`).join('\n')}`;
+
+async function main(argv) {
+  const args = argv.slice(2);
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    console.log(TOP_HELP);
+    return args.length === 0 ? 1 : 0;
+  }
+  if (args[0] !== 'check') {
+    report([fault('UNKNOWN_SUBCOMMAND', args[0],
+      'the only carbon-stream subcommand is check',
+      'run carbon-stream --help')]);
+    return 1;
+  }
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(TOP_HELP);
+    return 0;
+  }
+
+  const faults = [];
+  let adapterPath = null; let fixturesDir = null; let storeDir = null;
+  const rest = args.slice(1);
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--adapter') adapterPath = rest[++i] ?? null;
+    else if (rest[i] === '--fixtures') fixturesDir = rest[++i] ?? null;
+    else if (rest[i] === '--store') storeDir = rest[++i] ?? null;
+    else {
+      faults.push(fault('UNKNOWN_ARGUMENT', rest[i],
+        'not an argument of carbon-stream check',
+        'run carbon-stream check --help'));
+    }
+  }
+  if (storeDir === null && (adapterPath === null || fixturesDir === null)) {
+    faults.push(fault('MISSING_ARGUMENT', '--adapter and --fixtures',
+      'checking an adapter needs both the adapter and its fixtures, and neither is guessed',
+      'pass --adapter <path> --fixtures <dir>, or check a live store with --store <dir>'));
+  }
+  if (storeDir !== null && (adapterPath !== null || fixturesDir !== null)) {
+    faults.push(fault('ARGUMENTS_CONFLICT', '--store',
+      '--store checks a store that already exists and takes no adapter',
+      'pass --store alone'));
+  }
+  if (faults.length > 0) {
+    report(faults);
+    return 1;
+  }
+
+  return storeDir !== null ? checkStore(storeDir) : await checkAdapter(adapterPath, fixturesDir);
+}
+
+function checkStore(dir) {
+  if (!fs.existsSync(dir)) {
+    report([fault('STORE_MISSING', dir, 'there is no store at this path', 'pass the path of a store directory')]);
+    return 1;
+  }
+  const store = new Store(dir);
+  let difference;
+  try {
+    difference = rebuildAgainstIndex(store);
+  } catch (error) {
+    reportError(error);
+    return 1;
+  }
+  const passed = difference.missing.length === 0 && difference.unnamed.length === 0;
+  console.log(`case 11  ${passed ? 'pass' : 'FAIL'}  ${CASES.find((c) => c.number === 11).name}`);
+  if (!passed) {
+    for (const key of difference.missing) {
+      report([fault('INDEX_NAMES_A_RECORD_THAT_IS_NOT_THERE', key,
+        'the index names this record and no file holds it',
+        'the record was written to the index and lost; recover it from the raw payload beside it')]);
+    }
+    for (const key of difference.unnamed) {
+      report([fault('RECORD_NOT_IN_INDEX', key,
+        'a record is on disk that the arrivals index does not name',
+        'the record was written outside the store library; write every record through stream/')]);
+    }
+    return 1;
+  }
+  return 0;
+}
+
+async function loadAdapter(adapterPath) {
+  const resolved = path.resolve(adapterPath);
+  const target = fs.statSync(resolved).isDirectory() ? path.join(resolved, 'index.mjs') : resolved;
+  return import(pathToFileURL(target).href);
+}
+
+function loadFixtures(dir) {
+  const fixtures = {};
+  for (const name of fs.readdirSync(dir)) {
+    if (name.endsWith('.json')) fixtures[name] = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+  }
+  return fixtures;
+}
+
+function reportError(error) {
+  if (error instanceof StreamFault) report(error.faults);
+  else {
+    report([fault('CASE_FAILED', error.name ?? 'error',
+      (error.message ?? String(error)).split('\n')[0],
+      'read the case in conformance/cases.mjs and the adapter it ran against')]);
+  }
+}
+
+async function checkAdapter(adapterPath, fixturesDir) {
+  let adapter;
+  try {
+    adapter = await loadAdapter(adapterPath);
+  } catch (error) {
+    report([fault('ADAPTER_UNLOADABLE', adapterPath,
+      (error.message ?? String(error)).split('\n')[0],
+      'give the path of an ES module, or of a directory holding index.mjs')]);
+    return 1;
+  }
+  if (!Array.isArray(adapter.capabilities) || adapter.capabilities.length === 0) {
+    report([fault('CAPABILITIES_UNDECLARED', adapterPath,
+      'an adapter declares what it does: inbound, outbound, import, in any combination',
+      'export capabilities from the adapter module')]);
+    return 1;
+  }
+  const fixtures = loadFixtures(fixturesDir);
+  const context = fixtures['context.json'];
+  if (!context || !context.agent || !context.account) {
+    report([fault('FIXTURE_CONTEXT_MISSING', fixturesDir,
+      'the fixtures directory names the agent and the account the check runs as, in context.json',
+      'add context.json holding {"agent": "...", "account": "..."}')]);
+    return 1;
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-stream-check-'));
+  let failures = 0;
+  for (const testCase of casesFor(adapter.capabilities)) {
+    const store = Store.open(path.join(root, `case-${testCase.number}`, 'store'));
+    const running = {
+      store, adapter, fixtures,
+      agent: context.agent,
+      account: context.account,
+      items: [],
+      dry_run: true,
+      now: Date.now()
+    };
+    try {
+      testCase.run(running);
+      console.log(`case ${String(testCase.number).padStart(2)}  pass  ${testCase.name}`);
+    } catch (error) {
+      failures++;
+      console.log(`case ${String(testCase.number).padStart(2)}  FAIL  ${testCase.name}`);
+      reportError(error);
+    }
+  }
+  const ran = casesFor(adapter.capabilities).length;
+  console.log(`${ran} of ${CASES.length} cases apply to [${adapter.capabilities.join(', ')}]; ${ran - failures} passed, ${failures} failed`);
+  return failures === 0 ? 0 : 1;
+}
+
+process.exitCode = await main(process.argv);
