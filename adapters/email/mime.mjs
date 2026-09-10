@@ -186,13 +186,27 @@ function splitOnSemicolons(raw) {
 
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#160': ' ' };
 
+// Each removal runs until the string stops changing, not once. A single pass
+// can leave behind what its own removal spliced together — "<scr<script>ipt>"
+// is the classic — and while what comes out of here is the plain text of a
+// record and is never rendered as HTML anywhere, a stripper that leaves half a
+// tag standing is a stripper that lies about what it did. Every pass strictly
+// shortens the string, so the loop ends.
+function untilStable(text, pattern, replacement) {
+  let before;
+  do {
+    before = text;
+    text = text.replace(pattern, replacement);
+  } while (text !== before);
+  return text;
+}
+
 export function stripHtml(html) {
-  return html
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<\/(p|div|tr|h[1-6]|li)\s*>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
+  let text = untilStable(html, /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  text = untilStable(text, /<!--[\s\S]*?-->/g, '');
+  text = untilStable(text, /<\/(p|div|tr|h[1-6]|li)\s*>/gi, '\n');
+  text = untilStable(text, /<br\s*\/?>/gi, '\n');
+  return untilStable(text, /<[^>]+>/g, '')
     .replace(/&(#?[a-z0-9]+);/gi, (whole, name) => {
       const key = name.toLowerCase();
       if (ENTITIES[key] !== undefined) return ENTITIES[key];

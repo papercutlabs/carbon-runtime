@@ -96,6 +96,13 @@ function withAttachment(bytes) {
   ];
 }
 
+test('stripHtml leaves no tag standing, even one its own removal splices together', () => {
+  assert.equal(stripHtml('<scr<script>ipt>alert(1)</script><p>kept</p>'), 'kept');
+  // What must not survive is a tag; a lone "<" left as text is text.
+  assert.doesNotMatch(stripHtml('<scr<script>ipt>x</script>'), /<[a-z!/][^>]*>/i);
+  assert.doesNotMatch(stripHtml('<!-<!-- - -->->text'), /<[a-z!/][^>]*>/i);
+});
+
 test('an attachment under the cap arrives with its bytes and its digest', () => {
   const message = readMessage(withAttachment('x'.repeat(100)), { maxAttachmentBytes: 1000 });
   assert.equal(message.attachments.length, 1);
