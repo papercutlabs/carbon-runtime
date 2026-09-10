@@ -23,12 +23,20 @@ import { ReleaseLoop } from './loop.mjs';
 
 // Where each thing lives under an agent directory. Install renders the left-hand
 // side; the runtime reads it and guesses none of it.
+//
+// The checkout is `current/repo`, and it is the thread's `cwd`. It is not the
+// agent's scratch directory, and the two are deliberately different places: under
+// `workspace-write` everything below `cwd` is writable whatever `writableRoots`
+// says, so the only thing that holds a checkout still is its ownership and mode.
+// Install unpacks it owned by the tools user at 0555 and 0444, which the agent
+// user cannot change. `work/` stays beside it, agent-owned and writable, for the
+// unit's log and for anything a tool server keeps between runs.
 export function placesUnder(agentDir) {
   return {
     declaration: path.join(agentDir, 'current', 'carbon.agent.json'),
     store: path.join(agentDir, 'store'),
     codexHome: path.join(agentDir, 'codex-home'),
-    checkout: path.join(agentDir, 'work'),
+    checkout: path.join(agentDir, 'current', 'repo'),
     harnessRoot: path.join(agentDir, 'harness')
   };
 }
