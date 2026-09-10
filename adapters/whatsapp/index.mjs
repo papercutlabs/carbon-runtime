@@ -22,6 +22,7 @@ import {
 } from './jid.mjs';
 import { albumOf, editOf, isHdChild, read, revokeOf } from './content.mjs';
 import { learnPairs } from './channel-state.mjs';
+import { arrivals, socketFor } from './live.mjs';
 
 export const capabilities = ['inbound', 'outbound'];
 
@@ -44,6 +45,21 @@ export const ALBUM_QUIET_MS = 2000;
 // learn that a shorter one puts the agent back into a conversation a person is
 // still handling.
 export const HOLD_MS = 24 * 60 * 60 * 1000;
+
+// This channel is pushed, not fetched: the poll drains what the connection has
+// already delivered, so there is no provider to rate limit and no floor to
+// declare. The interval is still the declaration's, because it decides how long
+// a message waits before the loop looks at it.
+export const POLL_INTERVAL_FLOOR_MS = 0;
+
+// ---- 6. go to the channel ----------------------------------------------------
+
+// The connection is opened on the first poll and kept, and what arrives on it is
+// buffered until the loop asks. Everything about that is live.mjs's; this file
+// still holds no socket and opens nothing itself.
+export async function poll(context) {
+  return { items: await arrivals(context) };
+}
 
 // ---- identity ---------------------------------------------------------------
 
@@ -367,7 +383,12 @@ export function send(context, record) {
 }
 
 async function sendLive(context, record, chunks) {
-  if (!context.socket || typeof context.socket.sendMessage !== 'function') {
+  // The caller may hand a socket over, which is what a test does. The runtime
+  // does not: it polls this adapter, and the connection that poll opened is the
+  // one the reply goes out on, because a reply on a second connection would
+  // replace the first and take the channel down as it answered.
+  const socket = context.socket ?? await socketFor(context);
+  if (!socket || typeof socket.sendMessage !== 'function') {
     throw new StreamFault([fault('TRANSPORT_ABSENT', record.delivery.request_id,
       'the adapter was asked to send with no connection to send on',
       'start the channel before the reply loop, or run the send with dry_run')]);
@@ -377,7 +398,7 @@ async function sendLive(context, record, chunks) {
   for (const chunk of chunks) {
     let result;
     try {
-      result = await context.socket.sendMessage(chat, { text: chunk });
+      result = await socket.sendMessage(chat, { text: chunk });
     } catch (error) {
       return { status: outcomeOf(error, chunk_ids.length), chunk_ids };
     }

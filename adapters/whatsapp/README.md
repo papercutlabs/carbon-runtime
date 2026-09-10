@@ -21,8 +21,9 @@ node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/wha
 | `latch.mjs` | the terminal latch: what stops the unit when the device is unlinked |
 | `auth-state.mjs` | the authentication state, written transactionally |
 | `socket.mjs` | the only file that loads the library, and the only one that opens a connection |
+| `live.mjs` | the connection as the release loop sees it: one per account, the buffer of what arrived on it, and the socket a reply goes out on |
 | `fixtures/` | recorded events: what the conformance check runs, and what the tests read |
-| `../../bin/carbon-whatsapp` | `pair`, run once by a person |
+| `../../bin/carbon-whatsapp` | `pair`, run once by a person, and `send`, which drives a second device in a proof |
 
 `index.mjs` imports no library and opens no connection, so every rule below is
 tested against recorded events with no network in the test.
@@ -91,9 +92,32 @@ into the phone under linked devices. The directory is then a credential the box
 owner owns, and nothing but the adapter reads it. A directory that already holds
 a paired device is refused, so a second run cannot orphan a working pairing.
 
-**This has not been run against a real number.** Everything else in this adapter
-is proved by the conformance check and the tests; the pairing round trip is
-proved the first time a person runs it with a test number.
+**This was run against real numbers on 10 September 2026**, and the round trip is
+proved end to end: a message sent from one phone was captured, released, answered
+in one turn and delivered back to that phone, with the chunk id the store wrote
+matching the id the receiving device saw. `proof.md` beside this file is the run.
+
+Two things about the exchange are not obvious and both cost an attempt to learn.
+The pairing code is asked for when the server offers a pairing opportunity, which
+the library reports as a `qr` on the connection update; asking at `connecting` is
+asking before the handshake is finished and the server refuses. And a code typed
+correctly ends with the server closing the stream and asking for a restart: the
+credentials are written and the device is registered, but the phone sits on
+"Logging in" until something connects again. `pair` reconnects once by itself for
+exactly that reason.
+
+## The tester device
+
+A second paired device exists so that this channel can be proved without a person
+holding a phone: it sends a message to the agent's number, the agent answers, and
+the run watches both halves. That is what `carbon-whatsapp send` is for. It sends
+one message on a device somebody already paired, writes nothing to any store, and
+holds the connection open for a moment before closing it properly — a device that
+connects, sends and vanishes in the same second is a device the server has been
+seen to unlink, and the first tester device was lost that way.
+
+The tester's authentication directory is a credential like any other and lives
+where the person who paired it keeps it, never in this repository.
 
 ---
 

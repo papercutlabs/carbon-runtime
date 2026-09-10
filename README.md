@@ -48,7 +48,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `conformance/cases.mjs` | the seventeen cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
-| `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person |
+| `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
 | `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>` |
 | `test/` | `node --test "test/*.test.mjs"` |
 | `tools/` | the MCP scaffold the reply tool is served by, the identifier scan and the release build |
