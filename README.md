@@ -109,7 +109,7 @@ serves the `reply` tool on loopback. Then, on every pass: poll the channel,
 recover what the last run owed, capture what is pending past the cursors, release
 what the channel's policy allows, and deliver what the model replied.
 
-Five rules are worth stating on their own.
+Seven rules are worth stating on their own.
 
 1. **The release is written on the record before the turn starts.** A restart
    reads the store, not the harness's files: a release with a sent reply is
@@ -119,11 +119,20 @@ Five rules are worth stating on their own.
    id a turn carries, so the runtime tells the model which `request_id` to use,
    that id is the release id and is the same on a re-issue, and the store
    answers a repeat rather than sending twice.
-3. **A required tool server that is down holds release, by name.** The status is
+3. **A completed turn is not an answered message.** The reply tool is the one
+   door out of a turn, and a model that writes its answer into its own message
+   has delivered nothing. So the instruction is the first line and the last line
+   of the turn text, and when a turn completes with no outbound record for its
+   release the runtime takes exactly one follow-up turn on the same thread: call
+   the tool now, or answer exactly `NO_REPLY`. `NO_REPLY` closes the release with
+   that reason on the record. Anything else parks the record with reason
+   `no-reply`, and what the model said is kept on the thread record so a person
+   can read why it thought it had answered.
+4. **A required tool server that is down holds release, by name.** The status is
    read after the unit's thread is open, because that is the only way the
    harness reports it, and a startup notification re-raises the hold. A server
    the harness lists that no declaration names refuses the start outright.
-4. **A channel is polled on its own interval, and a channel that cannot be read
+5. **A channel is polled on its own interval, and a channel that cannot be read
    holds.** An adapter that has to go and look exports `poll`; the interval is
    the declaration's and is refused at start if it is below the adapter's floor,
    because a mailbox polled too fast earns a lockout that lasts a day. A poll
@@ -132,7 +141,7 @@ Five rules are worth stating on their own.
    the channel's `poll_failures_before_hold` the channel holds, does no capture,
    no release and no delivery, and a check from outside the box reads the hold
    off that file.
-5. **A record the runtime cannot release is parked, not fatal.** A message with
+6. **A record the runtime cannot release is parked, not fatal.** A message with
    no unit id, or anything else raised while one record is being released, is
    written on that record as a fault, the record's disposition becomes `parked`,
    and the loop takes the next one. Exiting instead would put the unit in a
@@ -140,7 +149,7 @@ Five rules are worth stating on their own.
    limit; a check from outside the box reads the parked list. Four endings still
    end the process: the harness child exiting, the latch, the lock, and an
    app-server listing a tool server no declaration names.
-6. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
+7. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
    stops the process with exit code 78, which the unit does not restart on, and
    only the next install clears it.
 

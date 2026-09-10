@@ -50,11 +50,22 @@ function declaration(channel = {}) {
   };
 }
 
+// The model answers by calling the reply tool, because a turn that does not is a
+// turn the runtime follows up on, and these tests are about the poll rather than
+// about that rule.
+function answering(store) {
+  const handle = replyHandler({ store, agent: AGENT });
+  return (session, params) => {
+    handle({ conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer' });
+    return 'completed';
+  };
+}
+
 function makeLoop({ adapter = fixture, channel = {}, onTurn = null } = {}) {
   const decl = declaration(channel);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-poll-'));
   const store = Store.open(dir);
-  const harness = fakeHarness({ onTurn: onTurn ?? (() => 'completed'), statuses: REPLY_LISTED });
+  const harness = fakeHarness({ onTurn: onTurn ?? answering(store), statuses: REPLY_LISTED });
   const lines = [];
   const loop = new ReleaseLoop({
     declaration: decl,
@@ -126,11 +137,12 @@ test('a failing poll does not stop the process, and what the store already holds
       throw new Error('the mail server went away');
     })
   });
-  await loop.pass();
+  const firstPass = await loop.pass();
   assert.equal(harness.session.turns.length, 1);
+  assert.deepEqual(firstPass.delivered.map((d) => d.status), ['sent']);
 
-  // The record is captured and released; the reply is written by the reply tool
-  // and is still pending when the next poll fails. That pass must still deliver.
+  // A second reply is written on the same conversation and is still pending when
+  // the next poll fails. That pass must deliver it anyway.
   replyHandler({ store, agent: AGENT })({
     conversation_id: `${ACCOUNT}:c1`,
     request_id: 'r-1',

@@ -106,6 +106,7 @@ export async function turn(session, {
       'record the reply and stop; the pinned protocol moved'));
   }
   const completed = await awaitCompletion(session, threadId, turnId, { timeoutMs });
+  const stream = session.stream.forTurn(threadId, turnId);
   return {
     thread_id: threadId,
     turn_id: turnId,
@@ -116,7 +117,50 @@ export async function turn(session, {
     duration_ms: completed.durationMs ?? null,
     error: completed.error ?? null,
     items: completed.items ?? [],
-    events: session.stream.forTurn(threadId, turnId).map((e) => e.kind)
+    agent_message: agentMessageFrom(completed, stream),
+    token_usage: tokenUsageFrom(stream),
+    events: stream.map((e) => e.kind)
+  };
+}
+
+// What the model actually said, as opposed to what it did. A turn that answers in
+// text instead of calling the reply tool leaves nothing anywhere else, and the
+// question a person asks about such a turn is "what did it say"; so the text is
+// read off the turn and written on the thread record.
+//
+// Two places carry it, and the first that has it wins: the completed items the
+// app-server sends whole, and the deltas it streamed. Neither is guaranteed by
+// the pinned protocol, so both are read defensively and the absence of both is
+// null rather than an invention.
+export function agentMessageFrom(turnRecord, events = []) {
+  const items = Array.isArray(turnRecord?.items) ? turnRecord.items : [];
+  const texts = items
+    .map((item) => item?.item ?? item)
+    .filter((item) => item?.type === 'agentMessage')
+    .map((item) => (typeof item.text === 'string' ? item.text
+      : (item.content ?? []).map((part) => part?.text ?? '').join('')))
+    .filter((text) => typeof text === 'string' && text.length > 0);
+  if (texts.length > 0) return texts.at(-1);
+
+  const delta = events
+    .filter((e) => e.kind === 'message.delta')
+    .map((e) => e.params?.delta ?? e.params?.text ?? '')
+    .join('');
+  return delta.length > 0 ? delta : null;
+}
+
+// What the turn cost, read off the record the provider sent and never computed
+// here. The last update of the turn is the one that counts; a turn nobody
+// reported usage for is null rather than zero, because zero is a claim.
+export function tokenUsageFrom(events = []) {
+  const last = events.filter((e) => e.kind === 'turn.token_usage').at(-1);
+  const total = last?.params?.tokenUsage?.total;
+  if (!total || typeof total !== 'object') return null;
+  return {
+    input: total.inputTokens ?? null,
+    cached: total.cachedInputTokens ?? null,
+    output: total.outputTokens ?? null,
+    reasoning: total.reasoningOutputTokens ?? null
   };
 }
 
