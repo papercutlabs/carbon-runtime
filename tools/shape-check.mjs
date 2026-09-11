@@ -484,6 +484,7 @@ export const VENDORED = [
   'tools/lib/args.mjs',
   'tools/lib/manifest.mjs',
   'tools/lib/mcp.mjs',
+  'tools/lib/help.mjs',
   'tools/shape-check.mjs',
   'schema/carbon.message.v1.json'
 ];
