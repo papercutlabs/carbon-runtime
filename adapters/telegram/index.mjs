@@ -1,7 +1,7 @@
 // The Telegram adapter: one bot in, one bot out.
 //
 // It declares inbound and outbound, so the conformance check runs sixteen of the
-// seventeen cases against it; the seventeenth belongs to an import and this
+// twenty-three cases against it; the one it does not run belongs to an import and this
 // adapter imports nothing.
 //
 // This file is the adapter contract and nothing else. It opens no connection,

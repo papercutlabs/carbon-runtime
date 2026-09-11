@@ -1,8 +1,9 @@
 # The email adapter
 
 One mailbox in, one mailbox out. It declares `inbound` and `outbound`, so
-`carbon-stream check` runs sixteen of the seventeen conformance cases against
-it; the seventeenth belongs to an import, and this adapter does not import.
+`carbon-stream check` runs twenty-two of the twenty-three conformance cases
+against it; the one it does not run is the historical record, which belongs to an
+import, and this adapter does not import.
 
 ```
 node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/fixtures

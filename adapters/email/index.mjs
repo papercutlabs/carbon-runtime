@@ -1,7 +1,7 @@
 // The email adapter: one mailbox in, one mailbox out.
 //
 // It declares inbound and outbound, so the conformance check runs sixteen of
-// the seventeen cases against it; the seventeenth belongs to an import and this
+// the twenty-three cases against it; the one it does not run belongs to an import and this
 // adapter does not import.
 //
 // The five decisions that make this adapter what it is:

@@ -1,7 +1,7 @@
 // The fixture adapter. It has no channel: its items come from JSON files, so
 // the conformance check has something to run that is not a network. It is the
 // worked example of stream/adapter.md and it declares all three capabilities,
-// so `carbon-stream check --adapter` against it runs all seventeen cases.
+// so `carbon-stream check --adapter` against it runs all twenty-three cases.
 
 import crypto from 'node:crypto';
 

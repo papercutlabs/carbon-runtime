@@ -15,6 +15,7 @@
 //   cursors/<C>.json                      the two capture cursors for a conversation
 //   threads/<U>.json                      one file per unit of work
 //   outbound/requests/<R>.json            the reply fence, one file per request id
+//   teachings/<id>.json                   one thing the client taught this agent
 //   seq                                   the store's monotonic ordinal
 //
 // <C>, <M>, <U> and <R> are encoded by stream/encode.mjs, which also refuses an
@@ -114,7 +115,7 @@ export class Store {
     const store = new Store(dir);
     mkdirp(store.dir);
     fs.chmodSync(store.dir, DIR_MODE);
-    for (const sub of ['captures', 'cursors', 'threads', path.join('outbound', 'requests')]) {
+    for (const sub of ['captures', 'cursors', 'threads', 'teachings', path.join('outbound', 'requests')]) {
       mkdirp(path.join(store.dir, sub));
     }
     return store;
