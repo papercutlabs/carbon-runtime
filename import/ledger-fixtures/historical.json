@@ -1,0 +1,19 @@
+[
+  {
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "message_id": "LEDGER_9001",
+    "sender_jid": "15550001111@s.whatsapp.net",
+    "sender_name": "Ada",
+    "text": "This one came out of the client's own ledger.",
+    "message_type": "text",
+    "from_me": false,
+    "timestamp": "2025-04-02T11:00:00.000Z",
+    "has_media": true,
+    "media": [
+      { "ref": "media/never-copied.jpg", "path": "/nowhere/media/never-copied.jpg", "present": false }
+    ],
+    "reply_to": null,
+    "fields": {}
+  }
+]

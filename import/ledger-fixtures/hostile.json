@@ -1,0 +1,47 @@
+[
+  {
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "message_id": "..",
+    "sender_jid": "15550001111@s.whatsapp.net",
+    "sender_name": "Ada",
+    "text": "a message id that is a dot segment",
+    "message_type": "text",
+    "from_me": false,
+    "timestamp": "2025-04-02T11:04:00.000Z",
+    "has_media": false,
+    "media": [],
+    "reply_to": null,
+    "fields": {}
+  },
+  {
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "message_id": "LEDGER/9005",
+    "sender_jid": "15550001111@s.whatsapp.net",
+    "sender_name": "Ada",
+    "text": "a message id carrying a path separator",
+    "message_type": "text",
+    "from_me": false,
+    "timestamp": "2025-04-02T11:05:00.000Z",
+    "has_media": false,
+    "media": [],
+    "reply_to": null,
+    "fields": {}
+  },
+  {
+    "chat_jid": "15550001111\u0000@s.whatsapp.net",
+    "chat_name": "Ada",
+    "message_id": "LEDGER_9006",
+    "sender_jid": "15550001111@s.whatsapp.net",
+    "sender_name": "Ada",
+    "text": "a chat carrying a control byte",
+    "message_type": "text",
+    "from_me": false,
+    "timestamp": "2025-04-02T11:06:00.000Z",
+    "has_media": false,
+    "media": [],
+    "reply_to": null,
+    "fields": {}
+  }
+]

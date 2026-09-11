@@ -23,6 +23,7 @@
     "check:whatsapp": "node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures",
     "check:telegram": "node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/telegram/fixtures",
     "check:import": "node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures",
+    "check:ledger": "node bin/carbon-stream check --adapter import/carbon-ledger-sqlite --fixtures import/ledger-fixtures",
     "release": "node tools/release.mjs"
   },
   "dependencies": {

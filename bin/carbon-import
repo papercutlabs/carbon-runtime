@@ -11,10 +11,47 @@ import { fault, report } from '../stream/faults.mjs';
 import { Store, StreamFault } from '../stream/store.mjs';
 import { open as openExport, ZipFault } from '../import/zip.mjs';
 import { mimeOf, writeBatch } from '../import/carbon-capture-whatsapp.mjs';
+import * as ledger from '../import/carbon-ledger-sqlite.mjs';
+import { messageQuery, normaliseRow, readMapping } from '../import/ledger-mapping.mjs';
+import { groupCorrections, toCorrection, writeSidecars } from '../import/ledger-corrections.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 const BATCH = 200;
 
-const HELP = `carbon-import — import a client's own message history into an agent's store
+const TOP_HELP = `carbon-import — import a client's own message history into an agent's store
+
+Usage:
+  carbon-import whatsapp     --agent <id> --export <zip> --store <dir> [--account <jid>]
+  carbon-import ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>
+                              [--account <jid>]
+
+  whatsapp        the export the Carbon Capture extension produces
+  ledger-sqlite   a SQLite ledger a client's own running system keeps, read
+                  through a mapping file that names its tables and columns
+
+Arguments both take:
+
+  --agent <id>       the agent whose store this history belongs to
+  --store <dir>      the agent's store directory
+  --account <jid>    the account the history belongs to. Read from the store
+                     when it names exactly one WhatsApp channel, and never
+                     guessed.
+
+Arguments of their own:
+
+  --export <zip>     whatsapp: the zip the capture extension produced
+  --db <file>        ledger-sqlite: the SQLite database, opened read-only
+  --mapping <file>   ledger-sqlite: the JSON mapping naming that database's
+                     table, columns, roles and corrections
+
+Every row either import reads becomes one carbon.message.v1 record with
+historical true, written through the store library. Nothing is released: a
+historical record wakes no turn, and the store refuses to release one. Running
+either import twice changes no capture byte.
+
+Run either with --help for what it does and what it refuses to do.`;
+
+const HELP = `carbon-import whatsapp — import a Carbon Capture export into an agent's store
 
 Usage:
   carbon-import whatsapp --agent <id> --export <zip> --store <dir> [--account <jid>]
@@ -111,15 +148,290 @@ function resolveAccount(store, given) {
   };
 }
 
+
+// ---- the ledger import ------------------------------------------------------
+
+const LEDGER_HELP = `carbon-import ledger-sqlite — import a client's own SQLite ledger into an agent's store
+
+Usage:
+  carbon-import ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>
+                              [--account <jid>]
+
+  --agent <id>       the agent whose store this history belongs to
+  --db <file>        the SQLite database holding the ledger. Opened read-only,
+                     and nothing here ever writes to it.
+  --mapping <file>   the JSON mapping naming the ledger's table, its columns,
+                     the roles its senders carry and the corrections it holds.
+                     Its shape is documented at the top of
+                     import/carbon-ledger-sqlite.mjs.
+  --store <dir>      the agent's store directory
+  --account <jid>    the account this history belongs to. Read from the store
+                     when it names exactly one WhatsApp channel, or from the
+                     mapping when it names one, and never guessed.
+
+What it does, and what it refuses to do.
+
+Every ledger row becomes one carbon.message.v1 record with historical true and
+source import:ledger-sqlite, written through the store library. Nothing is
+released: a historical record wakes no turn, and the store refuses to release
+one.
+
+The mapping is read whole and refused whole before a row is read. A table or
+column name that is not a plain SQL identifier is refused, and a corrections
+query that is not a single SELECT or WITH is refused, so a mapping cannot carry
+a write into a client's database.
+
+Attachments are referenced, never copied: the record names the path the ledger
+recorded and says whether a file is there, because whether the bytes still exist
+is a fact about the box and not something to invent.
+
+The corrections the ledger holds are written beside the captures, one JSON file
+per conversation under corrections/, in the carbon.ledger-corrections.v1 shape
+the module documents. A correction naming no message this import wrote is kept
+in corrections/unlinked.json rather than dropped.
+
+Running this twice changes no capture byte and rewrites no sidecar.
+
+Every argument is explicit and nothing is guessed. Every fault is one JSON line
+of {code, subject, problem, fix}, all faults from one run are reported together,
+and any fault exits non-zero.`;
+
+function parseLedger(rest) {
+  const faults = [];
+  const named = { '--agent': null, '--db': null, '--mapping': null, '--store': null, '--account': null };
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] in named) named[rest[i]] = rest[++i] ?? null;
+    else {
+      faults.push(fault('UNKNOWN_ARGUMENT', rest[i],
+        'not an argument of carbon-import ledger-sqlite',
+        'run carbon-import ledger-sqlite --help'));
+    }
+  }
+  for (const name of ['--db', '--mapping', '--store']) {
+    if (named[name] === null) {
+      faults.push(fault('MISSING_ARGUMENT', name,
+        'this argument has no default and is not guessed',
+        `pass ${name}`));
+    }
+  }
+  for (const name of ['--db', '--mapping']) {
+    if (named[name] !== null && !fs.existsSync(named[name])) {
+      faults.push(fault('FILE_MISSING', named[name],
+        'there is no file at this path',
+        `pass an existing file to ${name}`));
+    }
+  }
+  return { named, faults };
+}
+
+// Everything an import counts, so the command's one line of output says what
+// landed without anybody opening the store.
+function emptyCounts() {
+  return {
+    rows: 0,
+    records_written: 0,
+    records_merged_into_an_existing_capture: 0,
+    by_role: {},
+    by_direction: {},
+    attachments_referenced: 0,
+    attachments_present: 0,
+    attachments_absent: 0,
+    attachments_unchecked: 0,
+    messages_recording_media_with_no_file_named: 0,
+    reply_links: 0
+  };
+}
+
+function countMedia(counts, record) {
+  for (const one of record.adapter_fields?.media ?? []) {
+    counts.attachments_referenced++;
+    if (one.present === true) counts.attachments_present++;
+    else if (one.present === false) counts.attachments_absent++;
+    else counts.attachments_unchecked++;
+  }
+  if (record.adapter_fields?.media_missing && (record.adapter_fields.media ?? []).length === 0) {
+    counts.messages_recording_media_with_no_file_named++;
+  }
+}
+
+function countRecord(state, result) {
+  const record = result.record;
+  const counts = state.counts;
+  counts.records_written++;
+  if (result.merged) counts.records_merged_into_an_existing_capture++;
+  state.conversations.add(record.conversation_id);
+  state.chats.set(record.conversation_id.slice(record.account.length + 1), record.conversation_id);
+  counts.by_role[record.role] = (counts.by_role[record.role] ?? 0) + 1;
+  counts.by_direction[record.direction] = (counts.by_direction[record.direction] ?? 0) + 1;
+  if (record.reply_to) counts.reply_links++;
+  const at = record.sent_at ?? record.received_at;
+  if (at) {
+    if (state.earliest === null || at < state.earliest) state.earliest = at;
+    if (state.latest === null || at > state.latest) state.latest = at;
+  }
+  countMedia(counts, record);
+}
+
+// The rows, in batches, straight from the statement into the store. The batch is
+// what keeps a ledger of any size out of memory: nothing is held but the index
+// from a ledger id to the record it became, which the corrections are keyed by.
+function importRows(db, context, state) {
+  const flush = (batch) => {
+    if (batch.length === 0) return;
+    for (const [ref, found] of ledger.messageIndexOf(context, batch)) state.index.set(ref, found);
+    for (const result of ledger.writeBatch(context, batch)) countRecord(state, result);
+  };
+  let batch = [];
+  for (const row of db.prepare(messageQuery(context.mapping)).iterate()) {
+    state.counts.rows++;
+    batch.push(normaliseRow(context.mapping, row));
+    if (batch.length >= BATCH) { flush(batch); batch = []; }
+  }
+  flush(batch);
+}
+
+// A corrections query that fails is reported and the rest still run: the records
+// are already written, and a query somebody has to fix is not a reason to make
+// them import a client's history a second time.
+function readCorrections(db, mapping, troubles) {
+  const corrections = [];
+  for (const query of mapping.corrections ?? []) {
+    try {
+      for (const row of db.prepare(query.sql).all()) corrections.push(toCorrection(query, row));
+    } catch (error) {
+      troubles.push(fault('CORRECTION_QUERY_FAILED', query.kind,
+        (error.message ?? String(error)).split('\n')[0],
+        'the records are written; fix the query in the mapping and run again'));
+    }
+  }
+  return corrections;
+}
+
+function loadMapping(file) {
+  try {
+    return { mapping: readMapping(file), faults: [] };
+  } catch (error) {
+    return {
+      mapping: null,
+      faults: error instanceof StreamFault ? error.faults : [fault('MAPPING_UNREADABLE', file,
+        (error.message ?? String(error)).split('\n')[0],
+        'pass a JSON mapping file')]
+    };
+  }
+}
+
+function openLedger(file) {
+  try {
+    return { db: new DatabaseSync(file, { readOnly: true }), faults: [] };
+  } catch (error) {
+    return {
+      db: null,
+      faults: [fault('LEDGER_UNREADABLE', file,
+        (error.message ?? String(error)).split('\n')[0],
+        'pass a SQLite database this user can read')]
+    };
+  }
+}
+
+// The agent and the account: from the command, or from the mapping, or from the
+// store, and never guessed.
+function ledgerContext(named, mapping) {
+  const agent = named['--agent'] ?? (typeof mapping.agent === 'string' ? mapping.agent : null);
+  if (agent === null) {
+    return { context: null, faults: [fault('MISSING_ARGUMENT', '--agent',
+      'neither the command nor the mapping names the agent this history belongs to',
+      'pass --agent <id>')] };
+  }
+  const store = Store.open(named['--store']);
+  const resolved = resolveAccount(store,
+    named['--account'] ?? (typeof mapping.account === 'string' ? mapping.account : null));
+  if (resolved.faults.length > 0) return { context: null, faults: resolved.faults };
+  return { context: { store, agent, account: resolved.account, mapping }, faults: [] };
+}
+
+function ledgerMain(args) {
+  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    console.log(LEDGER_HELP);
+    return args.length === 0 ? 1 : 0;
+  }
+  const parsed = parseLedger(args);
+  if (parsed.faults.length > 0) {
+    report(parsed.faults);
+    return 1;
+  }
+
+  const read = loadMapping(parsed.named['--mapping']);
+  if (read.faults.length > 0) {
+    report(read.faults);
+    return 1;
+  }
+  const mapping = read.mapping;
+
+  const built = ledgerContext(parsed.named, mapping);
+  if (built.faults.length > 0) {
+    report(built.faults);
+    return 1;
+  }
+  const opened = openLedger(parsed.named['--db']);
+  if (opened.faults.length > 0) {
+    report(opened.faults);
+    return 1;
+  }
+
+  const started = Date.now();
+  const state = {
+    counts: emptyCounts(),
+    index: new Map(),
+    chats: new Map(),
+    conversations: new Set(),
+    earliest: null,
+    latest: null
+  };
+  try {
+    importRows(opened.db, built.context, state);
+  } catch (error) {
+    report(error instanceof StreamFault ? error.faults : [fault('IMPORT_FAILED', parsed.named['--db'],
+      (error.message ?? String(error)).split('\n')[0],
+      'read the fault above; nothing after this row was written')]);
+    opened.db.close();
+    return 1;
+  }
+
+  const troubles = [];
+  const corrections = readCorrections(opened.db, mapping, troubles);
+  opened.db.close();
+  const grouped = groupCorrections(corrections, state.index, state.chats);
+  const sidecars = writeSidecars(built.context, grouped);
+
+  report(troubles);
+  console.log(JSON.stringify({
+    agent: built.context.agent,
+    account: built.context.account,
+    ledger: mapping.ledger ?? null,
+    conversations: state.conversations.size,
+    ...state.counts,
+    corrections_read: corrections.length,
+    corrections_placed: corrections.length - grouped.unlinked.length,
+    corrections_naming_no_imported_message: grouped.unlinked.length,
+    correction_sidecars: sidecars.files,
+    correction_sidecars_rewritten: sidecars.written,
+    earliest_message: state.earliest,
+    latest_message: state.latest,
+    elapsed_ms: Date.now() - started,
+    released: 0
+  }, null, 2));
+  return troubles.length > 0 ? 1 : 0;
+}
 function main(argv) {
   const args = argv.slice(2);
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
-    console.log(HELP);
+    console.log(TOP_HELP);
     return args.length === 0 ? 1 : 0;
   }
+  if (args[0] === 'ledger-sqlite') return ledgerMain(args.slice(1));
   if (args[0] !== 'whatsapp') {
     report([fault('UNKNOWN_SUBCOMMAND', args[0],
-      'the only history this command imports is WhatsApp',
+      'the histories this command imports are whatsapp and ledger-sqlite',
       'run carbon-import --help')]);
     return 1;
   }

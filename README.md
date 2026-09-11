@@ -45,13 +45,13 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `adapters/email/` | the email adapter: IMAP and SMTP through `curl`, a MIME reader of ours, threading by `References`; its own README is the contract |
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
 | `adapters/telegram/` | the Telegram adapter: the Bot API over https with no library, the long poll whose offset is the watermark, the declared chats and the declared operator |
-| `import/` | the history import: a zip reader with no dependency, and the map from an export's rows to records |
+| `import/` | the history imports: a zip reader with no dependency and the map from an export's rows to records, and the ledger import, which reads a client's own SQLite ledger through a mapping file that names its tables and columns |
 | `conformance/cases.mjs` | the twenty-three cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
 | `bin/carbon-telegram` | `probe --token-file <file>`, which asks the server what bot a token is; `send --token-file <file> --chat <id> --text <text>`, which puts one message in a chat in a proof and records nothing |
-| `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>` |
+| `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>`; `ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>` |
 | `test/` | `node --test "test/*.test.mjs"` |
 | `tools/` | the MCP scaffold the reply tool is served by, the identifier scan and the release build |
 
@@ -94,6 +94,36 @@ Six rules hold it together.
    already `sent` gets the stored chunk ids back and sends nothing; one already
    `pending` is refused; one whose acceptance is `unknown` is never retried,
    because an uncertain send is a person's decision.
+
+## The two history imports
+
+A client's past arrives one of two ways, and both are the same record written
+through the same library, with `historical: true` and a `source` that says which
+import wrote it. Neither releases a turn.
+
+1. **An export**, `carbon-import whatsapp`. The zip the capture extension
+   produces: `messages.json` with media beside it under `media/`. The map from a
+   row to a record is a rename, and media is copied into the store under its own
+   sha256.
+2. **A ledger**, `carbon-import ledger-sqlite`. Some clients have no export and
+   instead have a running system that already wrote every message into a SQLite
+   table of its own. That table is the same history under somebody else's column
+   names, so the names are not in the code: they are in a mapping file the caller
+   passes, whose shape is documented at the top of
+   `import/carbon-ledger-sqlite.mjs`. The mapping is refused whole before a row
+   is read, every table and column name it gives must be a plain SQL identifier,
+   and a corrections query it carries must be a single `SELECT` or `WITH`, so a
+   mapping can never write to the database it reads. Attachments are referenced
+   by the path the ledger recorded and marked absent when no file is there, never
+   copied and never invented.
+
+A ledger holds one thing an export does not: the corrections the system recorded
+around those messages — a reviewer's edit, a nightly flag, an escalation. Those
+are not a property of any message, so they are written beside the captures as
+`corrections/<conversation>.json` in the `carbon.ledger-corrections.v1` shape,
+one file per conversation, with `corrections/unlinked.json` for the ones naming
+no imported message. The files carry no generation time, so a second run over an
+unchanged ledger writes the same bytes.
 
 ## The one process
 
@@ -202,6 +232,7 @@ node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixt
 node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures
 node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/telegram/fixtures
 node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
+node bin/carbon-stream check --adapter import/carbon-ledger-sqlite --fixtures import/ledger-fixtures
 node bin/carbon-stream check --store /path/to/an/agent/store
 node bin/carbon-stream check --help
 ```
