@@ -29,9 +29,20 @@
 // one text.
 //
 // The declaration is what bounds the path, and none of it is guessed here. The
-// caps come from `teaching.max_active` and `teaching.max_chars`; who may teach
-// comes from `teaching.teachers`; and `teaching.enabled` false is the whole path
-// off — this server refuses to be built at all, and the runtime starts none.
+// caps come from `teaching.max_active` and `teaching.max_chars`; where teaching
+// happens is the one conversation a channel declares with kind `management`; and
+// `teaching.enabled` false is the whole path off — this server refuses to be
+// built at all, and the runtime starts none.
+//
+// **Teaching happens in the management conversation and nowhere else**, ruled on
+// 11 September. An agent sits in three kinds of room. In a customer chat a
+// staff member's message is somebody taking the conversation over and the agent
+// stops; in an ops chat the agent works beside staff and contractors; in the
+// management conversation the client's people talk to the agent about how it
+// works, every member of it is a teacher, and what is taught there applies to the
+// agent everywhere. So there is no check here on who sent the message: the room
+// is the authorisation. A call citing a message from any other conversation is
+// refused as TEACHING_NOT_IN_MANAGEMENT_CONVERSATION and nothing is written.
 
 import path from 'node:path';
 import { createServer } from '../tools/lib/mcp.mjs';
@@ -41,6 +52,7 @@ import { ToolFault, fault as toolFault } from '../tools/lib/fault.mjs';
 import { StreamFault } from '../stream/store.mjs';
 import { remember, raiseChange, forget } from '../stream/teachings.mjs';
 import { fault, RuntimeFault } from './faults.mjs';
+import { managementConversationOf } from './channel.mjs';
 
 export const TEACH_SERVER_NAME = 'carbon-teach';
 // The teaching tools listen here unless a caller names another port. It is a
@@ -69,35 +81,20 @@ export function teachingOf(declaration) {
   return teaching;
 }
 
-// Who may teach, checked against the capture the record cites rather than against
-// anything the caller said. A standing instruction from a contractor in a group
-// chat is not a client instruction, and the failure is silent: it looks like the
-// agent behaving oddly, not like an unauthorised change.
-export function teacherFaults(capture, teachers) {
-  const roles = teachers?.roles ?? [];
-  const senderIds = teachers?.sender_ids ?? [];
-  if (roles.includes(capture.role) || senderIds.includes(capture.sender_id)) return [];
-  const named = capture.sender_name ? `${capture.sender_name} (${capture.sender_id})` : capture.sender_id;
-  return [toolFault('TEACHING_SENDER_NOT_A_TEACHER', String(capture.sender_id),
-    `${named} sent that message with the role ${JSON.stringify(capture.role)}, and this agent's declaration lets ${describeTeachers(roles, senderIds)} teach it`,
-    'nothing was written. Do not tell the client you have remembered anything. Answer on the channel as you would any other message, and if this needs to stand, it comes from someone the declaration names')];
-}
-
-function describeTeachers(roles, senderIds) {
-  const parts = [];
-  if (roles.length > 0) parts.push(`the ${roles.join(' and ')} role${roles.length > 1 ? 's' : ''}`);
-  if (senderIds.length > 0) parts.push(`the senders ${senderIds.join(', ')}`);
-  return parts.length > 0 ? parts.join(' and ') : 'nobody';
-}
-
-// The capture the call cites, as this store holds it. A message this store does
-// not hold is not refused here: stream/teachings.mjs refuses it by name, with the
-// one fault that matters, and this file does not write a second copy of it.
-function citedCapture(store, conversation_id, source_message_id) {
-  const held = store.recordsIn(conversation_id)
-    .filter((r) => r.message_id === source_message_id && r.direction === 'inbound')
-    .sort((a, b) => (a.revision ?? 0) - (b.revision ?? 0));
-  return held[0] ?? null;
+// Where the agent may be taught, checked against the conversation the call cites
+// rather than against anything about who sent it. A standing instruction given in
+// a work chat is not a standing instruction: the client's people direct the work
+// there, and what they say is about the job in front of the agent rather than
+// about how the agent operates. The failure is silent if it is not refused - it
+// looks like the agent behaving oddly, not like something it was never told to
+// stand on.
+export function managementFaults(management, conversation_id) {
+  if (management !== null && conversation_id === management) return [];
+  return [toolFault('TEACHING_NOT_IN_MANAGEMENT_CONVERSATION', String(conversation_id),
+    management === null
+      ? 'this agent\'s declaration names no management conversation, so there is nowhere it may be taught'
+      : `this conversation is not this agent's management conversation, and a standing instruction is taught there and nowhere else`,
+    'nothing was written. Do not tell the client you have remembered anything. Answer here as you would any other message, and if this is meant to stand, it is said in the management conversation')];
 }
 
 // Everything below this line refuses in the tool fault shape, so the model reads
@@ -107,18 +104,18 @@ function asToolFault(thrown) {
   return thrown;
 }
 
-// The sender check, run before the store is touched, so an uncovered sender
-// leaves nothing behind at all.
-function refuseUncoveredSender(store, teachers, { conversation_id, source_message_id }) {
-  const capture = citedCapture(store, conversation_id, source_message_id);
-  if (capture === null) return;
-  const faults = teacherFaults(capture, teachers);
+// The room check, run before the store is touched, so a call from a work chat
+// leaves nothing behind at all. It is the conversation the call names that is
+// checked; a source_message_id from another conversation is not in this
+// conversation's captures and stream/teachings.mjs refuses it by name.
+function refuseOutsideManagement(management, { conversation_id }) {
+  const faults = managementFaults(management, conversation_id);
   if (faults.length > 0) throw new ToolFault(faults);
 }
 
-function rememberHandler({ store, agent, teaching, now = () => new Date().toISOString() }) {
+function rememberHandler({ store, agent, teaching, management, now = () => new Date().toISOString() }) {
   return (args) => {
-    refuseUncoveredSender(store, teaching.teachers, args);
+    refuseOutsideManagement(management, args);
     let written;
     try {
       written = remember(store, {
@@ -142,9 +139,9 @@ function rememberHandler({ store, agent, teaching, now = () => new Date().toISOS
   };
 }
 
-function raiseChangeHandler({ store, agent, teaching, now = () => new Date().toISOString() }) {
+function raiseChangeHandler({ store, agent, teaching, management, now = () => new Date().toISOString() }) {
   return (args) => {
-    refuseUncoveredSender(store, teaching.teachers, args);
+    refuseOutsideManagement(management, args);
     let written;
     try {
       written = raiseChange(store, {
@@ -166,11 +163,13 @@ function raiseChangeHandler({ store, agent, teaching, now = () => new Date().toI
   };
 }
 
-// `forget` takes no teacher check. The client revoking something they were told
-// the agent is doing is not a new grant, and a revocation the declaration refused
-// would leave the agent following an instruction its own client has withdrawn.
-function forgetHandler({ store, now = () => new Date().toISOString() }) {
+// `forget` is checked the same way as the other two. A revocation is a thing the
+// client says about how the agent operates, so it is said where the instruction
+// was said; a revocation taken from a work chat would let one sentence there drop
+// a standing instruction the management conversation put up.
+function forgetHandler({ store, management, now = () => new Date().toISOString() }) {
   return (args) => {
+    refuseOutsideManagement(management, args);
     let written;
     try {
       written = forget(store, {
@@ -191,12 +190,13 @@ function forgetHandler({ store, now = () => new Date().toISOString() }) {
 
 export function createTeachServer({ store, agent, declaration }) {
   const teaching = teachingOf(declaration);
+  const management = managementConversationOf(declaration);
   return createServer({
     manifest: MANIFEST,
     handlers: {
-      remember: rememberHandler({ store, agent, teaching }),
-      raise_change: raiseChangeHandler({ store, agent, teaching }),
-      forget: forgetHandler({ store })
+      remember: rememberHandler({ store, agent, teaching, management }),
+      raise_change: raiseChangeHandler({ store, agent, teaching, management }),
+      forget: forgetHandler({ store, management })
     }
   });
 }

@@ -444,7 +444,7 @@ export class Store {
   // turn starts, so a restart mid-turn can tell an open release from a finished
   // one. A historical record never releases; a held or parked one does not
   // release yet.
-  release(record, { released_at, thread_id, turn_id, now = Date.now() }) {
+  release(record, { released_at, thread_id, turn_id, now = Date.now(), hold_applies = true }) {
     const faults = [];
     if (record.historical === true) {
       faults.push(fault('HISTORICAL_NEVER_RELEASES', record.message_id,
@@ -456,7 +456,12 @@ export class Store {
         'a parked record was never understood and is not delivered',
         'fix the adapter and capture the payload again; the parked record stays where it is'));
     }
-    if (this.isHeld(record.conversation_id, now)) {
+    // `hold_applies` is the caller saying whether the hold on this conversation
+    // is one that governs it. It does in a customer conversation and it does not
+    // in an ops or the management conversation, which is the declaration's
+    // business and not this library's: the store knows what a hold is and the
+    // release loop knows which rooms it is right in.
+    if (hold_applies && this.isHeld(record.conversation_id, now)) {
       faults.push(fault('CONVERSATION_HELD', record.conversation_id,
         'an operator message holds this conversation',
         'release after the hold expires, per the declaration'));

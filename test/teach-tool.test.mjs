@@ -1,6 +1,7 @@
 // The teaching tools: the manifest the model reads, the three calls over the
-// protocol, and the two refusals that have no other detector — a sender the
-// declaration does not let teach, and a teaching path the declaration turns off.
+// protocol, and the two refusals that have no other detector — a call citing a
+// message from outside the management conversation, and a teaching path the
+// declaration turns off.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,13 +12,17 @@ import { Store } from '../stream/store.mjs';
 import { listTeachings } from '../stream/teachings.mjs';
 import { checkManifest } from '../tools/lib/manifest.mjs';
 import {
-  MANIFEST, TEACH_PORT, TEACH_SERVER_NAME, createTeachServer, serveTeachTool, teacherFaults, teachingOf
+  MANIFEST, TEACH_PORT, TEACH_SERVER_NAME, createTeachServer, serveTeachTool, managementFaults, teachingOf
 } from '../runtime/teach-tool.mjs';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
+// The management conversation, where this agent is taught, and a work chat where
+// it is not. Teaching happens in the first and nowhere else.
 const CONVERSATION = `${ACCOUNT}:room-7`;
 const SOURCE = `${CONVERSATION}:m-0001`;
+const WORK_CHAT = `${ACCOUNT}:room-9`;
+const WORK_SOURCE = `${WORK_CHAT}:m-0002`;
 
 // The four boundary questions, as a reader looking for them would look.
 const QUESTIONS = [
@@ -33,13 +38,20 @@ function teaching(overrides = {}) {
     enabled: true,
     max_active: 40,
     max_chars: 400,
-    teachers: { roles: ['operator'], sender_ids: [] },
+    open_change_max_age_days: 7,
     ...overrides
   };
 }
 
-function declaration(overrides = {}) {
-  return { agent: { id: AGENT }, teaching: teaching(overrides) };
+// Where teaching happens is a conversation on a channel, not a list of people:
+// every member of the management conversation is a teacher, and nothing said
+// anywhere else is a standing instruction.
+function declaration({ conversations = [{ id: CONVERSATION, kind: 'management' }, { id: WORK_CHAT, kind: 'ops' }], ...overrides } = {}) {
+  return {
+    agent: { id: AGENT },
+    channels: [{ kind: 'whatsapp', account: ACCOUNT, conversations, default_conversation_kind: 'customer' }],
+    teaching: teaching(overrides)
+  };
 }
 
 function inbound(overrides = {}) {
@@ -69,6 +81,12 @@ function inbound(overrides = {}) {
 function taught(overrides = {}) {
   const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-teach-tool-')), 'store'));
   store.capture(inbound(overrides));
+  // The same thing said in the work chat, so a test can cite a message that is a
+  // real capture of this store and still outside the room teaching happens in.
+  store.capture(inbound({
+    ...overrides,
+    conversation_id: WORK_CHAT, message_id: WORK_SOURCE, platform_message_id: 'm-0002'
+  }));
   return store;
 }
 
@@ -199,37 +217,60 @@ test('an argument the manifest does not declare is refused, and so is one that i
   assert.deepEqual(missing.structuredContent.faults.map((f) => f.code), ['ARGUMENT_MISSING', 'ARGUMENT_MISSING']);
 });
 
-test('a sender the declaration does not let teach is refused by name, and nothing is written', async () => {
-  const store = taught({ role: 'contact', sender_id: 'contractor@other.test', sender_name: 'Sam' });
+// Ruled 11 September: teaching happens in one declared management conversation
+// per agent, and every member of it is a teacher. So the refusal is about the
+// room and not about the sender: the same person, saying the same thing, teaches
+// in one conversation and teaches nothing in the other.
+test('a call citing a message outside the management conversation is refused by name, and nothing is written', async () => {
+  const store = taught();
   const server = createTeachServer({ store, agent: AGENT, declaration: declaration() });
   for (const [name, args] of [
-    ['remember', { text: 'Always change the records when a workbook lands.', conversation_id: CONVERSATION, source_message_id: SOURCE }],
-    ['raise_change', { text: 'Ingest the workbook.', failed_question: 1, conversation_id: CONVERSATION, source_message_id: SOURCE }]
+    ['remember', { text: 'Always change the records when a workbook lands.', conversation_id: WORK_CHAT, source_message_id: WORK_SOURCE }],
+    ['raise_change', { text: 'Ingest the workbook.', failed_question: 1, conversation_id: WORK_CHAT, source_message_id: WORK_SOURCE }],
+    ['forget', { id: 'teach-20260911T090000Z-aaaaaaaa', conversation_id: WORK_CHAT, source_message_id: WORK_SOURCE }]
   ]) {
     const result = await call(server, name, args);
-    assert.equal(result.isError, true, `${name} accepted an uncovered sender`);
+    assert.equal(result.isError, true, `${name} took an instruction from a work chat`);
     const [fault] = result.structuredContent.faults;
-    assert.equal(fault.code, 'TEACHING_SENDER_NOT_A_TEACHER');
-    assert.equal(fault.subject, 'contractor@other.test');
-    assert.match(fault.problem, /Sam \(contractor@other\.test\)/);
-    assert.match(fault.problem, /operator role/);
+    assert.equal(fault.code, 'TEACHING_NOT_IN_MANAGEMENT_CONVERSATION');
+    assert.equal(fault.subject, WORK_CHAT);
+    assert.match(fault.problem, /not this agent's management conversation/);
     assert.match(fault.fix, /nothing was written/i);
   }
   assert.equal(listTeachings(store).records.length, 0);
+});
 
-  // The same sender, named in the declaration's sender_ids, may teach.
-  const allowed = createTeachServer({
-    store, agent: AGENT,
-    declaration: declaration({ teachers: { roles: [], sender_ids: ['contractor@other.test'] } })
-  });
-  const result = await call(allowed, 'remember', {
+test('every member of the management conversation teaches, whatever role they sent with', async () => {
+  // A contractor, with the contact role, in the room where teaching happens. The
+  // old design refused this on the sender; the room is now the authorisation.
+  const store = taught({ role: 'contact', sender_id: 'contractor@other.test', sender_name: 'Sam' });
+  const server = createTeachServer({ store, agent: AGENT, declaration: declaration() });
+  const result = await call(server, 'remember', {
     text: 'I will read workbooks that land here and change nothing off them.',
     conversation_id: CONVERSATION,
     source_message_id: SOURCE
   });
-  assert.equal(result.isError, false);
-  assert.deepEqual(teacherFaults({ role: 'contact', sender_id: 'contractor@other.test' },
-    { roles: [], sender_ids: ['contractor@other.test'] }), []);
+  assert.equal(result.isError, false, JSON.stringify(result.structuredContent));
+  assert.deepEqual(listTeachings(store).active[0].taught_by,
+    { sender_id: 'contractor@other.test', sender_name: 'Sam', role: 'contact' });
+
+  assert.deepEqual(managementFaults(CONVERSATION, CONVERSATION), []);
+  assert.equal(managementFaults(CONVERSATION, WORK_CHAT)[0].code, 'TEACHING_NOT_IN_MANAGEMENT_CONVERSATION');
+});
+
+test('an agent whose declaration names no management conversation may be taught nowhere', async () => {
+  const store = taught();
+  const server = createTeachServer({
+    store, agent: AGENT, declaration: declaration({ conversations: [{ id: WORK_CHAT, kind: 'ops' }] })
+  });
+  const result = await call(server, 'remember', {
+    text: 'Something standing.', conversation_id: CONVERSATION, source_message_id: SOURCE
+  });
+  assert.equal(result.isError, true);
+  const [fault] = result.structuredContent.faults;
+  assert.equal(fault.code, 'TEACHING_NOT_IN_MANAGEMENT_CONVERSATION');
+  assert.match(fault.problem, /names no management conversation/);
+  assert.equal(listTeachings(store).records.length, 0);
 });
 
 test('the caps are the declaration\'s, named in the refusal, and never this file\'s', async () => {
