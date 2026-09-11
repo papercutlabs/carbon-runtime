@@ -45,13 +45,13 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `adapters/email/` | the email adapter: IMAP and SMTP through `curl`, a MIME reader of ours, threading by `References`; its own README is the contract |
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
 | `adapters/telegram/` | the Telegram adapter: the Bot API over https with no library, the long poll whose offset is the watermark, the declared chats and the declared operator |
-| `import/` | the history imports: a zip reader with no dependency and the map from an export's rows to records, and the ledger import, which reads a client's own SQLite ledger through a mapping file that names its tables and columns |
+| `import/` | the history imports: a zip reader with no dependency and the map from an export's rows to records, and the ledger import, which reads a client's own SQLite ledger through a mapping file that names its tables and columns, and the outbound import, which reads the places that system recorded what the agent itself sent |
 | `conformance/cases.mjs` | the twenty-three cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
 | `bin/carbon-telegram` | `probe --token-file <file>`, which asks the server what bot a token is; `send --token-file <file> --chat <id> --text <text>`, which puts one message in a chat in a proof and records nothing |
-| `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>`; `ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>` |
+| `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>`; `ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>`; `ledger-outbound --agent <id> --mapping <file> --store <dir> [--events <file>] [--audit <dir>] [--turns <file>]` |
 | `test/` | `node --test "test/*.test.mjs"` |
 | `tools/` | the MCP scaffold the reply tool and the teaching tools are served by, the identifier scan and the release build |
 
@@ -97,7 +97,7 @@ Six rules hold it together.
 
 ## The two history imports
 
-A client's past arrives one of two ways, and both are the same record written
+A client's past arrives one of three ways, and all three are the same record written
 through the same library, with `historical: true` and a `source` that says which
 import wrote it. Neither releases a turn.
 
@@ -116,6 +116,20 @@ import wrote it. Neither releases a turn.
    mapping can never write to the database it reads. Attachments are referenced
    by the path the ledger recorded and marked absent when no file is there, never
    copied and never invented.
+3. **What the agent itself sent**, `carbon-import ledger-outbound`. A ledger is
+   usually only what arrived; the agent's own sends are somewhere else in the
+   same system, and in more than one place, because the send passed through more
+   than one component on the way out. A capture file has the platform's message
+   id and the text that went out, a turns table has the text the model produced
+   and the ids it was answering, an audit directory has the chat and whether the
+   send was permitted. The three are read through the mapping's `outbound`
+   section, whose shape is documented at the top of
+   `import/outbound-mapping.mjs`, and joined into one send each by the only
+   deterministic key the data offers: the conversation and the moment, inside a
+   tolerance the mapping sets. Every record says how its join was made, how far
+   apart the two marks were and how many others were inside the window, and a
+   mark that joined to nothing becomes a record of its own and says so, so a
+   reader can always tell an observed link from an inferred one.
 
 A ledger holds one thing an export does not: the corrections the system recorded
 around those messages — a reviewer's edit, a nightly flag, an escalation. Those
@@ -233,6 +247,7 @@ node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/wha
 node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/telegram/fixtures
 node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
 node bin/carbon-stream check --adapter import/carbon-ledger-sqlite --fixtures import/ledger-fixtures
+node bin/carbon-stream check --adapter import/carbon-ledger-outbound --fixtures import/outbound-fixtures
 node bin/carbon-stream check --store /path/to/an/agent/store
 node bin/carbon-stream check --help
 ```

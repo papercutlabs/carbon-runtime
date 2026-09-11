@@ -9,7 +9,7 @@
   "properties": {
     "schema": { "const": "carbon.message.v1" },
     "agent": { "type": "string", "minLength": 1 },
-    "source": { "enum": ["email", "whatsapp", "telegram", "import:carbon-capture", "import:ledger-sqlite"] },
+    "source": { "enum": ["email", "whatsapp", "telegram", "import:carbon-capture", "import:ledger-sqlite", "import:ledger-outbound"] },
     "account": { "type": "string", "minLength": 1 },
     "conversation_id": { "type": "string", "minLength": 1, "description": "Channel-native, namespaced by account." },
     "conversation_kind": { "enum": ["direct", "group", "thread"] },

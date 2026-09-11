@@ -14,6 +14,8 @@ import { mimeOf, writeBatch } from '../import/carbon-capture-whatsapp.mjs';
 import * as ledger from '../import/carbon-ledger-sqlite.mjs';
 import { messageQuery, normaliseRow, readMapping } from '../import/ledger-mapping.mjs';
 import { groupCorrections, toCorrection, writeSidecars } from '../import/ledger-corrections.mjs';
+import { OUTBOUND_HELP, runOutbound } from '../import/outbound-command.mjs';
+import { resolveAccount } from '../import/store-account.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
 const BATCH = 200;
@@ -24,10 +26,14 @@ Usage:
   carbon-import whatsapp     --agent <id> --export <zip> --store <dir> [--account <jid>]
   carbon-import ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>
                               [--account <jid>]
+  carbon-import ledger-outbound --agent <id> --mapping <file> --store <dir>
+                              [--events <file>] [--audit <dir>] [--turns <file>]
 
-  whatsapp        the export the Carbon Capture extension produces
-  ledger-sqlite   a SQLite ledger a client's own running system keeps, read
-                  through a mapping file that names its tables and columns
+  whatsapp         the export the Carbon Capture extension produces
+  ledger-sqlite    a SQLite ledger a client's own running system keeps, read
+                   through a mapping file that names its tables and columns
+  ledger-outbound  the places that same system recorded what the agent itself
+                   sent: a capture file, an audit directory, a turns table
 
 Arguments both take:
 
@@ -115,39 +121,6 @@ function parse(rest) {
   }
   return { named, faults };
 }
-
-// The WhatsApp accounts this store already knows about, read from the channel
-// state the live adapter writes. One account is an answer; none or several is a
-// question for the caller, who passes --account.
-function accountsIn(store) {
-  const dir = store.under('channels');
-  if (!fs.existsSync(dir)) return [];
-  const found = [];
-  for (const name of fs.readdirSync(dir)) {
-    const file = path.join(dir, name, 'whatsapp.channel.json');
-    if (!fs.existsSync(file)) continue;
-    try {
-      const account = JSON.parse(fs.readFileSync(file, 'utf8')).account;
-      if (typeof account === 'string' && account.length > 0) found.push(account);
-    } catch { /* a channel file nothing can read names no account */ }
-  }
-  return found;
-}
-
-function resolveAccount(store, given) {
-  if (given !== null) return { account: given, faults: [] };
-  const known = accountsIn(store);
-  if (known.length === 1) return { account: known[0], faults: [] };
-  return {
-    account: null,
-    faults: [fault('ACCOUNT_UNDETERMINED', '--account',
-      known.length === 0
-        ? 'the store names no WhatsApp channel, so the account this history was exported from is not known here'
-        : `the store names ${known.length} WhatsApp channels, so which one this history belongs to is not known here`,
-      'pass --account <jid>')]
-  };
-}
-
 
 // ---- the ledger import ------------------------------------------------------
 
@@ -422,6 +395,48 @@ function ledgerMain(args) {
   }, null, 2));
   return troubles.length > 0 ? 1 : 0;
 }
+// ---- the outbound import ----------------------------------------------------
+
+const OUTBOUND_ARGUMENTS = ['--agent', '--mapping', '--store', '--events', '--audit', '--turns', '--account'];
+
+function parseOutbound(rest) {
+  const faults = [];
+  const named = Object.fromEntries(OUTBOUND_ARGUMENTS.map((name) => [name, null]));
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] in named) named[rest[i]] = rest[++i] ?? null;
+    else {
+      faults.push(fault('UNKNOWN_ARGUMENT', rest[i],
+        'not an argument of carbon-import ledger-outbound',
+        'run carbon-import ledger-outbound --help'));
+    }
+  }
+  for (const name of ['--mapping', '--store']) {
+    if (named[name] !== null) continue;
+    faults.push(fault('MISSING_ARGUMENT', name,
+      'this argument has no default and is not guessed',
+      `pass ${name}`));
+  }
+  if (named['--mapping'] !== null && !fs.existsSync(named['--mapping'])) {
+    faults.push(fault('FILE_MISSING', named['--mapping'],
+      'there is no file at this path',
+      'pass an existing file to --mapping'));
+  }
+  return { named, faults };
+}
+
+function outboundCommand(args) {
+  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    console.log(OUTBOUND_HELP);
+    return args.length === 0 ? 1 : 0;
+  }
+  const parsed = parseOutbound(args);
+  if (parsed.faults.length > 0) {
+    report(parsed.faults);
+    return 1;
+  }
+  return runOutbound(parsed.named);
+}
+
 function main(argv) {
   const args = argv.slice(2);
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
@@ -429,9 +444,10 @@ function main(argv) {
     return args.length === 0 ? 1 : 0;
   }
   if (args[0] === 'ledger-sqlite') return ledgerMain(args.slice(1));
+  if (args[0] === 'ledger-outbound') return outboundCommand(args.slice(1));
   if (args[0] !== 'whatsapp') {
     report([fault('UNKNOWN_SUBCOMMAND', args[0],
-      'the histories this command imports are whatsapp and ledger-sqlite',
+      'the histories this command imports are whatsapp, ledger-sqlite and ledger-outbound',
       'run carbon-import --help')]);
     return 1;
   }

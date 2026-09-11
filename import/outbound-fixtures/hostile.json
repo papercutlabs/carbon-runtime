@@ -1,0 +1,53 @@
+[
+  {
+    "kind": "event",
+    "message_id": "..",
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "sender_jid": "15550009999@s.whatsapp.net",
+    "sender_name": null,
+    "timestamp": "2025-04-02T11:08:00.000Z",
+    "text": "a message id that is a dot segment",
+    "message_type": "text",
+    "reply_to": null,
+    "status": null,
+    "answers_refs": [],
+    "has_media": false,
+    "media": [],
+    "fields": {}
+  },
+  {
+    "kind": "event",
+    "message_id": "SENT/9005",
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "sender_jid": "15550009999@s.whatsapp.net",
+    "sender_name": null,
+    "timestamp": "2025-04-02T11:09:00.000Z",
+    "text": "a message id carrying a path separator",
+    "message_type": "text",
+    "reply_to": null,
+    "status": null,
+    "answers_refs": [],
+    "has_media": false,
+    "media": [],
+    "fields": {}
+  },
+  {
+    "kind": "event",
+    "message_id": "SENT_9006",
+    "chat_jid": "15550001111\u0000@s.whatsapp.net",
+    "chat_name": "Ada",
+    "sender_jid": "15550009999@s.whatsapp.net",
+    "sender_name": null,
+    "timestamp": "2025-04-02T11:10:00.000Z",
+    "text": "a chat carrying a control byte",
+    "message_type": "text",
+    "reply_to": null,
+    "status": null,
+    "answers_refs": [],
+    "has_media": false,
+    "media": [],
+    "fields": {}
+  }
+]
