@@ -1,8 +1,8 @@
 Where the copied files under this repository came from, and what may be done to them.
 
 source repository   the private half of Carbon, named in that repository's README
-source commit       3dfe6cc22b14d27ffc02b35a1cfefd63315f94c0
-copied on           2026-09-11
+source commit       4b184fe0b31dbedc00a70c4b906ef8c5e46e28b2
+copied on           2026-09-11 (re-checked; no harness file changed)
 
 Copied verbatim, as whole files, with no edit of any kind:
 
