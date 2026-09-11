@@ -76,7 +76,6 @@
     "SHAPE_DEAD_EXPORT runtime/loop.mjs NO_REPLY": 1,
     "SHAPE_DEAD_EXPORT runtime/loop.mjs attachmentLines": 1,
     "SHAPE_DEAD_EXPORT runtime/loop.mjs endsTheProcess": 1,
-    "SHAPE_DEAD_EXPORT runtime/loop.mjs followUpInput": 1,
     "SHAPE_DEAD_EXPORT runtime/loop.mjs saidNoReply": 1,
     "SHAPE_DEAD_EXPORT runtime/registry.mjs REGISTRY": 1,
     "SHAPE_DEAD_EXPORT runtime/reply-tool.mjs MANIFEST": 1,

@@ -24,6 +24,7 @@ import path from 'node:path';
 
 import { fault, RuntimeFault, EXIT } from './faults.mjs';
 import { StreamFault } from '../stream/store.mjs';
+import { listTeachings } from '../stream/teachings.mjs';
 import { latch } from './latch.mjs';
 import { REPLY_SERVER_NAME } from './reply-tool.mjs';
 import { TEACH_SERVER_NAME } from './teach-tool.mjs';
@@ -231,11 +232,53 @@ export function checkoutLine(checkout) {
   return `Your agent repository is at ${checkout}. It is read-only; its guidance and skills are already loaded, and anything else in it you read there by absolute path.`;
 }
 
-export function turnInput(record, releaseId, { store = null, checkout = null } = {}) {
+// What the client has taught this agent, in front of the model on every turn of
+// every unit rather than pointed at from a file the model has to remember to
+// read. The reason is the same receipt the reply instruction exists for: on the
+// first real message on a box, a plainly stated instruction in the checkout was
+// read past, and the runtime now puts what must be obeyed into the turn itself.
+//
+// The list is read here, at the moment the input is composed, and never cached.
+// So an instruction taught in one turn is in front of the model on the next one,
+// with no commit, no install and no restart, and nothing in the checkout
+// different. Reading a directory of at most `teaching.max_active` small files is
+// cheaper than the alternative, which is the runtime tracking which thread has
+// seen which version of the list.
+//
+// Nothing here reads what an instruction means. The second sentence is the whole
+// bound: a taught instruction changes how the agent uses what it already has and
+// never what it has, and where one meets the repository's own guidance the
+// guidance wins and the disagreement is raised rather than settled by the model.
+//
+// The declaration's teaching block is the gate, exactly as it is for the tool
+// server: absent or `enabled` false and there is no block at all. An enabled
+// agent that has been taught nothing yet also gets no block, because a heading
+// over an empty list says nothing and costs a turn the same words.
+export function taughtBlock(store, declaration) {
+  if (store === null || declaration?.teaching?.enabled !== true) return [];
+  const active = listTeachings(store).active;
+  if (active.length === 0) return [];
+  // The client, as the declaration names it. The agent id is the fallback,
+  // because a heading that names nobody reads as a heading about nobody.
+  const client = declaration.agent?.client ?? declaration.agent?.id ?? 'your client';
+  const one = active.length === 1;
+  return [
+    '',
+    `What ${client} has taught you (${active.length} standing instruction${one ? '' : 's'}, most recent last).`,
+    'These change how you use what you already have; none of them grants you anything new. Where one of them conflicts with your guidance, your guidance wins, say so, and call raise_change.',
+    ...active.map((teaching, index) => {
+      const by = teaching.taught_by?.sender_name ?? teaching.taught_by?.sender_id ?? 'unknown';
+      return `${index + 1}. ${teaching.text} (taught by ${by}, ${String(teaching.taught_at).slice(0, 10)})`;
+    })
+  ];
+}
+
+export function turnInput(record, releaseId, { store = null, checkout = null, declaration = null } = {}) {
   const instruction = replyInstruction(record, releaseId);
   return [
     instruction,
     ...(checkout ? [checkoutLine(checkout)] : []),
+    ...taughtBlock(store, declaration),
     '',
     `A message arrived on conversation ${record.conversation_id}.`,
     `from: ${record.sender_name ?? record.sender_id}`,
@@ -260,10 +303,15 @@ export const NO_REPLY = 'NO_REPLY';
 // because a store is not a transcript.
 export const AGENT_MESSAGE_KEPT = 300;
 
-export function followUpInput(record, releaseId) {
+// The follow-up carries the taught list too. It is a turn of the same unit, and
+// the answer it asks for is the answer the list governs; a turn that had the list
+// and a follow-up that did not would be an agent that forgets what it was taught
+// exactly when it is being made to answer.
+export function followUpInput(record, releaseId, { store = null, declaration = null } = {}) {
   return [
     'Your last message was not delivered: nothing reaches the contact except a call to the reply tool.',
-    `Call reply now with conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}, or answer exactly ${NO_REPLY} if no reply is due.`
+    `Call reply now with conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}, or answer exactly ${NO_REPLY} if no reply is due.`,
+    ...taughtBlock(store, declaration)
   ].join('\n');
 }
 
@@ -618,7 +666,7 @@ export class ReleaseLoop {
 
     const { result, completedAt } = await this.takeTurn({
       unitId, threadId, releaseId,
-      input: turnInput(record, releaseId, { store: this.store, checkout: this.checkout }),
+      input: turnInput(record, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration }),
       clientUserMessageId: releaseId
     });
 
@@ -721,7 +769,7 @@ export class ReleaseLoop {
 
     const followUp = await this.takeTurn({
       unitId, threadId, releaseId,
-      input: followUpInput(record, releaseId),
+      input: followUpInput(record, releaseId, { store: this.store, declaration: this.declaration }),
       // The protocol's id, not the reply tool's: the follow-up is a second turn
       // and carries its own, while the reply the model is being asked for is
       // still fenced on the release id it was given the first time.

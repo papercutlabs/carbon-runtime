@@ -3,14 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import { Store } from '../stream/store.mjs';
 import {
   ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
-  checkoutLine, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES
+  checkoutLine, followUpInput, taughtBlock, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES
 } from '../runtime/loop.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
+import { serveTeachTool } from '../runtime/teach-tool.mjs';
+import { remember } from '../stream/teachings.mjs';
 import { fakeHarness } from './fake-harness.mjs';
 import * as fixture from '../adapters/fixture/index.mjs';
 
@@ -738,4 +741,205 @@ test('a turn that ran a local command says so in its log line, by status and nev
 test('a turn that ran nothing locally logs an empty list, which is an answer', () => {
   assert.deepEqual(commandsIn([{ type: 'mcpToolCall', server: 'carbon-reply', tool: 'reply', status: 'completed' }]), []);
   assert.deepEqual(commandsIn(null), []);
+});
+
+// ---- what the client has taught, in the turn --------------------------------
+// PA-172 increment 3. The taught list is read from the store at the moment the
+// input is composed and rendered into the turn itself, because the one thing this
+// runtime has already been burned by is a plainly stated instruction the model
+// read past. The declaration's teaching block is the whole gate.
+
+// One git command in the checkout, for the one proof that is about the checkout
+// not changing when a client teaches the agent something.
+function git(cwd, ...args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+}
+
+const TEACHERS = { roles: [], sender_ids: ['contact-1'] };
+
+function teachingDeclaration(overrides = {}) {
+  return declaration({
+    teaching: { enabled: true, max_active: 40, max_chars: 400, teachers: TEACHERS, ...overrides }
+  });
+}
+
+// The reply tool and the teaching tools, which is what the harness lists for an
+// agent whose declaration turns teaching on. A list missing one of them is the
+// refusal tested elsewhere.
+const TEACH_LISTED = () => [
+  { name: 'carbon-reply', runtimeStatus: 'connected' },
+  { name: 'carbon-teach', runtimeStatus: 'connected' }
+];
+
+// One captured message and one instruction taught in it, through the store
+// library, for the tests that are about what the block says rather than about how
+// it got written.
+function taught(text, { at = '2026-09-11T09:00:00.000Z' } = {}) {
+  const { loop, store } = makeLoop({ decl: teachingDeclaration(), statuses: TEACH_LISTED });
+  loop.capture([item(1, 'a workbook landed here', { sender_name: 'Ada' })]);
+  const capture = store.rebuild().find((r) => r.direction === 'inbound');
+  remember(store, {
+    agent: AGENT, text, conversation_id: capture.conversation_id,
+    source_message_id: capture.message_id, max_active: 40, max_chars: 400, now: at
+  });
+  return { loop, store, capture };
+}
+
+test('the taught list is in the turn, under its heading, after the reply instruction and before the body', () => {
+  const { store, capture } = taught('When a workbook lands here I will not change any records off it.');
+
+  const input = turnInput(capture, 'release-1', { store, declaration: teachingDeclaration() });
+  const lines = input.split('\n');
+  const heading = lines.findIndex((l) => l.startsWith('What '));
+
+  assert.ok(heading > 0, input);
+  assert.equal(lines[heading], 'What ExampleCorp has taught you (1 standing instruction, most recent last).');
+  assert.match(lines[heading + 1], /^These change how you use what you already have; none of them grants you anything new\./);
+  assert.match(lines[heading + 1], /your guidance wins, say so, and call raise_change\.$/);
+  assert.equal(lines[heading + 2],
+    '1. When a workbook lands here I will not change any records off it. (taught by Ada, 2026-09-11)');
+  assert.ok(heading > lines.indexOf(replyInstruction(capture, 'release-1')), 'the block is before the reply instruction');
+  assert.ok(heading < lines.indexOf(capture.body), 'the block is after the message body');
+});
+
+test('the heading counts what is standing, and the list is oldest first', () => {
+  const { store, capture } = taught('The first thing.');
+  remember(store, {
+    agent: AGENT, text: 'The second thing.', conversation_id: capture.conversation_id,
+    source_message_id: capture.message_id, max_active: 40, max_chars: 400,
+    now: '2026-09-11T11:00:00.000Z'
+  });
+
+  const lines = taughtBlock(store, teachingDeclaration());
+
+  assert.equal(lines[1], 'What ExampleCorp has taught you (2 standing instructions, most recent last).');
+  assert.match(lines[3], /^1\. The first thing\./);
+  assert.match(lines[4], /^2\. The second thing\./);
+});
+
+test('a declaration with teaching off, or with no teaching block, renders no block at all', () => {
+  const { store, capture } = taught('Something standing.');
+
+  assert.deepEqual(taughtBlock(store, teachingDeclaration({ enabled: false })), []);
+  assert.deepEqual(taughtBlock(store, declaration()), []);
+  const off = turnInput(capture, 'release-1', { store, declaration: teachingDeclaration({ enabled: false }) });
+  assert.doesNotMatch(off, /has taught you/);
+  assert.doesNotMatch(turnInput(capture, 'release-1', { store, declaration: declaration() }), /has taught you/);
+});
+
+test('an agent that has been taught nothing carries no heading over an empty list', () => {
+  const { loop, store } = makeLoop({ decl: teachingDeclaration(), statuses: TEACH_LISTED });
+  loop.capture([item(1, 'a question')]);
+  assert.deepEqual(taughtBlock(store, teachingDeclaration()), []);
+});
+
+test('the taught list names the agent when the declaration names no client', () => {
+  const { store } = taught('Something standing.');
+  const nameless = { ...teachingDeclaration(), agent: { id: AGENT } };
+  assert.match(taughtBlock(store, nameless)[1], new RegExp(`^What ${AGENT} has taught you`));
+});
+
+test('the reply-enforcement follow-up turn carries the taught list too', () => {
+  const { store, capture } = taught('When a workbook lands here I will not change any records off it.');
+
+  const follow = followUpInput(capture, 'release-1', { store, declaration: teachingDeclaration() });
+
+  assert.match(follow, /^Your last message was not delivered/);
+  assert.match(follow, /What ExampleCorp has taught you \(1 standing instruction, most recent last\)\./);
+  assert.match(follow, /1\. When a workbook lands here I will not change any records off it\./);
+  assert.doesNotMatch(followUpInput(capture, 'release-1', { store, declaration: declaration() }), /has taught you/);
+});
+
+// Proof 3 (loaded-at-unit-start). Turn one calls `remember` on the real
+// carbon-teach server over loopback — the tool call the model would make, made by
+// the fake harness because no model runs in this suite — and turn two, which
+// resumes the same thread, has the instruction in its input. Nothing is committed,
+// nothing is installed, and the checkout is untouched between the two.
+test('an instruction taught in one turn is in the next turn of the unit, with nothing installed between them', async () => {
+  const decl = teachingDeclaration();
+  const inputs = [];
+  const { loop, store, dir, harness } = makeLoop({
+    decl,
+    statuses: TEACH_LISTED,
+    onTurn: (s) => async (session, params) => {
+      inputs.push(params.input);
+      if (inputs.length === 1) {
+        const capture = s.rebuild().find((r) => r.direction === 'inbound');
+        const called = await fetch(served.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'tools/call',
+            params: {
+              name: 'remember',
+              arguments: {
+                text: 'When a workbook lands here I will not change any records off it.',
+                conversation_id: capture.conversation_id,
+                source_message_id: capture.message_id
+              }
+            }
+          })
+        });
+        assert.notEqual((await called.json()).result.isError, true);
+      }
+      replyHandler({ store: s, agent: AGENT })({
+        conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'Understood.'
+      });
+      return 'completed';
+    }
+  });
+  const served = await serveTeachTool({
+    store, agent: AGENT, declaration: decl, port: 20000 + Math.floor(Math.random() * 20000)
+  });
+  const checkout = loop.checkout;
+  fs.mkdirSync(checkout, { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance, unchanged by anything taught\n');
+  git(checkout, 'init', '-q');
+  git(checkout, 'add', 'AGENTS.md');
+  git(checkout, '-c', 'user.email=t@example.test', '-c', 'user.name=t', 'commit', '-q', '-m', 'guidance');
+
+  try {
+    await loop.pass([item(1, 'A workbook landing here is not permission to change records.', { sender_name: 'Ada' })]);
+    // The thread this process already holds, forgotten: what the second turn then
+    // does is what a restarted process does, which is resume the unit's thread
+    // from the store. The list has to be in front of the model on that turn too.
+    loop.threads.clear();
+    await loop.pass([item(2, 'What is the position on the two cases from yesterday?', { sender_name: 'Ada' })]);
+  } finally {
+    await served.close();
+  }
+
+  assert.equal(inputs.length, 2);
+  assert.doesNotMatch(inputs[0], /has taught you/, 'the first turn saw a list nothing had written yet');
+  assert.match(inputs[1], /What ExampleCorp has taught you \(1 standing instruction, most recent last\)\./);
+  assert.match(inputs[1], /1\. When a workbook lands here I will not change any records off it\. \(taught by Ada, \d{4}-\d\d-\d\d\)/);
+  // The same thread, resumed: the list is in front of the model on the first turn
+  // after a resume and not only on the turn that opened the thread.
+  assert.deepEqual(harness.session.resumed, ['thread-1']);
+  // The record is in the store and nowhere else, and the checkout is as it was.
+  assert.equal(fs.readdirSync(path.join(dir, 'teachings')).length, 1);
+  assert.equal(git(checkout, 'status', '--porcelain'), '');
+});
+
+test('with teaching off the turn carries no block and the harness lists no teaching server', async () => {
+  const inputs = [];
+  const decl = teachingDeclaration({ enabled: false });
+  const { loop, dir } = makeLoop({
+    decl,
+    statuses: REPLY_LISTED,
+    onTurn: (s) => (session, params) => {
+      inputs.push(params.input);
+      replyHandler({ store: s, agent: AGENT })({
+        conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'Understood.'
+      });
+      return 'completed';
+    }
+  });
+
+  await loop.pass([item(1, 'A workbook landing here is not permission to change records.')]);
+
+  assert.equal(inputs.length, 1);
+  assert.doesNotMatch(inputs[0], /has taught you/);
+  assert.deepEqual(REPLY_LISTED().map((s) => s.name), ['carbon-reply']);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'teachings')), [], 'a path that is off wrote a record');
 });
