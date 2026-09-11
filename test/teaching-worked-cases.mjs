@@ -228,6 +228,12 @@ function declarationFor(storeDir) {
       artifact_sha256: '0'.repeat(64)
     },
     runtime: {
+      // Pins the carbon-runtime release the scored turn is rendered by
+      // (PA-196): the codex adapter reads this repository's own
+      // runtime/loop.mjs turnInput rather than composing a thinner turn of
+      // its own, so the case's turn is the same sentence a box would see.
+      version: '0.7.1',
+      sha256: '8d5b25ce4bc2d3f455f856d706a1fd0b583ecb608aa74ee0062e378d0b3b708b',
       node_version: '22',
       // How the teaching server is told which store it writes into. It is an
       // ordinary non-secret override, which is how a tool server on a box is
@@ -267,6 +273,11 @@ function declarationFor(storeDir) {
       max_attachment_bytes: 5242880
     }],
     unit_of_work: { kind: 'conversation', id_from: 'conversation_id' },
+    // carbon-core's declaration schema grew a required private_network block
+    // after this proof repository shape was written; this proof runs no box
+    // and reaches nothing over a private network, so 'none' is the whole
+    // block the schema asks for.
+    private_network: { kind: 'none' },
     teaching: { enabled: true, max_active: 40, max_chars: 400, open_change_max_age_days: 14 },
     limits: { max_turn_ms: 240000, memory_max: '512M' }
   };
@@ -335,7 +346,20 @@ function caseRecord(caseId, spec, digest) {
     held_back: false,
     review: { reader: 'nobody yet', date: '2026-09-11', verdict: 'pending' },
     input: [{ path: `../../private/${caseId}.txt`, sha256: digest }],
-    prior_state: { kind: 'pointer' },
+    // prior_state.kind was 'pointer'; the schema now refuses 'pointer'
+    // under a no-network sandbox because 'pointer' names a client test
+    // environment the turn cannot reach. Nothing here points at one — the
+    // capture this case needs is seeded into the run's own store by
+    // runtimeTurnInput (runner-runtime-turn.mjs), not by prior_state — so
+    // 'none' is the accurate kind, unchanged from what was arranged before.
+    // The same message the store's capture is built from (captureRecord,
+    // below), in the shape carbon.case.v1 declares: the runtime's own
+    // turnInput renders the turn from this, not from a runner-local prompt
+    // (PA-196). conversation_id and the case id together give the release
+    // id runtime/loop.mjs derives, which is the same id the store's capture
+    // carries as its message_id.
+    inbound: { conversation_id: spec.conversation, sender: spec.sender.id, sender_name: spec.sender.name, body: spec.body },
+    prior_state: { kind: 'none' },
     output_schema: 'references/answer.schema.json',
     properties: spec.rows.map((row) => {
       const at = row.source.lastIndexOf(', ');
