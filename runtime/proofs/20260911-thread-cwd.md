@@ -11,9 +11,10 @@ and the skills the harness used to load out of the checkout?
 Neither is read from anywhere but the thread's `cwd` on the pinned binary, which
 is the reason the links exist, and that was measured rather than assumed.
 
-Two halves: what `codex-cli 0.153.4` reads out of a `cwd`, measured on the PcL
-studio on 11 September 2026 with no model called at all; and one agent on a real
-box, answering a message, running a command and quoting its own guidance.
+Two halves: what `codex-cli 0.153.4` reads out of a `cwd`, measured on a
+development machine on 11 September 2026 with no model called at all; and one
+agent on a real box, answering a message, running a command and quoting its own
+guidance.
 
 ## Half one: what the harness reads out of `cwd`
 
@@ -50,8 +51,8 @@ thing that changes them.
 
 ## Half two: the sandbox mount point, on the box
 
-Run on a Debian aarch64 client box as the PcL login, outside any turn, which is
-the shape the harness's Linux sandbox runs:
+Run on a Debian aarch64 client box as the unprivileged operating login, outside
+any turn, in the shape the harness's Linux sandbox runs:
 
 ```
 $ mkdir -p /tmp/bwtest
