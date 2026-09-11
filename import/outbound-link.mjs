@@ -49,7 +49,10 @@ function nearestSend(pool, item, kind, tolerance) {
   let candidates = 0;
   for (const send of pool) {
     if (send.item.conversation_id !== item.conversation_id) continue;
-    if (send.attached[kind] !== undefined) continue;
+    // A send this kind already owns takes no second mark of it, and a send that
+    // is itself a mark of this kind takes none at all: two turns joined to each
+    // other would be two sends written as one, with the second one's text lost.
+    if (send.item.kind === kind || send.attached[kind] !== undefined) continue;
     const theirs = millisOf(send.item);
     if (theirs === null) continue;
     const delta = Math.abs(theirs - at);

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { fault, report } from '../stream/faults.mjs';
 import { Store, StreamFault } from '../stream/store.mjs';
-import { payload, resolvedAnswers, writeEntries } from './carbon-ledger-outbound.mjs';
+import { SOURCE, payload, resolvedAnswers, writeEntries } from './carbon-ledger-outbound.mjs';
 import { outboundFaults, toleranceMs } from './outbound-mapping.mjs';
 import {
   emptyLineCounts, emptyTurnCounts, readDirectory, readLines, readTurns, sourceFaults
@@ -132,10 +132,13 @@ function emptyCounts() {
   return {
     records_written: 0,
     records_merged_into_an_existing_capture: 0,
+    sends_whose_message_id_an_earlier_import_already_wrote: 0,
+    by_earlier_source: {},
     by_role: {},
     by_identified_by: {},
     reply_links: 0,
-    reply_links_resolving_to_a_record_in_the_store: 0,
+    answers_named: 0,
+    answers_resolving_to_a_record_in_the_store: 0,
     attachments_referenced: 0,
     attachments_present: 0,
     attachments_absent: 0,
@@ -149,11 +152,21 @@ function countRecord(state, result) {
   counts.records_written++;
   if (result.merged) counts.records_merged_into_an_existing_capture++;
   state.conversations.add(record.conversation_id);
+  // A message id an earlier import already wrote keeps what that import wrote:
+  // the store has no overwrite and never will. So this send did not land, and
+  // what is counted here is that, by name, rather than a count of records that
+  // quietly describes somebody else's.
+  if (record.source !== SOURCE) {
+    counts.sends_whose_message_id_an_earlier_import_already_wrote++;
+    counts.by_earlier_source[record.source] = (counts.by_earlier_source[record.source] ?? 0) + 1;
+    return;
+  }
   counts.by_role[record.role] = (counts.by_role[record.role] ?? 0) + 1;
   const how = record.adapter_fields?.identified_by ?? 'unknown';
   counts.by_identified_by[how] = (counts.by_identified_by[how] ?? 0) + 1;
   if (record.reply_to) counts.reply_links++;
-  counts.reply_links_resolving_to_a_record_in_the_store += resolvedAnswers(state.store, record);
+  counts.answers_named += (record.adapter_fields?.answers ?? []).length;
+  counts.answers_resolving_to_a_record_in_the_store += resolvedAnswers(state.store, record);
   const at = record.sent_at ?? record.received_at;
   if (at) {
     if (state.earliest === null || at < state.earliest) state.earliest = at;

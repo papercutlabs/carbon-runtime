@@ -272,12 +272,16 @@ test('a mark is joined to the send it belongs to, or it says it joined to nothin
     item('event', 'E2', '2025-04-02T11:00:30.000Z'),
     item('turn', 'T1', '2025-04-02T11:00:20.000Z'),
     item('turn', 'T2', '2025-04-02T18:00:00.000Z'),
+    item('turn', 'T3', '2025-04-02T18:00:10.000Z'),
     item('audit', 'A1', '2025-04-02T11:00:05.000Z')
   ], 60_000);
 
   assert.equal(counts.joined.turn, 1);
-  assert.equal(counts.alone.turn, 1, 'the far turn joined a send an hour away');
-  assert.equal(sends.length, 3, 'the turn that matched nothing did not become a send of its own');
+  assert.equal(counts.alone.turn, 2, 'the far turn joined a send an hour away');
+  assert.equal(sends.length, 4,
+    'two turns ten seconds apart became one send, and one of them lost its text');
+  assert.equal(sends.find((send) => send.item.message_id === 'T3').attached.turn, undefined,
+    'a turn joined to another turn');
 
   const near = sends.find((send) => send.item.message_id === 'E2');
   assert.equal(near.attached.turn.message_id, 'T1', 'the nearer send did not win the turn');
@@ -427,7 +431,9 @@ test('the command imports the three sources, reports counts and is idempotent', 
   assert.equal(first.conversations, 2);
   assert.deepEqual(first.by_role, { agent: 4 });
   assert.equal(first.reply_links, 1);
-  assert.equal(first.reply_links_resolving_to_a_record_in_the_store, 0);
+  assert.equal(first.answers_named, 3);
+  assert.equal(first.answers_resolving_to_a_record_in_the_store, 0);
+  assert.equal(first.sends_whose_message_id_an_earlier_import_already_wrote, 0);
   assert.equal(first.attachments_referenced, 1);
   assert.equal(first.attachments_unchecked, 1);
   assert.equal(first.earliest_send, '2025-04-02T11:02:00.000Z');
@@ -442,6 +448,36 @@ test('the command imports the three sources, reports counts and is idempotent', 
   const check = execFileSync(process.execPath,
     [path.join(ROOT, 'bin', 'carbon-stream'), 'check', '--store', store], { encoding: 'utf8' });
   assert.match(check, /case 11\s+pass/);
+});
+
+test('a send whose id an earlier import already wrote is counted, never silently lost', () => {
+  const dir = temp('claimed');
+  build(dir);
+  const mappingFile = path.join(dir, 'mapping.json');
+  fs.writeFileSync(mappingFile, JSON.stringify(mappingFor(), null, 2));
+  const store = path.join(dir, 'store');
+
+  // The ledger import got this message's from_me wrong and wrote it as one that
+  // arrived. The store has no overwrite, so the outbound record cannot land.
+  Store.open(store).capture({
+    schema: 'carbon.message.v1', agent: 'agent-01', source: 'import:ledger-sqlite', account: ACCOUNT,
+    conversation_id: `${ACCOUNT}:${CHAT}`, conversation_kind: 'direct',
+    message_id: `${ACCOUNT}:${CHAT}:SENT_1`, platform_message_id: 'SENT_1', revision: 0,
+    direction: 'inbound', role: 'contact', sender_id: CHAT, received_at: '2025-04-02T11:02:00.000Z',
+    body: SENT, attachments: [], historical: true, disposition: 'captured'
+  });
+
+  const summary = JSON.parse(execFileSync(process.execPath, [
+    path.join(ROOT, 'bin', 'carbon-import'), 'ledger-outbound',
+    '--agent', 'agent-01', '--mapping', mappingFile, '--store', store, '--account', ACCOUNT,
+    '--events', path.join(dir, 'events.jsonl'),
+    '--turns', path.join(dir, 'turns.db')
+  ], { encoding: 'utf8' }));
+
+  assert.equal(summary.sends_whose_message_id_an_earlier_import_already_wrote, 1);
+  assert.deepEqual(summary.by_earlier_source, { 'import:ledger-sqlite': 1 });
+  assert.equal(summary.by_role.contact, undefined,
+    'a record another import owns was counted as one this import wrote');
 });
 
 test('the command refuses a source the mapping does not describe, and a run with no source', () => {
