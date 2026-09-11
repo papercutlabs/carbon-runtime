@@ -49,7 +49,7 @@ export const TEACH_SERVER_NAME = 'carbon-teach';
 // have to agree before the process starts.
 export const TEACH_PORT = 8731;
 
-export const MANIFEST_DIR = path.join(import.meta.dirname, 'teach-tool');
+const MANIFEST_DIR = path.join(import.meta.dirname, 'teach-tool');
 export const MANIFEST = readManifest(MANIFEST_DIR);
 
 // The declaration's teaching block, or a refusal. Nothing here has a default:
@@ -116,7 +116,7 @@ function refuseUncoveredSender(store, teachers, { conversation_id, source_messag
   if (faults.length > 0) throw new ToolFault(faults);
 }
 
-export function rememberHandler({ store, agent, teaching, now = () => new Date().toISOString() }) {
+function rememberHandler({ store, agent, teaching, now = () => new Date().toISOString() }) {
   return (args) => {
     refuseUncoveredSender(store, teaching.teachers, args);
     let written;
@@ -142,7 +142,7 @@ export function rememberHandler({ store, agent, teaching, now = () => new Date()
   };
 }
 
-export function raiseChangeHandler({ store, agent, teaching, now = () => new Date().toISOString() }) {
+function raiseChangeHandler({ store, agent, teaching, now = () => new Date().toISOString() }) {
   return (args) => {
     refuseUncoveredSender(store, teaching.teachers, args);
     let written;
@@ -169,7 +169,7 @@ export function raiseChangeHandler({ store, agent, teaching, now = () => new Dat
 // `forget` takes no teacher check. The client revoking something they were told
 // the agent is doing is not a new grant, and a revocation the declaration refused
 // would leave the agent following an instruction its own client has withdrawn.
-export function forgetHandler({ store, now = () => new Date().toISOString() }) {
+function forgetHandler({ store, now = () => new Date().toISOString() }) {
   return (args) => {
     let written;
     try {

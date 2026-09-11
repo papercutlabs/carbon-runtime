@@ -16,6 +16,7 @@
     "SHAPE_COMPLEXITY runtime/index.mjs run": 1,
     "SHAPE_COMPLEXITY stream/validate.mjs validate": 1,
     "SHAPE_COMPLEXITY tools/lib/args.mjs checkSchema": 1,
+    "SHAPE_COMPLEXITY tools/lib/help.mjs renderHelp": 1,
     "SHAPE_COMPLEXITY tools/lib/args.mjs parseArguments": 1,
     "SHAPE_COMPLEXITY tools/lib/manifest.mjs checkManifest": 1,
     "SHAPE_COMPLEXITY tools/lib/mcp.mjs handle": 1,
