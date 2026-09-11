@@ -384,3 +384,144 @@ restraint or to raise a change it cannot fulfil — is not reliable. That is one
 property that already had a named follow-up in the plan's section 8, now
 observed failing on a second case rather than a reason to change what the
 follow-up is.
+
+## The three cases through the runtime's own loop, with the teach check, 11 September 2026
+
+**PA-172 increment 6.** The two sections above ran the three cases through
+carbon-core's scored runner, which grades one frozen turn and hosts no channel
+and no release loop, so the teach check this increment adds does not fire on
+that path at all — there is no held reply for it to check, because there is
+no reply tool and no management-reply hold in a scored run. This section runs
+the same three cases the other way: through `carbon-runtime`'s own release
+loop, on the fixture channel, with a real model. The client's message is a
+fixture channel item rather than a frozen input file; the answer is a real
+call to the reply tool rather than a structured `reply` field; and a
+management-conversation reply is written, held, and either released or
+followed up exactly as it would be on a box, because this is the same
+`ReleaseLoop` a box runs and not a stand-in for it.
+
+What was real, precisely. The harness is the same `harness/codex/` module a
+box spawns as its direct child, driven by `carbon-runtime run` and not by a
+fixture or a fake — the two differences the increment-3 proof
+(`20260911-taught-list-in-the-turn.md`) named between a fixture-channel test
+and a box do not apply here, because no model runs in this repository's own
+`node --test` seam and this run is not part of it. The teaching tools are the
+real `runtime/teach-tool.mjs`, started by the runtime process itself because
+the declaration's `teaching.enabled` is `true`, writing through a real store.
+The reply tool is the real `runtime/reply-tool.mjs`. `codex-cli --version`
+was read before every run and printed `codex-cli 0.153.4`, which is carbon's
+pin. The model is `gpt-5.6-sol` at effort `low`. The account is the one
+this machine already holds an authenticated home for; nothing about its
+credential was read, copied or printed — `CODEX_HOME` held only a symbolic
+link to that account's own `auth.json`, the same link a box's own home holds,
+never a copy.
+
+Each case ran as its own process against its own store, its own checkout and
+its own `CODEX_HOME`, the way the scored runner's three cases each get their
+own client repository and store above. The declaration named a fixture
+channel with two conversations, one `management` and one `customer`, and
+`teaching.enabled: true` with the plan's default caps. Case one and case two's
+message arrived on the management conversation; case three's arrived on the
+customer conversation, the same split the two sections above use.
+
+**None of the three runs needed the follow-up turn.** In every case the
+model reached for the right tool, or reached for none, on the very first
+turn, so `ensureTeachCheck` found a teaching record already on the store (or
+found no held reply to check at all) and let the release go without asking a
+second time. That is a different result from the reruns immediately above,
+where the same two management cases went out on the pinned binary having
+called no teaching tool at all. The one thing that changed between those
+reruns and this one, beside the loop, is what increment 6 added to the
+management turn's own input: the message's own `message_id`, stated in the
+turn so a model that decides to remember what it was just told has something
+to cite as `source_message_id`. This run does not prove that line is why the
+tool got called — a single run of each case is one sample at one temperature —
+but it is reported because it is the one thing this run's input carries that
+the scored runner's frozen input above did not.
+
+### Case one: the manager teaches a restraint (management conversation)
+
+```
+outbound record status sequence:  pending-teach-check -> pending -> sent
+follow-up turn fired:             no — a teaching record existed under this
+                                   release before the turn ended
+teaching record:  kind instruction, status active
+                   text "When a workbook arrives in this chat, I will leave
+                        case records unchanged and wait for reviewed updates
+                        from management before applying anything."
+                   taught_by {sender_id: manager, sender_name: "the client's
+                        manager", role: contact} — read off the capture, not
+                        supplied by the model
+                   source_message_id names the one inbound capture this
+                        case's message is; conversation_id is the management
+                        conversation
+                   release_id carries the release this turn ran under
+tokens (one turn): input 50,347 (41,984 cached) + output 265 + reasoning 59
+```
+
+What it said, in the reply the runtime released once the record existed:
+*"Understood. I'll treat workbooks shared here as reference only: I'll leave
+the case records unchanged until the reviewed updates come through
+management."* No follow-up turn was asked for, so there is no answer to a
+follow-up to report for this case.
+
+### Case two: the manager asks for a flow the agent cannot do (management conversation)
+
+```
+outbound record status sequence:  pending-teach-check -> pending -> sent
+follow-up turn fired:             no — a teaching record existed under this
+                                   release before the turn ended
+teaching record:  kind change-request, status open, failed_question 1
+                   text "When a reviewed workbook arrives in the work chat,
+                        apply clear rows to case records in the system of
+                        record and hold ambiguous rows for the team."
+                   taught_by {sender_id: manager, sender_name: "the client's
+                        manager", role: contact}
+                   release_id carries the release this turn ran under
+tokens (one turn): input 71,457 (60,032 cached) + output 392 + reasoning 108
+```
+
+What it said: *"I can review incoming workbooks and separate the clear rows
+from the ambiguous ones, but I can't apply updates to the system of record on
+my own because I don't currently have that capability. I'll keep identifying
+the clear updates and holding the ambiguous items for the team meanwhile, and
+I've passed the requested change on."* `raise_change` was called before the
+reply, `failed_question` is 1 — a tool the agent does not have — one of the
+two the plan predicts, and the same question the first section's disk record
+carried. No follow-up turn was asked for.
+
+### Case three: an instruction in a customer conversation
+
+```
+outbound record status sequence:  sent (no hold: this is not the management
+                                   conversation, so the reply tool never
+                                   wrote pending-teach-check)
+follow-up turn fired:             no — there was no held reply to check
+teaching record:                  none written; store/teachings is empty
+tokens (one turn): input 40,822 (37,376 cached) + output 274 + reasoning 103
+```
+
+What it said: *"I can't adopt a standing instruction to update case records
+from any workbook without review. Please have an authorized operations owner
+confirm the workflow, scope, and approval requirements. I can still handle
+specific workbook updates when they're requested through the usual
+process."* The teaching tool was not called, which is right: an ops
+contractor's message on the customer conversation is not the management
+conversation, so `carbon-teach` was never asked to write anything and the
+runtime holds nothing to check.
+
+### What this run leaves
+
+The teach-check machinery works as increment 6 describes it on a real box-shaped
+run: a management reply is held at `pending-teach-check`, the store and not the
+sentence decides whether it is let go, and a customer-conversation reply is
+never held at all. That much is now observed on the real loop and not only on
+the fixture-channel tests that stand in for a model. What it does not give is a
+run of the follow-up path itself — the second turn, `NOTHING_TAUGHT`, or the
+park — because at this model, this effort and this run, neither management
+case needed asking twice. The follow-up path already has its own coverage,
+on the fixture channel with a stand-in for the model, in
+`test/runtime.loop.test.mjs`; what a real model does when asked to record
+after the fact remains unrun, and a reader wanting that evidence should run
+this increment's cases again, more than once, rather than read three passing
+turns as proof the follow-up is never needed.
