@@ -44,14 +44,15 @@
 // is the authorisation. A call citing a message from any other conversation is
 // refused as TEACHING_NOT_IN_MANAGEMENT_CONVERSATION and nothing is written.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { createServer } from '../tools/lib/mcp.mjs';
 import { readManifest } from '../tools/lib/manifest.mjs';
 import { renderHelp } from '../tools/lib/help.mjs';
 import { ToolFault, fault as toolFault } from '../tools/lib/fault.mjs';
-import { StreamFault } from '../stream/store.mjs';
+import { Store, StreamFault } from '../stream/store.mjs';
 import { remember, raiseChange, forget } from '../stream/teachings.mjs';
-import { fault, RuntimeFault } from './faults.mjs';
+import { fault, report, RuntimeFault, EXIT } from './faults.mjs';
 import { managementConversationOf } from './channel.mjs';
 
 export const TEACH_SERVER_NAME = 'carbon-teach';
@@ -207,13 +208,82 @@ export async function serveTeachTool({ store, agent, declaration, host = '127.0.
   return { http, url, close: () => new Promise((resolve) => http.close(resolve)) };
 }
 
+// ---- serving it as a process of its own -------------------------------------
+//
+// On a box this server is the runtime's own: the release loop holds the store
+// open and serves these three tools beside the reply tool in the same process.
+// That is still the live shape and nothing below changes it.
+//
+// What is below is how the same server is started by something that is not the
+// release loop, which today is one caller: a scored `carbon run`, which starts a
+// client agent from its own declaration on a machine that is not a box and hosts
+// the declaration's agent-user http tool servers for the length of the turn. It
+// starts them the way the box's launcher does — `--declaration`, `--host`,
+// `--port` — so the module, its arguments and where it binds are the
+// declaration's own and not the caller's.
+//
+// The store is named by `CARBON_TEACH_STORE`, an ordinary non-secret entry in
+// the declaration's `runtime.env`, which is how any tool server on a box is told
+// what to reach. It is not defaulted: a teaching server writing into a store
+// nobody named is a client's standing instructions landing where nobody looks.
+export function argumentFaults(args) {
+  const faults = [];
+  for (const name of ['declaration', 'host', 'port']) {
+    if (args[name] === undefined || args[name] === '') {
+      faults.push(fault('MISSING_ARGUMENT', `--${name}`,
+        'the teaching server is told what it serves and where it binds, and nothing here has a default that guesses',
+        `pass --${name}; node runtime/teach-tool.mjs --help says what each is`));
+    }
+  }
+  if (args.store === undefined || args.store === '') {
+    faults.push(fault('TEACH_STORE_UNNAMED', 'CARBON_TEACH_STORE',
+      'nothing says which store this server writes what the client teaches into',
+      'name it in the declaration\'s runtime.env as CARBON_TEACH_STORE, with the absolute path of the agent\'s store'));
+  }
+  return faults;
+}
+
+export function parseServeArgv(argv) {
+  const args = { store: process.env.CARBON_TEACH_STORE };
+  for (const name of ['declaration', 'host', 'port']) {
+    const at = argv.indexOf(`--${name}`);
+    if (at !== -1) args[name] = argv[at + 1];
+  }
+  return args;
+}
+
 // The manual, rendered from the manifest, so `carbon tool check` reads the same
 // text the harness puts in front of the model.
+async function main(argv) {
+  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+    console.log(renderHelp(MANIFEST, {
+      serverUsage: [
+        'served by the carbon runtime on loopback beside the reply tool, in the same process',
+        `node runtime/teach-tool.mjs --declaration <file> --host <host> --port <n>    serve it as its own process, with CARBON_TEACH_STORE naming the store (the runtime's own port is ${TEACH_PORT})`,
+        'node runtime/teach-tool.mjs --help    the manual'
+      ]
+    }));
+    return 0;
+  }
+  const args = parseServeArgv(argv);
+  const faults = argumentFaults(args);
+  if (faults.length > 0) {
+    report(faults);
+    return EXIT.FAULT;
+  }
+  const declaration = JSON.parse(fs.readFileSync(args.declaration, 'utf8'));
+  const { url } = await serveTeachTool({
+    store: Store.open(args.store),
+    agent: declaration.agent?.id,
+    declaration,
+    host: args.host,
+    port: Number(args.port)
+  });
+  console.log(JSON.stringify({ event: 'teach_tool.listening', url, store: args.store }));
+  return null;
+}
+
 if (process.argv[1] === import.meta.filename) {
-  console.log(renderHelp(MANIFEST, {
-    serverUsage: [
-      'started by the carbon runtime on loopback; it is not run by hand',
-      `node runtime/teach-tool.mjs --help    the manual (port ${TEACH_PORT})`
-    ]
-  }));
+  const code = await main(process.argv.slice(2));
+  if (code !== null) process.exit(code);
 }
