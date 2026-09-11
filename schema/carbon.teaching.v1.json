@@ -59,6 +59,16 @@
         "source_message_id": { "type": "string", "minLength": 1 }
       }
     },
+    "reviewed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "by"],
+      "description": "Written when someone at PcL read this record from the studio and marked it read, absent otherwise. It is a marker and nothing else: it changes no status, revokes no instruction and closes no change request. It exists because carbon teachings prints a standing list and a person sitting down to it weekly could not tell a record taught yesterday from one they read three weeks ago, which is the whole value of reading the list.",
+      "properties": {
+        "at": { "type": "string", "minLength": 1 },
+        "by": { "type": "string", "minLength": 1 }
+      }
+    },
     "closed": {
       "type": "object",
       "additionalProperties": false,

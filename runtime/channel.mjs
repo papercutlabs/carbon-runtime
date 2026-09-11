@@ -47,3 +47,42 @@ export function resolveChannel(declaration, channel) {
   delete merged.transport;
   return merged;
 }
+
+// ---- what kind of room this conversation is ---------------------------------
+//
+// An agent sits in three kinds of room and behaves differently in each, and the
+// declaration is where a room says which it is. The difference that matters to
+// the release loop is the operator hold.
+//
+// A customer conversation holds the business's own customer. A staff member
+// writing there is taking the conversation over, so the channel's hold applies
+// and the agent stops until it expires.
+//
+// An ops conversation is staff and contractors working beside the agent. A human
+// message there is not a takeover, and the hold would silence the agent for an
+// hour at a time in the room it is there to work in.
+//
+// The management conversation is where the client's people talk to the agent
+// about how it works. No hold, the agent answers, every member is a teacher, and
+// what is taught there is taught to the agent everywhere. There is one per agent
+// and `carbon declaration check` refuses teaching that is enabled without
+// exactly one.
+export function conversationKindOf(channel, conversation_id) {
+  const named = (channel?.conversations ?? []).find((c) => c?.id === conversation_id);
+  if (named?.kind) return named.kind;
+  // The declared default, and no default of this file's. A channel with no
+  // default is a declaration `carbon declaration check` refuses; treating one as
+  // customer here would be this file quietly deciding whether a staff message
+  // stops the agent, which is the one thing about a room that cannot be guessed.
+  return channel?.default_conversation_kind ?? null;
+}
+
+// The one conversation this agent is taught in, across every channel, or null
+// when no channel declares one. The teach tools refuse a source message from
+// anywhere else, so this is what they refuse against.
+export function managementConversationOf(declaration) {
+  const found = (declaration?.channels ?? [])
+    .flatMap((channel) => channel?.conversations ?? [])
+    .filter((conversation) => conversation?.kind === 'management');
+  return found.length === 1 ? String(found[0].id) : null;
+}
