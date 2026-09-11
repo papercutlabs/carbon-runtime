@@ -648,3 +648,40 @@ test('the turn the loop runs carries the attachment, not only the body', async (
   assert.match(String(inputs[0]), /booking-note\.txt/);
   assert.match(String(inputs[0]), /ALLD-UAT-778812/);
 });
+
+// PA-180: an attachment past the adapter's cap carries `bytes` as its size, an
+// integer, not a Buffer — the shape adapters/email/mime.mjs writes for one that
+// crossed max_attachment_bytes. Capture must not mistake that integer for bytes
+// to write; the record parks nothing, ends nothing, and still releases.
+test('an oversize attachment parks nothing, ends nothing, and the message still releases', async () => {
+  const inputs = [];
+  const { loop, store } = makeLoop({
+    onTurn: (s) => (session, params) => {
+      inputs.push(params.input ?? params.text ?? null);
+      replyHandler({ store: s, agent: AGENT })({
+        conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer'
+      });
+      return { status: 'completed' };
+    }
+  });
+  const oversize = {
+    file: 'unwritten/' + 'b'.repeat(64),
+    mime: 'application/pdf',
+    bytes: 40000000,
+    sha256: 'b'.repeat(64),
+    download_failed: true,
+    filename: 'archive.pdf'
+  };
+
+  const outcome = await loop.pass([item(1, 'the scan is attached', { attachments: [oversize] })]);
+
+  assert.deepEqual(outcome.parked, [], 'an oversize attachment parked a record');
+
+  const captured = store.rebuild().find((r) => r.direction === 'inbound');
+  assert.equal(captured.attachments[0].download_failed, true);
+  assert.equal(captured.attachments[0].bytes, 40000000);
+  assert.equal(captured.release.thread_id !== undefined, true, 'the message did not release');
+
+  assert.equal(inputs.length, 1, 'the turn the model saw never ran');
+  assert.match(String(inputs[0]), /archive\.pdf \(application\/pdf, 40000000 bytes, sha256 b{64}\): too large to capture, so its bytes are not on this box\./);
+});
