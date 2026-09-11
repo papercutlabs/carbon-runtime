@@ -272,12 +272,18 @@ export class Store {
     const file = path.join(places.attachments, digest);
     if (!fs.existsSync(file)) writeAtomic(file, bytes);
     fs.chmodSync(file, FILE_MODE);
-    return {
+    // The name the sender gave the part is kept. The file on disk is named by
+    // its digest, which is what makes a repeated write converge, so the sender's
+    // name has nowhere else to live; without it the turn input can say a file
+    // arrived but not which file the message's own text is talking about.
+    const written = {
       file: this.relative(file),
       mime: meta.mime ?? 'application/octet-stream',
       bytes: bytes.length,
       sha256: digest
     };
+    if (typeof meta.filename === 'string' && meta.filename.length > 0) written.filename = meta.filename;
+    return written;
   }
 
   attachmentIntact(attachment) {
