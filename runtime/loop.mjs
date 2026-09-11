@@ -464,8 +464,8 @@ export class ReleaseLoop {
     for (const entry of entries) {
       const attachments = [];
       for (const attachment of entry.attachments ?? []) {
-        attachments.push(attachment.bytes !== undefined
-          ? this.store.putAttachment(entry.record, Buffer.from(attachment.bytes), attachment)
+        attachments.push(Buffer.isBuffer(attachment.bytes)
+          ? this.store.putAttachment(entry.record, attachment.bytes, attachment)
           : attachment);
       }
       const record = { ...entry.record, attachments };
