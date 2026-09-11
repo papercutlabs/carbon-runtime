@@ -35,7 +35,16 @@ jobs:
       - name: node --test
         run: node --test "test/*.test.mjs"
 
-      - name: the fixture adapter passes the seventeen cases
+      # Is this still the shape it says it is. Every rule carries its own reason;
+      # `node tools/shape-check.mjs --help` prints them. Four rules need both
+      # halves of Carbon and are not run here: the other half is private, so a
+      # workflow in a public repository cannot fetch it without carrying a
+      # credential that reads it. Those four run in the private half's workflow,
+      # which checks this repository out because this one is public.
+      - name: the shape holds
+        run: node tools/shape-check.mjs .
+
+      - name: the fixture adapter passes the twenty-three cases
         run: node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures
 
       - name: the WhatsApp adapter passes its subset
