@@ -5,7 +5,8 @@
 // tool servers that run as the agent user, and waits for the ones that run under
 // their own unit as the tools user. It hosts the adapters in this process, takes
 // one lock per adapter, and runs the release loop. It serves
-// the `reply` tool on loopback. It refuses to start when the store is latched, and
+// the `reply` tool on loopback, and the `teach` tools beside it when the
+// declaration turns the teaching path on. It refuses to start when the store is latched, and
 // it latches and stops when it meets an ending a restart cannot help.
 //
 // It has no daemon of its own beyond that, no database, no orchestration, and no
@@ -20,6 +21,7 @@ import { takeLock, releaseLock } from './lock.mjs';
 import { loadAdapter } from './registry.mjs';
 import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.mjs';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.mjs';
+import { serveTeachTool, TEACH_PORT } from './teach-tool.mjs';
 import { ReleaseLoop } from './loop.mjs';
 import { pollIntervalFor } from './poll.mjs';
 import { resolveChannel } from './channel.mjs';
@@ -207,7 +209,7 @@ function isChildExit(error) {
 export async function run(options) {
   const {
     declaration, declarationPath, storeDir, codexHome, checkout, work, harnessRoot,
-    binary = null, replyPort = REPLY_PORT,
+    binary = null, replyPort = REPLY_PORT, teachPort = TEACH_PORT,
     harness, adapters = null, items = () => [],
     passes = Infinity, log = () => {}, now = () => Date.now()
   } = options;
@@ -240,9 +242,11 @@ export async function run(options) {
   const locks = [];
   const toolServers = [];
   let reply = null;
+  let teach = null;
   let session = null;
   const stop = async () => {
     if (reply) await reply.close();
+    if (teach) await teach.close();
     stopToolServers(toolServers);
     // An adapter that keeps something running between passes — a long poll, a
     // connection — has an ending, and this is where it is called. Without it a
@@ -288,6 +292,16 @@ export async function run(options) {
 
     reply = await serveReplyTool({ store, agent: declaration.agent?.id, port: replyPort });
     log({ event: 'reply_tool.listening', url: reply.url });
+
+    // The teaching tools, on the declaration's word and on nothing else. With
+    // teaching.enabled false, or the block absent, no server is started, the
+    // harness is told about none, and nothing else about this process changes.
+    if (declaration.teaching?.enabled === true) {
+      teach = await serveTeachTool({
+        store, agent: declaration.agent?.id, declaration, port: teachPort
+      });
+      log({ event: 'teach_tool.listening', url: teach.url });
+    }
 
     // Nothing is passed on the ChatGPT path. The harness reads its own auth file
     // out of CODEX_HOME and refreshes it there, which is why that directory is

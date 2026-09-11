@@ -26,6 +26,7 @@ import { fault, RuntimeFault, EXIT } from './faults.mjs';
 import { StreamFault } from '../stream/store.mjs';
 import { latch } from './latch.mjs';
 import { REPLY_SERVER_NAME } from './reply-tool.mjs';
+import { TEACH_SERVER_NAME } from './teach-tool.mjs';
 import {
   failuresBeforeHold, holdFault, pollFault, pollState,
   recordPollFailure, recordPollSuccess
@@ -394,14 +395,15 @@ export class ReleaseLoop {
   }
 
   // The set the app-server lists must equal the set the declaration names plus
-  // the reply tool. A ChatGPT login injects a connected-apps server nobody
+  // the reply tool, and the teaching tools where the declaration turns them on. A ChatGPT login injects a connected-apps server nobody
   // declared, carrying mail tools; an agent with tools nobody declared is not the
   // agent the declaration describes, so the runtime refuses to run rather than
   // reporting it later.
   refuseUndeclaredServers(statuses) {
     const declared = new Set([
       ...(this.declaration.tool_servers ?? []).map((s) => s.name),
-      REPLY_SERVER_NAME
+      REPLY_SERVER_NAME,
+      ...(this.declaration.teaching?.enabled === true ? [TEACH_SERVER_NAME] : [])
     ]);
     const listed = new Set(statuses.map((s) => s.name));
     const faults = [];

@@ -34,7 +34,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 
 | path | what it is |
 |---|---|
-| `runtime/` | the process a unit starts: the release loop, the reply tool, the tool-server launcher, the adapter registry, the per-adapter lock and the terminal latch |
+| `runtime/` | the process a unit starts: the release loop, the reply tool, the teaching tools, the tool-server launcher, the adapter registry, the per-adapter lock and the terminal latch |
 | `bin/carbon-runtime` | `run --agent-dir <dir>` on a box; every path explicit off one |
 | `harness/codex/` | a copy of the Codex harness the runtime spawns and drives; `harness/HARNESS-SOURCE` says where it came from and that nothing here edits it |
 | `lib/faults.mjs`, `tools/lib/` | the fault shape and the MCP server scaffold, copied under the same rule |
@@ -53,7 +53,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `bin/carbon-telegram` | `probe --token-file <file>`, which asks the server what bot a token is; `send --token-file <file> --chat <id> --text <text>`, which puts one message in a chat in a proof and records nothing |
 | `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>` |
 | `test/` | `node --test "test/*.test.mjs"` |
-| `tools/` | the MCP scaffold the reply tool is served by, the identifier scan and the release build |
+| `tools/` | the MCP scaffold the reply tool and the teaching tools are served by, the identifier scan and the release build |
 
 ## The store
 
