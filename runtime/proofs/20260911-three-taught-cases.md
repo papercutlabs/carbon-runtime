@@ -246,10 +246,9 @@ evidence. This section is that run: same three cases, same
 `test/teaching-worked-cases.mjs`, same client repositories the script builds
 fresh, model `gpt-5.6-sol` at effort `low`, judge the same model and effort,
 account `tokens-2`, a 240 s turn budget, against carbon-runtime `8ec64e1` (PR
-#34) and carbon-core `922985f` (PR #53). The binary was
-`/Users/pcloffice/.local/state/pa148-allied-scored/codex-0.153.4/node_modules/.bin/codex`,
-already installed and reporting `codex-cli 0.153.4`, so no private install was
-needed.
+#34) and carbon-core `922985f` (PR #53). A `codex-cli 0.153.4` binary was
+already installed in this machine's private state, reporting that version on
+`--version`, so no private install was needed.
 
 **Every run is now `valid: true`.** `protocol_pinned` reads `codex-cli
 0.153.4`, `protocol_mismatch` is `false`, every run's `status` is `completed`,
