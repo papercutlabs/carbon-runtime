@@ -511,7 +511,10 @@ test('the command refuses a source the mapping does not describe, and a run with
   assert.equal(gone.code, 1);
   assert.match(gone.out, /OUTBOUND_SOURCE_MISSING/);
 
-  for (const line of nothing.out.split('\n').filter(Boolean)) {
+  // The faults, and not the runtime's own warnings, which share the stream.
+  const faults = nothing.out.split('\n').filter((line) => line.startsWith('{'));
+  assert.equal(faults.length > 0, true, nothing.out);
+  for (const line of faults) {
     assert.deepEqual(Object.keys(JSON.parse(line)).sort(), ['code', 'fix', 'problem', 'subject']);
   }
 });
