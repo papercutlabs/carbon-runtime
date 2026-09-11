@@ -120,7 +120,12 @@ record at 0600 with no execute bit. An attachment past
 the message and are in the raw payload, and what the cap refuses is a second
 copy of them as a file of its own. A message with no `Message-ID`, or in a
 content transfer encoding this reader does not decode, is parked where it landed
-and never delivered.
+and never delivered. The name the part gave itself is kept on the record as
+`filename`, because the file on disk is named by its digest and the message's own
+text talks about the sender's name for it. What the turn is then told about an
+attachment is the release loop's, not this adapter's: every attachment is named,
+sized and located, and a `text/plain`, `text/csv` or `text/markdown` attachment
+of 64 KB or less also travels in the turn as text.
 
 **Sending.** The reply goes to the `Reply-To` of the message being answered, or
 its `From`. It carries `In-Reply-To` and `References` from that message, and the

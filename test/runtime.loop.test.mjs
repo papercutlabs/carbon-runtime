@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Store } from '../stream/store.mjs';
 import {
   ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
-  toolCallsIn
+  toolCallsIn, MAX_INLINE_ATTACHMENT_BYTES
 } from '../runtime/loop.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
@@ -530,4 +530,121 @@ test('the log says which tools a turn called, by name and never by argument', ()
   // the first real box needed and an absent field is not one.
   assert.deepEqual(toolCallsIn([]), []);
   assert.deepEqual(toolCallsIn(undefined), []);
+});
+
+// ---- attachments in the turn input -----------------------------------------
+// A message whose answer is in an attached file was answered on a box with "I
+// could not access the attachment": the file had been captured, and the turn
+// input said nothing about it. The model's own shell is not a way round that —
+// on the first client box it does not run at all — so a small text attachment
+// travels in the turn itself.
+
+function withAttachment(store, meta, bytes) {
+  const base = {
+    schema: 'carbon.message.v1', agent: AGENT, source: 'fixture', account: ACCOUNT,
+    conversation_id: `${ACCOUNT}:c1`, conversation_kind: 'direct',
+    message_id: `${ACCOUNT}:c1:m1`, platform_message_id: 'm1', revision: 0,
+    direction: 'inbound', role: 'contact', sender_id: 'contact-1', sender_name: 'Contact',
+    sent_at: '2026-09-10T10:00:00.000Z', received_at: '2026-09-10T10:00:00.000Z',
+    body: 'the reference is in the attached note', historical: false, disposition: 'captured'
+  };
+  const attachment = bytes === null ? meta : store.putAttachment(base, bytes, meta);
+  return { ...base, attachments: [attachment] };
+}
+
+test('a small text attachment travels in the turn input, under its own name and its path', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
+  const store = Store.open(dir);
+  const record = withAttachment(store,
+    { mime: 'text/plain', filename: 'booking-note.txt' },
+    Buffer.from('Carrier booking reference: ALLD-UAT-778812\n'));
+
+  const input = turnInput(record, 'release-1', { store });
+
+  assert.match(input, /attachments: 1/);
+  assert.match(input, /- booking-note\.txt \(text\/plain, 43 bytes, sha256 [0-9a-f]{64}\)/);
+  assert.match(input, new RegExp(store.under(record.attachments[0].file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(input, /ALLD-UAT-778812/, 'the text the sender attached never reached the model');
+  assert.match(input, /-----BEGIN ATTACHMENT [0-9a-f]{64}-----/);
+  assert.match(input, /-----END ATTACHMENT [0-9a-f]{64}-----/);
+});
+
+test('the reply instruction is still the first line and the last line when an attachment is inlined', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
+  const store = Store.open(dir);
+  const record = withAttachment(store,
+    { mime: 'text/plain', filename: 'note.txt' }, Buffer.from('a line\n'));
+
+  const lines = turnInput(record, 'release-1', { store }).split('\n');
+
+  assert.equal(lines[0], replyInstruction(record, 'release-1'));
+  assert.equal(lines.at(-1), replyInstruction(record, 'release-1'));
+});
+
+test('an attachment that is not text is named and located and never inlined', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
+  const store = Store.open(dir);
+  const record = withAttachment(store,
+    { mime: 'application/pdf', filename: 'packing-list.pdf' }, Buffer.from('%PDF-1.4 not really\n'));
+
+  const input = turnInput(record, 'release-1', { store });
+
+  assert.match(input, /- packing-list\.pdf \(application\/pdf, 20 bytes/);
+  assert.doesNotMatch(input, /BEGIN ATTACHMENT/);
+});
+
+test('a text attachment past the inline cap is named and located and never inlined', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
+  const store = Store.open(dir);
+  const big = Buffer.alloc(MAX_INLINE_ATTACHMENT_BYTES + 1, 'x');
+  const record = withAttachment(store, { mime: 'text/plain', filename: 'ledger.txt' }, big);
+
+  const input = turnInput(record, 'release-1', { store });
+
+  assert.match(input, /- ledger\.txt \(text\/plain, 65537 bytes/);
+  assert.doesNotMatch(input, /BEGIN ATTACHMENT/);
+});
+
+test('an attachment too large to capture says its bytes are not on this box', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
+  const store = Store.open(dir);
+  const record = withAttachment(store, {
+    file: 'unwritten/' + 'a'.repeat(64), mime: 'text/plain', bytes: 40000000,
+    sha256: 'a'.repeat(64), download_failed: true, filename: 'archive.txt'
+  }, null);
+
+  const input = turnInput(record, 'release-1', { store });
+
+  assert.match(input, /- archive\.txt \(text\/plain, 40000000 bytes, sha256 a{64}\): too large to capture/);
+  assert.doesNotMatch(input, /BEGIN ATTACHMENT/);
+});
+
+test('a message with no attachment carries no attachment block', () => {
+  const record = { conversation_id: 'c-9', sender_id: 'someone', received_at: '2026-09-10T10:00:00.000Z', body: 'hello' };
+  assert.doesNotMatch(turnInput(record, 'release-1'), /attachments:/);
+});
+
+test('the turn the loop runs carries the attachment, not only the body', async () => {
+  const inputs = [];
+  const { loop, store } = makeLoop({
+    onTurn: (s) => (session, params) => {
+      inputs.push(params.input ?? params.text ?? null);
+      replyHandler({ store: s, agent: AGENT })({
+        conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer'
+      });
+      return { status: 'completed' };
+    }
+  });
+  // What an adapter hands the loop: the decoded bytes and what the part called
+  // itself. The loop writes them to the store and the record names the file.
+  const collected = { bytes: Buffer.from('Carrier booking reference: ALLD-UAT-778812\n'), mime: 'text/plain', filename: 'booking-note.txt' };
+
+  await loop.pass([item(1, 'the reference is attached', { attachments: [collected] })]);
+
+  const captured = store.rebuild().find((r) => r.direction === 'inbound');
+  assert.equal(captured.attachments[0].filename, 'booking-note.txt');
+
+  assert.equal(inputs.length, 1);
+  assert.match(String(inputs[0]), /booking-note\.txt/);
+  assert.match(String(inputs[0]), /ALLD-UAT-778812/);
 });
