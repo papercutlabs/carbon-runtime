@@ -107,19 +107,7 @@ export async function turn(session, {
   }
   const completed = await awaitCompletion(session, threadId, turnId, { timeoutMs });
   const stream = session.stream.forTurn(threadId, turnId);
-
-  // The turn's items, from the completion when it carries them and from the item
-  // notifications when it does not. `items` is a required field on the Turn record
-  // and `itemsView` is what says how much of it was loaded; on a real turn the
-  // completion arrived with `items` empty, so a caller reading only that field
-  // learns nothing at all about what the turn did. The same records reach this
-  // connection as `item/completed` notifications, correlated by the same two ids,
-  // and this stream already holds them.
-  const streamed = stream
-    .filter((event) => event.kind === 'item.completed')
-    .map((event) => event.params?.item)
-    .filter(Boolean);
-  const items = (completed.items ?? []).length > 0 ? completed.items : streamed;
+  const { items, items_detail } = itemsFrom(completed, stream);
 
   return {
     thread_id: threadId,
@@ -132,9 +120,45 @@ export async function turn(session, {
     error: completed.error ?? null,
     items,
     items_view: completed.itemsView ?? null,
+    items_detail,
     agent_message: agentMessageFrom(completed, stream),
     token_usage: tokenUsageFrom(stream),
     events: stream.map((e) => e.kind)
+  };
+}
+
+// What the turn did, as records rather than as prose: the turn's own items.
+//
+// `items` is a required field on the Turn record and `itemsView` is what says how
+// much of it was loaded, not whether the field happens to be non-empty. On a real
+// turn the completion arrived with `itemsView: "summary"` carrying one item, the
+// final message, while the turn had also run a command; a caller that reads the
+// completion because it is not empty reports a turn that called nothing, which is
+// the worst shape this could take. So the streamed `item/completed` notifications,
+// already correlated to this turn by both ids, are the record unless the
+// completion says outright that it carried the full view — a non-empty summary is
+// never read as the action record, whatever the stream held.
+//
+// When neither source has anything — no item notifications streamed, and the
+// completion did not say `itemsView: "full"` — the record is empty on purpose, and
+// `items_detail` names why rather than leaving the caller to guess at a silent [].
+export function itemsFrom(turnRecord, events = []) {
+  const streamed = events
+    .filter((event) => event.kind === 'item.completed')
+    .map((event) => event.params?.item)
+    .filter(Boolean);
+  const carried = (Array.isArray(turnRecord?.items) ? turnRecord.items : [])
+    .map((item) => item?.item ?? item);
+
+  if (turnRecord?.itemsView === 'full') {
+    return { items: carried, items_detail: null };
+  }
+  if (streamed.length > 0) {
+    return { items: streamed, items_detail: null };
+  }
+  return {
+    items: [],
+    items_detail: `no item/completed notifications were streamed for this turn and the completion's itemsView was ${JSON.stringify(turnRecord?.itemsView ?? null)}, not "full", so no action record exists for it`
   };
 }
 
