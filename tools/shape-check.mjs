@@ -704,7 +704,8 @@ export function declarationFields(schemaFile) {
 }
 
 // A field is read when its own name appears as a word in the code that consumes
-// declarations. That is a whole-word match over lib/ and runtime/, not a proof
+// declarations: the libraries and the runtime process on one side, the adapters,
+// the store and the import on the other. It is a whole-word match, not a proof
 // the value is used; it catches the case this rule is for, a field added to the
 // schema and to nothing else. A common word like `name` passes trivially, and
 // that is the known limit of the check.
@@ -731,8 +732,13 @@ function declaredFieldsRead(root, kind, other, out, notes) {
       for (const rel of walk(base, dir).filter(isSource)) readers.push(fs.readFileSync(path.join(base, rel), 'utf8'));
     }
   };
-  const here = kind === 'core' ? ['lib'] : ['runtime', 'lib'];
-  const there = kind === 'core' ? ['runtime', 'lib'] : ['lib'];
+  // Everywhere a declaration is actually consumed. It is not only lib/ and
+  // runtime/: a channel's fields are read by the adapter that owns that channel,
+  // and the write gate is read by the tool-server library, so a reader set that
+  // stopped at those two directories called eight fields unread that the code
+  // plainly reads.
+  const here = kind === 'core' ? ['lib', 'tools/lib'] : ['runtime', 'lib', 'stream', 'adapters', 'import'];
+  const there = kind === 'core' ? ['runtime', 'lib', 'stream', 'adapters', 'import'] : ['lib', 'tools/lib'];
   add(root, here);
   add(other, there);
   if (readers.length === 0) {
@@ -749,7 +755,7 @@ function declaredFieldsRead(root, kind, other, out, notes) {
   }
   for (const field of missing) {
     out.push(fault('SHAPE_DECLARED_FIELD_UNREAD', `carbon.agent-declaration.v1.json ${field}`,
-      'this field is in the declaration a client repository writes and nothing in lib/ or runtime/ reads it',
+      'this field is in the declaration a client repository writes and nothing that consumes a declaration reads it',
       'read it where it belongs, or take it out of the schema; the exact-keys rule means a client cannot ignore it'));
   }
   notes.push(`SHAPE_DECLARED_FIELD_UNREAD: ${declarationFields(schemaFile).length} fields checked against `
