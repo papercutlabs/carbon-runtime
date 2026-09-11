@@ -1,0 +1,110 @@
+{
+  "schema": "carbon.tool-server.v1",
+  "name": "carbon-teach",
+  "version": "1",
+  "entry": "../teach-tool.mjs",
+  "transport": "http",
+  "secrets": [],
+  "tools": [
+    {
+      "name": "remember",
+      "description": "Record one standing instruction this client has just taught you, so that every later turn follows it. Ask these four questions about the instruction, in order, before you call this. 1. Does following it need a tool you do not have? 2. Does it need to reach a system, a channel or a person you do not already reach? 3. Does it need a permission you were not given: writing where you may only read, sending where you may only receive, spending money, or acting on conversations outside the ones you already handle? 4. Does it change what was agreed to be done for this client: the scope, the price, the hours, or who is accountable? The bound behind the four is the grant: a remembered instruction may change how you use what you already have, and may never give you a tool, a system, a permission, a person or a commitment you do not already have. If every answer is no, remember it here. If the answer to any one of them is yes, do not remember it: call raise_change instead, naming the question that was answered yes. An instruction too long for the length cap, or one that would take the list past its count cap, is refused here and belongs in raise_change with failed_question \"size\". Cite the message the client taught it in; who taught it is read from that message and is never something you pass. Tell the client what you will now do only after this call has returned.",
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "conversation_id", "source_message_id"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "what you will now do, in your own plain words rather than as a quotation of the client, for example \"When a workbook arrives in this chat I will not change any records off it, and I will wait for the reviewed updates through management\""
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "the conversation the instruction was taught on, exactly as this turn stated it"
+          },
+          "source_message_id": {
+            "type": "string",
+            "description": "the message_id of the inbound message the client taught it in, exactly as this turn stated it"
+          }
+        }
+      },
+      "returns": {
+        "what": "the instruction that is now standing.",
+        "fields": [
+          { "name": "id", "what": "the record id this instruction was written under" },
+          { "name": "active", "what": "how many instructions are standing after this one" }
+        ]
+      },
+      "readOnlyHint": false,
+      "writes": false
+    },
+    {
+      "name": "raise_change",
+      "description": "Record an instruction you refused as too large to remember, so the people who build you have it as a durable work item. Use this, and not remember, whenever any one of the four boundary questions is answered yes. 1. Does following it need a tool you do not have? 2. Does it need to reach a system, a channel or a person you do not already reach? 3. Does it need a permission you were not given: writing where you may only read, sending where you may only receive, spending money, or acting on conversations outside the ones you already handle? 4. Does it change what was agreed to be done for this client: the scope, the price, the hours, or who is accountable? The bound behind the four is the grant: a remembered instruction may change how you use what you already have, and may never give you a tool, a system, a permission, a person or a commitment you do not already have. Use failed_question \"size\" for an instruction that is not too large in kind but does not fit: over the length cap, or one the standing list has no room for. This record is the only way what the client asked for reaches the people who build you; you contact nobody about it. When you then answer the client, say which part you cannot do on your own, what you will keep doing meanwhile, and that it has been passed on. Name no date, no price and no scope: you hold none of them.",
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "failed_question", "conversation_id", "source_message_id"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "what the client asked for, in plain words, for example \"Take the reviewed workbook and apply its case-specific rows\""
+          },
+          "failed_question": {
+            "type": ["integer", "string"],
+            "enum": [1, 2, 3, 4, "size"],
+            "description": "which boundary question was answered yes: 1 a tool you do not have, 2 a system, channel or person you do not reach, 3 a permission you were not given, 4 a change to what was agreed for this client, or \"size\" for one that does not fit"
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "the conversation it was asked on, exactly as this turn stated it"
+          },
+          "source_message_id": {
+            "type": "string",
+            "description": "the message_id of the inbound message the client asked it in, exactly as this turn stated it"
+          }
+        }
+      },
+      "returns": {
+        "what": "the change request that is now on record.",
+        "fields": [
+          { "name": "id", "what": "the record id this change request was written under" }
+        ]
+      },
+      "readOnlyHint": false,
+      "writes": false
+    },
+    {
+      "name": "forget",
+      "description": "Stop following one standing instruction, because the client has just revoked it. The record is kept and marked forgotten with the message that revoked it, so what was taught and what was withdrawn both stay readable; nothing is deleted. Call it only on an instruction the client has actually withdrawn, citing the message they withdrew it in, and name the id of an instruction that is standing now.",
+      "arguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "conversation_id", "source_message_id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "the record id of the standing instruction to stop following, as the taught list in this turn's input gives it"
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "the conversation it was revoked on, exactly as this turn stated it"
+          },
+          "source_message_id": {
+            "type": "string",
+            "description": "the message_id of the inbound message the client revoked it in, exactly as this turn stated it"
+          }
+        }
+      },
+      "returns": {
+        "what": "the instruction that is no longer followed.",
+        "fields": [
+          { "name": "id", "what": "the record id that is now forgotten" },
+          { "name": "active", "what": "how many instructions are standing after this one was dropped" }
+        ]
+      },
+      "readOnlyHint": false,
+      "writes": false
+    }
+  ]
+}

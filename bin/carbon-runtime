@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.mjs';
 import { run, placesUnder, readDeclaration } from '../runtime/index.mjs';
 import { REPLY_PORT } from '../runtime/reply-tool.mjs';
+import { TEACH_PORT } from '../runtime/teach-tool.mjs';
 import { registeredKinds } from '../runtime/registry.mjs';
 import * as codex from '../harness/codex/index.mjs';
 
@@ -20,7 +21,8 @@ Usage:
   carbon-runtime run --agent-dir <dir>
   carbon-runtime run --declaration <file> --store <dir> --codex-home <dir> --checkout <dir>
                      --work <dir> [--binary <path>] [--harness-root <dir>]
-                     [--reply-port <n>] [--items <file>] [--passes <n>]
+                     [--reply-port <n>] [--teach-port <n>] [--items <file>]
+                     [--passes <n>]
 
 On a box there is one form: --agent-dir. Everything the runtime needs was
 rendered into that directory by install, and it is read from there:
@@ -47,6 +49,9 @@ a default that points at a real path.
   --harness-root <dir>  where the pinned binaries are unpacked, one directory per version
   --reply-port <n>      the loopback port the reply tool listens on (default ${REPLY_PORT},
                         which is the number install renders into config.toml)
+  --teach-port <n>      the loopback port the teaching tools listen on (default ${TEACH_PORT},
+                        which is the number install renders into config.toml). They are
+                        served only when the declaration's teaching block is enabled
   --items <file>        a JSON array of channel items, read again on every pass, for a
                         channel whose adapter takes its items from the caller
   --passes <n>          stop after this many passes, instead of running until the unit
@@ -86,7 +91,7 @@ Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
 
 const BOOLEAN_FLAGS = [];
 const FLAGS = ['agent-dir', 'declaration', 'store', 'codex-home', 'checkout', 'work', 'binary',
-  'harness-root', 'reply-port', 'items', 'passes'];
+  'harness-root', 'reply-port', 'teach-port', 'items', 'passes'];
 
 function parse(argv) {
   const args = {};
@@ -188,6 +193,7 @@ async function main(argv) {
     harnessRoot: where.harnessRoot,
     binary: args.binary ? path.resolve(args.binary) : null,
     replyPort: args['reply-port'] ? Number(args['reply-port']) : REPLY_PORT,
+    teachPort: args['teach-port'] ? Number(args['teach-port']) : TEACH_PORT,
     passes: args.passes ? Number(args.passes) : Infinity,
     harness: codex,
     items: readItems,
