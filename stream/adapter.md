@@ -97,6 +97,22 @@ export function poll(context) { /* -> { items: [item] } */ }
 export const POLL_INTERVAL_FLOOR_MS = 30000;
 ```
 
+## The seventh operation, optional: stop
+
+```js
+// 7. Put down whatever this adapter keeps running between passes.
+//    An adapter that holds a connection, or a long poll, or any task that
+//    outlives a pass, has an ending, and the runtime calls it when it stops. An
+//    adapter whose work is entirely inside its five operations has nothing to put
+//    down and exports none of this.
+//
+//    Without it a process that has done its work and returned does not exit: a
+//    pending call keeps the event loop alive. On a box that is invisible, because
+//    a unit runs until it is stopped; off one it is a command that never comes
+//    back, which is how it was found.
+export async function stop(context) { }
+```
+
 ## The context
 
 The check, and the runtime, pass one object:

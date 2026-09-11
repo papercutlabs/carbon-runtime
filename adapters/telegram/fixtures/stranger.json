@@ -1,0 +1,25 @@
+[
+  {
+    "conversation": "123123123",
+    "position": "000000000119",
+    "received_at": "2026-09-10T10:04:00.000Z",
+    "update": {
+      "update_id": 900019,
+      "message": {
+        "message_id": 119,
+        "from": {
+          "id": 123123123,
+          "is_bot": false,
+          "first_name": "Nobody"
+        },
+        "chat": {
+          "id": 123123123,
+          "type": "private",
+          "first_name": "Nobody"
+        },
+        "date": 1789039300,
+        "text": "Hello, is this thing on?"
+      }
+    }
+  }
+]

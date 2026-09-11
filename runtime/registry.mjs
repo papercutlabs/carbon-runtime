@@ -20,7 +20,8 @@ export const REGISTRY = {
   // without a network and without a credential
   fixture: 'adapters/fixture/index.mjs',
   email: 'adapters/email/index.mjs',
-  whatsapp: 'adapters/whatsapp/index.mjs'
+  whatsapp: 'adapters/whatsapp/index.mjs',
+  telegram: 'adapters/telegram/index.mjs'
 };
 
 export function registeredKinds() {

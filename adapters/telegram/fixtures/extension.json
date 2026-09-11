@@ -1,0 +1,65 @@
+[
+  {
+    "conversation": "887766554",
+    "position": "000000000108",
+    "received_at": "2026-09-10T09:50:00.000Z",
+    "update": {
+      "update_id": 900008,
+      "message": {
+        "message_id": 108,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": 887766554,
+          "type": "private",
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "date": 1789038600,
+        "text": "A newer adapter wrote a field this schema does not name."
+      }
+    },
+    "extra": {
+      "channel_priority": "high",
+      "channel_labels": [
+        "billing"
+      ]
+    }
+  },
+  {
+    "conversation": "887766554",
+    "position": "000000000109",
+    "received_at": "2026-09-10T09:51:00.000Z",
+    "update": {
+      "update_id": 900009,
+      "message": {
+        "message_id": 109,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": 887766554,
+          "type": "private",
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "date": 1789038660,
+        "text": "A declared field of the wrong type is refused."
+      }
+    },
+    "wrong_type": {
+      "revision": "the first one"
+    }
+  }
+]

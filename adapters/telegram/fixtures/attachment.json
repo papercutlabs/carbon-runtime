@@ -1,0 +1,86 @@
+[
+  {
+    "conversation": "887766554",
+    "position": "000000000106",
+    "received_at": "2026-09-10T09:20:00.000Z",
+    "update": {
+      "update_id": 900006,
+      "message": {
+        "message_id": 106,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": 887766554,
+          "type": "private",
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "date": 1789035600,
+        "caption": "The invoice is attached.",
+        "document": {
+          "file_id": "BQACAgQAAx0000001",
+          "file_unique_id": "AgAD0001",
+          "file_name": "august-invoice.txt",
+          "mime_type": "text/plain",
+          "file_size": 32
+        }
+      }
+    },
+    "attachments": [
+      {
+        "bytes": "invoice line 14\ninvoice line 15\n",
+        "mime": "text/plain",
+        "filename": "august-invoice.txt"
+      }
+    ]
+  },
+  {
+    "conversation": "887766554",
+    "position": "000000000107",
+    "received_at": "2026-09-10T09:22:00.000Z",
+    "update": {
+      "update_id": 900007,
+      "message": {
+        "message_id": 107,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": 887766554,
+          "type": "private",
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "date": 1789035720,
+        "caption": "And the scan, which may not have come through.",
+        "photo": [
+          {
+            "file_id": "AgACth0001",
+            "file_unique_id": "AQAD0001",
+            "width": 320,
+            "height": 240,
+            "file_size": 8192
+          },
+          {
+            "file_id": "AgACth0002",
+            "file_unique_id": "AQAD0002",
+            "width": 1280,
+            "height": 960,
+            "file_size": 184320
+          }
+        ]
+      }
+    }
+  }
+]

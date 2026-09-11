@@ -244,6 +244,20 @@ export async function run(options) {
   const stop = async () => {
     if (reply) await reply.close();
     stopToolServers(toolServers);
+    // An adapter that keeps something running between passes — a long poll, a
+    // connection — has an ending, and this is where it is called. Without it a
+    // run that has done its work and returned does not exit, because a pending
+    // call keeps the process alive; on a box that is invisible, and off one it is
+    // a command that never comes back.
+    for (const { channel, adapter } of loaded) {
+      if (typeof adapter.stop !== 'function') continue;
+      try {
+        await adapter.stop({ store, agent: declaration.agent?.id, account: channel.account, channel });
+      } catch (error) {
+        log({ event: 'adapter.stop_failed', channel: channel.kind, account: channel.account,
+          problem: error?.message ?? String(error) });
+      }
+    }
     for (const lock of locks) releaseLock(lock.file);
     if (session && typeof session.stop === 'function') await session.stop();
   };

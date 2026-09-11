@@ -47,6 +47,9 @@ jobs:
       - name: the email adapter passes the cases that apply to it
         run: node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/fixtures
 
+      - name: the Telegram adapter passes its subset
+        run: node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/telegram/fixtures
+
       # The copied files are copies. Nothing here edits them; the authority is
       # the private half, whose own test compares the two byte for byte when
       # both checkouts are present. What this can check without that checkout is

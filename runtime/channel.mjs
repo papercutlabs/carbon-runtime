@@ -20,7 +20,7 @@ import { fault, RuntimeFault } from './faults.mjs';
 // Every transport key whose value is the name of a declared secret rather than a
 // value. The resolved path is written on the channel under the key with `_ref`
 // removed, which is the name the adapter reads.
-const SECRET_REFS = ['netrc_ref'];
+const SECRET_REFS = ['netrc_ref', 'bot_token_ref'];
 
 export function resolveChannel(declaration, channel) {
   const faults = [];

@@ -1,0 +1,33 @@
+[
+  {
+    "conversation": "-1001234567890",
+    "position": "000000000110",
+    "received_at": "2026-09-10T09:52:00.000Z",
+    "update": {
+      "update_id": 900010,
+      "message": {
+        "message_id": 110,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": -1001234567890,
+          "type": "supergroup",
+          "title": "Example Corp and the agent"
+        },
+        "date": 1789038720,
+        "new_chat_members": [
+          {
+            "id": 5566778,
+            "is_bot": false,
+            "first_name": "Grace"
+          }
+        ]
+      }
+    }
+  }
+]

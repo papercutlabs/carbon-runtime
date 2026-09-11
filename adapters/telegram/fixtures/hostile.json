@@ -1,0 +1,74 @@
+[
+  {
+    "conversation": "chat..escape",
+    "position": "000000000111",
+    "received_at": "2026-09-10T09:53:00.000Z",
+    "update": {
+      "update_id": 900011,
+      "message": {
+        "message_id": 111,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": "chat..escape",
+          "type": "private"
+        },
+        "date": 1789038780,
+        "text": "A chat id with a dot segment in it."
+      }
+    }
+  },
+  {
+    "conversation": "chat/escape",
+    "position": "000000000112",
+    "received_at": "2026-09-10T09:54:00.000Z",
+    "update": {
+      "update_id": 900012,
+      "message": {
+        "message_id": 112,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": "chat/escape",
+          "type": "private"
+        },
+        "date": 1789038840,
+        "text": "A chat id with a path separator in it."
+      }
+    }
+  },
+  {
+    "conversation": "chat\u0007escape",
+    "position": "000000000113",
+    "received_at": "2026-09-10T09:55:00.000Z",
+    "update": {
+      "update_id": 900013,
+      "message": {
+        "message_id": 113,
+        "from": {
+          "id": 4455667,
+          "is_bot": false,
+          "first_name": "Ada",
+          "last_name": "Byron",
+          "username": "ada_b"
+        },
+        "chat": {
+          "id": "chat\u0007escape",
+          "type": "private"
+        },
+        "date": 1789038900,
+        "text": "A chat id with a control byte in it."
+      }
+    }
+  }
+]

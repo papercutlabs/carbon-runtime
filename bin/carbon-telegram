@@ -1,0 +1,164 @@
+#!/usr/bin/env node
+// carbon-telegram — reach a real bot, once, by hand.
+//
+// The conformance check proves the adapter against recorded updates and never
+// touches a network. This is the other half: it proves that a token is a token,
+// that the bot it names is the bot somebody meant, and that a message from this
+// box reaches a chat. It is run by a person, and it writes nothing to any store:
+// it is not an adapter, and an agent's records are written by the agent's
+// runtime.
+//
+// `send` exists so that a proof of this channel can be run without a person
+// holding a phone: a second bot, or a person's own account, puts a message in the
+// chat and the agent answers it.
+
+import fs from 'node:fs';
+import { fault, report } from '../stream/faults.mjs';
+import { StreamFault } from '../stream/store.mjs';
+import { botIdOf, call, readToken, TelegramFault } from '../adapters/telegram/api.mjs';
+
+const HELP = `carbon-telegram — reach a real bot with the telegram adapter's own transport
+
+Usage:
+  carbon-telegram probe --token-file <file> [--api-host <host>]
+  carbon-telegram send  --token-file <file> --chat <id> --text <text> [--api-host <host>]
+                        [--reply-to <message id>]
+
+  --token-file <file>  the file the token is in, placed by its owner, mode 0600,
+                       readable by this account alone. It is read at the moment it
+                       is used, it is never printed, and it never reaches a fault:
+                       everything this command shows has the token taken out of it.
+  --api-host <host>    the Bot API host; api.telegram.org when not given. It is the
+                       host the declaration names in outbound_hosts.
+  --chat <id>          the chat to send to: a numeric chat id, or @name for a
+                       public channel. A bot cannot open a chat with a person; the
+                       person writes to the bot first, and the chat id is then what
+                       the agent's own store recorded, or what probe reports.
+  --text <text>        one message, sent as it is written. The Bot API refuses a
+                       text over 4096 characters and this command does not split
+                       it: splitting is the adapter's job, and it writes every
+                       piece's id back to the store, which this command has none of.
+  --reply-to <id>      hang the message under the message with this id, which is
+                       how a reply reads in a group.
+
+probe calls getMe and prints what the server says this bot is: its id, its name,
+and whether it can be added to groups and read what is written in them. It is the
+one call that answers "is this token the bot I think it is" without sending
+anything to anybody.
+
+send calls sendMessage and prints the id of the message the server accepted. That
+id is what a proof compares against: the id this command printed and the id the
+receiving side saw are the same number, or the message did not go where it says.
+
+Every argument is explicit and nothing is guessed. Every fault is one JSON line
+of {code, subject, problem, fix}, and any fault exits non-zero.`;
+
+function parse(subcommand, args, required) {
+  const wanted = ['token-file', 'api-host', 'chat', 'text', 'reply-to'];
+  const values = {};
+  const faults = [];
+  for (let i = 0; i < args.length; i++) {
+    const name = args[i].startsWith('--') ? args[i].slice(2) : null;
+    if (name === null || !wanted.includes(name)) {
+      faults.push(fault('UNKNOWN_ARGUMENT', args[i],
+        `not an argument of carbon-telegram ${subcommand}`, 'run carbon-telegram --help'));
+      continue;
+    }
+    values[name] = args[++i];
+  }
+  for (const name of required) {
+    if (values[name] === undefined) {
+      faults.push(fault('MISSING_ARGUMENT', `--${name}`,
+        'this command takes every argument explicitly and guesses none',
+        `pass --${name} <value>`));
+    }
+  }
+  if (values['token-file'] !== undefined && !fs.existsSync(values['token-file'])) {
+    faults.push(fault('TOKEN_FILE_MISSING', values['token-file'],
+      'there is no file at this path, and this command does not create one',
+      'the token\'s owner places the file; carbon-apply secret place writes it on a box'));
+  }
+  return { values, faults };
+}
+
+function transportOf(values) {
+  const transport = { token: readToken(values['token-file']) };
+  if (values['api-host'] !== undefined) transport.apiHost = values['api-host'];
+  return transport;
+}
+
+async function probe(values) {
+  const transport = transportOf(values);
+  const me = await call(transport, 'getMe');
+  console.log('the token is a token, and the server says it belongs to:');
+  console.log(`  id                 ${me.id}`);
+  console.log(`  name               ${me.first_name ?? '(none)'}`);
+  console.log(`  username           @${me.username}`);
+  console.log(`  joins groups       ${me.can_join_groups === true}`);
+  console.log(`  reads group text   ${me.can_read_all_group_messages === true}`);
+  console.log(`  inline queries     ${me.supports_inline_queries === true}`);
+  if (me.id !== botIdOf(transport.token)) {
+    report([fault('BOT_ID_DISAGREES', String(me.id),
+      'the id in the token and the id the server reports are not the same, which a token does not do by itself',
+      'place the token again; something rewrote the file between the two')]);
+    return 1;
+  }
+  // A bot that cannot read group text sees only messages that name it. That is
+  // the server's own setting, made in BotFather, and it is the single most common
+  // reason an agent in a group answers nothing.
+  if (me.can_read_all_group_messages !== true) {
+    console.log('');
+    console.log('note: this bot reads only the group messages that name it, because privacy');
+    console.log('      mode is on. Turn it off in BotFather (/setprivacy) if the agent is to');
+    console.log('      see everything written in a group it is in.');
+  }
+  return 0;
+}
+
+async function send(values) {
+  const transport = transportOf(values);
+  const params = { chat_id: values.chat, text: values.text };
+  if (values['reply-to'] !== undefined) {
+    params.reply_parameters = { message_id: Number(values['reply-to']), allow_sending_without_reply: true };
+  }
+  const sent = await call(transport, 'sendMessage', params);
+  console.log(`sent  message_id ${sent.message_id}  chat ${sent.chat?.id}  ${Buffer.byteLength(values.text)} bytes`);
+  return 0;
+}
+
+async function main(argv) {
+  const args = argv.slice(2);
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    console.log(HELP);
+    return args.length === 0 ? 1 : 0;
+  }
+  const subcommand = args[0];
+  if (!['probe', 'send'].includes(subcommand)) {
+    report([fault('UNKNOWN_SUBCOMMAND', subcommand,
+      'the carbon-telegram subcommands are probe and send', 'run carbon-telegram --help')]);
+    return 1;
+  }
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(HELP);
+    return 0;
+  }
+  const required = subcommand === 'probe' ? ['token-file'] : ['token-file', 'chat', 'text'];
+  const { values, faults } = parse(subcommand, args.slice(1), required);
+  if (faults.length > 0) {
+    report(faults);
+    return 1;
+  }
+  try {
+    return subcommand === 'probe' ? await probe(values) : await send(values);
+  } catch (error) {
+    if (error instanceof TelegramFault || error instanceof StreamFault) report(error.faults);
+    else {
+      report([fault('COMMAND_FAILED', error.name ?? 'error',
+        (error.message ?? String(error)).split('\n')[0],
+        'read the fault above')]);
+    }
+    return 1;
+  }
+}
+
+process.exitCode = await main(process.argv);
