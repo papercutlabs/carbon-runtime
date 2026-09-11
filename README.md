@@ -178,9 +178,13 @@ Nine rules are worth stating on their own.
    own directory and is the `cwd`. The checkout stays at `current/repo`,
    read-only by ownership and mode, every turn's input names it, and the two
    things the harness reads out of `cwd` alone — `AGENTS.md` and `.agents/` —
-   are linked into `work/` from it at start, so the checkout stays the one place
-   an agent's guidance and skills live. The trust block install renders into
-   `config.toml` names the work directory for the same reason.
+   are written into `work/` from it at every start. Copies rather than symlinks:
+   the sandbox binds the guidance read-only inside the turn, and bubblewrap
+   cannot bind a path that is a symlink into a read-only tree. The two names
+   belong to the runtime, which writes them again from the checkout at every
+   start, so the installed checkout stays the only thing that decides what the
+   agent is carrying. The trust block install renders into `config.toml` names
+   the work directory for the same reason.
 
 `runtime/proofs/` holds what has been run for real against the pinned harness.
 

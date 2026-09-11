@@ -7,9 +7,12 @@ directory instead, does the shell run — and does the agent still get the guida
 and the skills the harness used to load out of the checkout?
 
 **Answer.** Yes to both. The shell runs, and the guidance and skills load because
-`AGENTS.md` and `.agents/` are linked into the work directory from the checkout.
-Neither is read from anywhere but the thread's `cwd` on the pinned binary, which
-is the reason the links exist, and that was measured rather than assumed.
+`AGENTS.md` and `.agents/` are written into the work directory from the checkout
+at every start. Neither is read from anywhere but the thread's `cwd` on the pinned
+binary, which is the reason they are placed at all, and that was measured rather
+than assumed. They are copies and not symlinks, which took a second live probe to
+learn: the sandbox binds the guidance read-only inside the turn, and bubblewrap
+cannot bind a path that is a symlink into a read-only tree.
 
 Two halves: what `codex-cli 0.153.4` reads out of a `cwd`, measured on a
 development machine on 11 September 2026 with no model called at all; and one
@@ -45,9 +48,8 @@ rendered input:
 So the harness reads both out of the thread's `cwd` and out of nowhere else: with
 no `.git` anywhere above, there is no project root to walk up to, and moving the
 thread off the checkout without the links would silently produce an agent with no
-guidance and no skills. A symlink is enough, and it is what the runtime places, so
-the bytes stay in the checkout install unpacked and `current` swinging is the only
-thing that changes them.
+guidance and no skills. A symlink satisfies this half — it was the first shape
+the runtime shipped — and half four is where it stops being enough.
 
 ## Half two: the sandbox mount point, on the box
 
@@ -70,4 +72,5 @@ PA-181 failure. And the mount point bubblewrap creates does not survive the
 namespace: the work directory holds no `.git` afterwards, so HC-16 — nothing
 install places is a clone — reads exactly as it did before.
 
-## Half three: a live agent, on a real box
+## Half three: a symlink is not enough
+

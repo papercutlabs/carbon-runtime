@@ -52,59 +52,71 @@ export function placesUnder(agentDir) {
 
 // What the harness reads out of the thread's `cwd` and out of nowhere else:
 // `AGENTS.md`, the agent's guidance, and `.agents/`, which holds its skills.
-// Verified against the pinned binary on 11 September (carbon-runtime
-// runtime/proofs/20260911-thread-cwd.md): with `cwd` set to a directory holding
-// neither, the rendered prompt carries no guidance and lists no skill; with each
-// one present as a symlink into the checkout, both come back.
+// Verified against the pinned binary on 11 September (runtime/proofs/
+// 20260911-thread-cwd.md): with `cwd` set to a directory holding neither, the
+// rendered prompt carries no guidance and lists no skill.
 export const GUIDANCE_NAMES = ['AGENTS.md', '.agents'];
 
-// Links the checkout's guidance into the work directory, and returns the names it
-// linked.
+// Places the checkout's guidance in the work directory, and returns the names it
+// placed.
 //
-// A link rather than a copy, because the checkout stays the authority: the bytes
-// live in the version directory install unpacked, `current` swings to the next
-// one, and a copy would be a second answer that goes stale between installs. It
-// is the runtime that places them rather than install, because the work directory
-// is the agent user's own and the runtime is the thing that opens a thread on it;
-// the on-box half of install is root-owned and changing it is a host-contract
-// bump.
+// A copy and not a symlink, which was the first shape and does not survive the
+// sandbox. The harness's Linux sandbox binds the guidance read-only inside the
+// turn's namespace, and bubblewrap cannot bind a path that is a symlink into a
+// read-only tree: it resolves the source outside the namespace and then fails to
+// find the destination inside it, with `Can't bind mount <checkout>/.agents on
+// <work>/.agents: Unable to mount source on destination: No such file or
+// directory`, and the shell dies before it runs anything — the same class of
+// failure as PA-181 itself, one step along. What stands in the work directory has
+// to be real.
 //
-// A name that is already a symlink is replaced, so an install that changes what
-// the checkout carries is followed. A name that is a real file or directory is
-// refused: the harness would read it instead of the checkout's, and an agent
-// whose guidance is something nobody installed is not the agent the declaration
-// describes.
-export function linkGuidance({ work, checkout, log = () => {} }) {
+// The checkout stays the authority all the same. These two names belong to the
+// runtime: it deletes whatever is at them and writes them again from the checkout
+// at every start, and an install always restarts the unit, so the copy cannot
+// drift from what was installed and nothing a turn writes there outlives the run.
+// The runtime places them rather than install because the work directory is the
+// agent user's own and the on-box half of install is root-owned.
+// A copy that follows every symlink it meets, at any depth, because a symlink
+// anywhere inside is the same wall the sandbox hits. `fs.cpSync` with
+// `dereference` follows only the path it was given, so this walks it by hand. The
+// depth cap is what a symlink pointing at its own parent would otherwise do to
+// this process.
+const MAX_GUIDANCE_DEPTH = 64;
+
+function copyResolved(from, to, name, depth = 0) {
+  if (depth > MAX_GUIDANCE_DEPTH) {
+    throw new RuntimeFault(fault('GUIDANCE_TOO_DEEP', from,
+      `${name} in the checkout nests more than ${MAX_GUIDANCE_DEPTH} directories deep, which is what a symlink pointing back at its own parent looks like`,
+      'straighten the directory out in the client repository, and install again'));
+  }
+  const stat = fs.statSync(from);
+  if (!stat.isDirectory()) {
+    fs.copyFileSync(from, to);
+    return;
+  }
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from)) {
+    copyResolved(path.join(from, entry), path.join(to, entry), name, depth + 1);
+  }
+}
+
+export function placeGuidance({ work, checkout, log = () => {} }) {
   if (!fs.existsSync(work)) {
     throw new RuntimeFault(fault('WORK_DIR_ABSENT', work,
       'the work directory is the directory a thread is opened on, and there is nothing at this path',
       'run carbon install, which places the work directory, or pass --work at a path that exists'));
   }
-  const linked = [];
+  const placed = [];
   for (const name of GUIDANCE_NAMES) {
     const at = path.join(work, name);
     const target = path.join(checkout, name);
-    let existing = null;
-    try { existing = fs.lstatSync(at); } catch { existing = null; }
-    if (existing && !existing.isSymbolicLink()) {
-      throw new RuntimeFault(fault('GUIDANCE_NAME_OCCUPIED', at,
-        `${name} in the work directory is a real ${existing.isDirectory() ? 'directory' : 'file'}, and the harness would read it instead of the one in the checkout`,
-        'remove it from the work directory; an agent\'s guidance is changed by a commit and an install, never by a file written beside it'));
-    }
-    if (!fs.existsSync(target)) {
-      if (existing) fs.unlinkSync(at);
-      continue;
-    }
-    if (existing && fs.readlinkSync(at) === target) {
-      linked.push(name);
-      continue;
-    }
-    if (existing) fs.unlinkSync(at);
-    fs.symlinkSync(target, at);
-    linked.push(name);
+    fs.rmSync(at, { recursive: true, force: true });
+    if (!fs.existsSync(target)) continue;
+    copyResolved(target, at, name);
+    placed.push(name);
   }
-  log({ event: 'guidance.linked', work, checkout, names: linked });
-  return linked;
+  log({ event: 'guidance.placed', work, checkout, names: placed });
+  return placed;
 }
 
 export function readDeclaration(file) {
@@ -247,7 +259,7 @@ export async function run(options) {
 
     // Before the harness is started, because the guidance it loads is read when a
     // thread is opened on the work directory and there is no second chance at it.
-    linkGuidance({ work, checkout, log });
+    placeGuidance({ work, checkout, log });
 
     toolServers.push(...startToolServers(declaration, { declarationPath }));
     for (const server of toolServers) log({ event: 'tool_server.started', name: server.name, url: server.url });
