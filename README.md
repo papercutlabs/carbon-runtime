@@ -110,7 +110,7 @@ serves the `reply` tool on loopback. Then, on every pass: poll the channel,
 recover what the last run owed, capture what is pending past the cursors, release
 what the channel's policy allows, and deliver what the model replied.
 
-Eight rules are worth stating on their own.
+Nine rules are worth stating on their own.
 
 1. **The release is written on the record before the turn starts.** A restart
    reads the store, not the harness's files: a release with a sent reply is
@@ -169,6 +169,18 @@ Eight rules are worth stating on their own.
 8. **A latch is a stop, not a note.** `channels/<account>/<kind>.latch.json`
    stops the process with exit code 78, which the unit does not restart on, and
    only the next install clears it.
+9. **A thread opens on the work directory, not on the checkout.** Under
+   `workspace-write` the harness treats `cwd` as a writable root and protects
+   that root's `.git` by binding it over itself, which means it has to be able to
+   create that mount point; the checkout is read-only and carries no `.git`,
+   because a client box holds no repository, so a thread opened on it has a shell
+   that dies in bubblewrap before it runs anything. `work/` is the agent user's
+   own directory and is the `cwd`. The checkout stays at `current/repo`,
+   read-only by ownership and mode, every turn's input names it, and the two
+   things the harness reads out of `cwd` alone — `AGENTS.md` and `.agents/` —
+   are linked into `work/` from it at start, so the checkout stays the one place
+   an agent's guidance and skills live. The trust block install renders into
+   `config.toml` names the work directory for the same reason.
 
 `runtime/proofs/` holds what has been run for real against the pinned harness.
 

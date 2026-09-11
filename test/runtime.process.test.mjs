@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { PROVIDER_AUTH, providerKey, run } from '../runtime/index.mjs';
+import { PROVIDER_AUTH, providerKey, run, placesUnder, linkGuidance, GUIDANCE_NAMES } from '../runtime/index.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { takeLock, lockFile, commandLineOf } from '../runtime/lock.mjs';
 import { latch, refuseIfLatched } from '../runtime/latch.mjs';
@@ -52,13 +52,17 @@ async function runOnce(options = {}) {
   const declarationPath = path.join(dir, 'carbon.agent.json');
   const decl = options.declaration ?? declaration();
   fs.writeFileSync(declarationPath, JSON.stringify(decl, null, 2));
+  // The work directory is the thread's own and the runtime links the checkout's
+  // guidance into it, so it has to exist before a run the way install makes it.
+  fs.mkdirSync(path.join(dir, 'work'), { recursive: true });
   const log = [];
   const code = await run({
     declaration: decl,
     declarationPath,
     storeDir: path.join(dir, 'store'),
     codexHome: path.join(dir, 'codex-home'),
-    checkout: dir,
+    checkout: path.join(dir, 'repo'),
+    work: path.join(dir, 'work'),
     harnessRoot: path.join(dir, 'harness'),
     binary: '/nowhere/codex',
     replyPort: port(),
@@ -327,4 +331,69 @@ test('a declaration that names neither way of authenticating is refused by name'
   assert.throws(() => providerKey({ provider: { name: 'openai' } }),
     (error) => error.faults.some((f) => f.code === 'PROVIDER_AUTH_UNKNOWN'));
   assert.deepEqual(PROVIDER_AUTH, ['chatgpt', 'api_key']);
+});
+
+// ---- the directory a thread opens on (PA-181) --------------------------------
+
+test('the work directory is one of the places under an agent directory', () => {
+  const under = placesUnder('/srv/carbon/examplecorp-agent');
+  assert.equal(under.work, '/srv/carbon/examplecorp-agent/work');
+  assert.equal(under.checkout, '/srv/carbon/examplecorp-agent/current/repo');
+});
+
+// The harness reads AGENTS.md and .agents out of the thread's working directory
+// and out of nowhere else (verified against the pinned binary, 11 September), so
+// moving the thread off the checkout would lose the agent's guidance and its
+// skills. They are linked rather than copied: the bytes stay in the checkout,
+// which is the authority, and `current` swinging is enough to change them.
+test('the checkout\'s guidance is linked into the work directory', () => {
+  const dir = tmp('guidance');
+  const checkout = path.join(dir, 'repo');
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(path.join(checkout, '.agents', 'skills'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
+  fs.mkdirSync(work, { recursive: true });
+
+  assert.deepEqual(linkGuidance({ work, checkout }), GUIDANCE_NAMES);
+  for (const name of GUIDANCE_NAMES) {
+    assert.equal(fs.readlinkSync(path.join(work, name)), path.join(checkout, name));
+  }
+  assert.equal(fs.readFileSync(path.join(work, 'AGENTS.md'), 'utf8'), 'the guidance\n');
+});
+
+test('a link left by an earlier install is repointed, and a name the checkout does not carry is left unlinked', () => {
+  const dir = tmp('guidance');
+  const checkout = path.join(dir, 'repo');
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(checkout, { recursive: true });
+  fs.mkdirSync(work, { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
+  fs.symlinkSync(path.join(dir, 'elsewhere', 'AGENTS.md'), path.join(work, 'AGENTS.md'));
+  fs.symlinkSync(path.join(dir, 'elsewhere', '.agents'), path.join(work, '.agents'));
+
+  assert.deepEqual(linkGuidance({ work, checkout }), ['AGENTS.md']);
+  assert.equal(fs.readlinkSync(path.join(work, 'AGENTS.md')), path.join(checkout, 'AGENTS.md'));
+  assert.equal(fs.existsSync(path.join(work, '.agents')), false);
+});
+
+// A file the agent wrote is not guidance. The harness would read it in place of
+// the checkout's, and an agent whose guidance nobody installed is not the agent
+// the declaration describes.
+test('a real file standing where the guidance link goes is refused by name', () => {
+  const dir = tmp('guidance');
+  const checkout = path.join(dir, 'repo');
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(checkout, { recursive: true });
+  fs.mkdirSync(work, { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
+  fs.writeFileSync(path.join(work, 'AGENTS.md'), 'something the model wrote\n');
+
+  assert.throws(() => linkGuidance({ work, checkout }),
+    (error) => error.faults.some((f) => f.code === 'GUIDANCE_NAME_OCCUPIED'));
+});
+
+test('a run with no work directory on the box is refused rather than opened somewhere else', () => {
+  const dir = tmp('guidance');
+  assert.throws(() => linkGuidance({ work: path.join(dir, 'work'), checkout: dir }),
+    (error) => error.faults.some((f) => f.code === 'WORK_DIR_ABSENT'));
 });

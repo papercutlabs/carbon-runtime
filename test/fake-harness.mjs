@@ -33,14 +33,21 @@ export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] } 
 
     async connect() { return session; },
 
-    async openThread(s, { unitId }) {
+    async openThread(s, params) {
+      const { unitId } = params;
       opened += 1;
+      // What the thread was opened on, kept because the directory a thread opens
+      // on is a rule of its own (PA-181) and a fake that dropped it could not test
+      // that rule.
+      s.opens = [...(s.opens ?? []), params];
       const thread_id = `thread-${opened}`;
       s.threads.set(unitId, thread_id);
       return { unit_id: unitId, thread_id, model: 'fake', effort: 'low', started_at: new Date().toISOString() };
     },
 
-    async resumeThread(s, { threadId }) {
+    async resumeThread(s, params) {
+      const { threadId } = params;
+      s.opens = [...(s.opens ?? []), params];
       s.resumed = [...(s.resumed ?? []), threadId];
       return { thread: { id: threadId }, status: { type: 'idle' } };
     },
