@@ -194,10 +194,21 @@ export function attachmentLines(record, store = null) {
   return ['', ...lines];
 }
 
-export function turnInput(record, releaseId, { store = null } = {}) {
+// Where the agent's own repository is, said in the turn because the thread is no
+// longer opened on it. The working directory is `work/` (PA-181), the checkout is
+// read-only at the stable path, and its guidance and skills are linked into the
+// working directory so the harness still loads them; what the model cannot work
+// out for itself is where the rest of that repository is when it wants to read a
+// file or run a tool out of it.
+export function checkoutLine(checkout) {
+  return `Your agent repository is at ${checkout}. It is read-only; its guidance and skills are already loaded, and anything else in it you read there by absolute path.`;
+}
+
+export function turnInput(record, releaseId, { store = null, checkout = null } = {}) {
   const instruction = replyInstruction(record, releaseId);
   return [
     instruction,
+    ...(checkout ? [checkoutLine(checkout)] : []),
     '',
     `A message arrived on conversation ${record.conversation_id}.`,
     `from: ${record.sender_name ?? record.sender_id}`,
@@ -264,8 +275,13 @@ export function endsTheProcess(error) {
 export class ReleaseLoop {
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
-    agent, checkout, log = () => {}, now = () => Date.now()
+    agent, checkout, work, log = () => {}, now = () => Date.now()
   }) {
+    if (!work) {
+      throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
+        'no work directory was named, and the work directory is the directory a thread is opened on',
+        'pass the agent\'s work directory; on a box it is <agent dir>/work'));
+    }
     this.declaration = declaration;
     this.channel = channel;
     this.store = store;
@@ -275,6 +291,11 @@ export class ReleaseLoop {
     this.session = session;
     this.agent = agent;
     this.checkout = checkout;
+    // The directory a thread is opened on. It is the work directory and not the
+    // checkout (PA-181): the harness's sandbox makes `cwd` a writable root and
+    // binds `cwd/.git` over itself, and the checkout is read-only with no `.git`
+    // in it, so a turn that runs one local command dies before the shell starts.
+    this.work = work;
     this.log = log;
     this.now = now;
     this.threads = new Map();
@@ -307,7 +328,7 @@ export class ReleaseLoop {
     if (this.threads.has(unitId)) return this.threads.get(unitId);
     const existing = this.store.readThread(unitId);
     const opening = {
-      cwd: this.checkout,
+      cwd: this.work,
       model: this.declaration.model,
       effort: this.declaration.effort,
       sandbox: this.declaration.sandbox?.mode,
@@ -569,7 +590,7 @@ export class ReleaseLoop {
 
     const { result, completedAt } = await this.takeTurn({
       unitId, threadId, releaseId,
-      input: turnInput(record, releaseId, { store: this.store }),
+      input: turnInput(record, releaseId, { store: this.store, checkout: this.checkout }),
       clientUserMessageId: releaseId
     });
 

@@ -76,7 +76,8 @@ function makeLoop({ adapter = fixture, channel = {}, onTurn = null } = {}) {
     harness,
     session: harness.session,
     agent: AGENT,
-    checkout: dir,
+    checkout: path.join(dir, 'repo'),
+    work: dir,
     log: (line) => lines.push(line)
   });
   return { loop, store, dir, harness, lines, declaration: decl };
@@ -257,6 +258,7 @@ test('the runtime refuses to start a channel declared below its adapter\'s floor
     storeDir: dir,
     codexHome: dir,
     checkout: dir,
+    work: dir,
     harnessRoot: dir,
     binary: '/nowhere/codex',
     harness: fakeHarness({ statuses: REPLY_LISTED }),
@@ -321,7 +323,8 @@ test('the loop polls the email adapter and captures what the mailbox held', asyn
     harness,
     session: harness.session,
     agent: AGENT,
-    checkout: dir
+    checkout: path.join(dir, 'repo'),
+    work: dir
   });
 
   const result = await loop.pass();

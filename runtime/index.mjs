@@ -27,21 +27,84 @@ import { resolveChannel } from './channel.mjs';
 // Where each thing lives under an agent directory. Install renders the left-hand
 // side; the runtime reads it and guesses none of it.
 //
-// The checkout is `current/repo`, and it is the thread's `cwd`. It is not the
-// agent's scratch directory, and the two are deliberately different places: under
-// `workspace-write` everything below `cwd` is writable whatever `writableRoots`
-// says, so the only thing that holds a checkout still is its ownership and mode.
-// Install unpacks it owned by the tools user at 0555 and 0444, which the agent
-// user cannot change. `work/` stays beside it, agent-owned and writable, for the
-// unit's log and for anything a tool server keeps between runs.
+// The checkout is `current/repo` and the thread's `cwd` is `work/`, and the two
+// are deliberately different places. Under `workspace-write` everything below
+// `cwd` is writable whatever `writableRoots` says, so a checkout under `cwd`
+// would be the model's to edit; and the harness's Linux sandbox protects a
+// writable root's `.git` by binding it over itself, which needs that mount point
+// to be creatable. A checkout that is read-only and carries no `.git` — HC-16 is
+// the line that forbids one on a client box — can be neither, and a turn that
+// runs one local command dies in bubblewrap before the shell starts (PA-181).
+// So `work/` is the `cwd`: agent-owned, writable, already the unit's log
+// directory. The checkout stays at the stable path, read-only by ownership and
+// mode (the tools user owns it at 0555 and 0444), the turn input names it, and
+// the guidance the harness loads from `cwd` is linked into `work/` from it.
 export function placesUnder(agentDir) {
   return {
     declaration: path.join(agentDir, 'current', 'carbon.agent.json'),
     store: path.join(agentDir, 'store'),
     codexHome: path.join(agentDir, 'codex-home'),
     checkout: path.join(agentDir, 'current', 'repo'),
+    work: path.join(agentDir, 'work'),
     harnessRoot: path.join(agentDir, 'harness')
   };
+}
+
+// What the harness reads out of the thread's `cwd` and out of nowhere else:
+// `AGENTS.md`, the agent's guidance, and `.agents/`, which holds its skills.
+// Verified against the pinned binary on 11 September (carbon-runtime
+// runtime/proofs/20260911-thread-cwd.md): with `cwd` set to a directory holding
+// neither, the rendered prompt carries no guidance and lists no skill; with each
+// one present as a symlink into the checkout, both come back.
+export const GUIDANCE_NAMES = ['AGENTS.md', '.agents'];
+
+// Links the checkout's guidance into the work directory, and returns the names it
+// linked.
+//
+// A link rather than a copy, because the checkout stays the authority: the bytes
+// live in the version directory install unpacked, `current` swings to the next
+// one, and a copy would be a second answer that goes stale between installs. It
+// is the runtime that places them rather than install, because the work directory
+// is the agent user's own and the runtime is the thing that opens a thread on it;
+// the on-box half of install is root-owned and changing it is a host-contract
+// bump.
+//
+// A name that is already a symlink is replaced, so an install that changes what
+// the checkout carries is followed. A name that is a real file or directory is
+// refused: the harness would read it instead of the checkout's, and an agent
+// whose guidance is something nobody installed is not the agent the declaration
+// describes.
+export function linkGuidance({ work, checkout, log = () => {} }) {
+  if (!fs.existsSync(work)) {
+    throw new RuntimeFault(fault('WORK_DIR_ABSENT', work,
+      'the work directory is the directory a thread is opened on, and there is nothing at this path',
+      'run carbon install, which places the work directory, or pass --work at a path that exists'));
+  }
+  const linked = [];
+  for (const name of GUIDANCE_NAMES) {
+    const at = path.join(work, name);
+    const target = path.join(checkout, name);
+    let existing = null;
+    try { existing = fs.lstatSync(at); } catch { existing = null; }
+    if (existing && !existing.isSymbolicLink()) {
+      throw new RuntimeFault(fault('GUIDANCE_NAME_OCCUPIED', at,
+        `${name} in the work directory is a real ${existing.isDirectory() ? 'directory' : 'file'}, and the harness would read it instead of the one in the checkout`,
+        'remove it from the work directory; an agent\'s guidance is changed by a commit and an install, never by a file written beside it'));
+    }
+    if (!fs.existsSync(target)) {
+      if (existing) fs.unlinkSync(at);
+      continue;
+    }
+    if (existing && fs.readlinkSync(at) === target) {
+      linked.push(name);
+      continue;
+    }
+    if (existing) fs.unlinkSync(at);
+    fs.symlinkSync(target, at);
+    linked.push(name);
+  }
+  log({ event: 'guidance.linked', work, checkout, names: linked });
+  return linked;
 }
 
 export function readDeclaration(file) {
@@ -131,7 +194,7 @@ function isChildExit(error) {
 // can run it and read the answer.
 export async function run(options) {
   const {
-    declaration, declarationPath, storeDir, codexHome, checkout, harnessRoot,
+    declaration, declarationPath, storeDir, codexHome, checkout, work, harnessRoot,
     binary = null, replyPort = REPLY_PORT,
     harness, adapters = null, items = () => [],
     passes = Infinity, log = () => {}, now = () => Date.now()
@@ -182,6 +245,10 @@ export async function run(options) {
       }
     }
 
+    // Before the harness is started, because the guidance it loads is read when a
+    // thread is opened on the work directory and there is no second chance at it.
+    linkGuidance({ work, checkout, log });
+
     toolServers.push(...startToolServers(declaration, { declarationPath }));
     for (const server of toolServers) log({ event: 'tool_server.started', name: server.name, url: server.url });
 
@@ -218,7 +285,7 @@ export async function run(options) {
     const loops = loaded.map(({ channel, adapter, interval_ms }) => {
       const loop = new ReleaseLoop({
         declaration, channel, store, storeDir, adapter, harness, session,
-        agent: declaration.agent?.id, checkout, log, now
+        agent: declaration.agent?.id, checkout, work, log, now
       });
       loop.intervalMs = interval_ms;
       if (harness.onToolServerStatus) {

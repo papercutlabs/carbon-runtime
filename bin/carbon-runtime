@@ -19,7 +19,7 @@ const HELP = `carbon-runtime — run one client agent: the harness, the adapters
 Usage:
   carbon-runtime run --agent-dir <dir>
   carbon-runtime run --declaration <file> --store <dir> --codex-home <dir> --checkout <dir>
-                     [--binary <path>] [--harness-root <dir>]
+                     --work <dir> [--binary <path>] [--harness-root <dir>]
                      [--reply-port <n>] [--items <file>] [--passes <n>]
 
 On a box there is one form: --agent-dir. Everything the runtime needs was
@@ -28,7 +28,8 @@ rendered into that directory by install, and it is read from there:
   <agent-dir>/current/carbon.agent.json   the declaration
   <agent-dir>/store                       the store, and the latch under it
   <agent-dir>/codex-home                  CODEX_HOME: config.toml and the rollouts
-  <agent-dir>/current/repo                the checkout, and the thread's working directory
+  <agent-dir>/current/repo                the checkout, read-only, the agent's own repository
+  <agent-dir>/work                        the thread's working directory, and the unit's log
   <agent-dir>/harness/<version>/codex     the pinned harness binary
 
 Off a box each of those is passed explicitly. Nothing is guessed and nothing has
@@ -38,7 +39,10 @@ a default that points at a real path.
   --declaration <file>  the declaration to run from
   --store <dir>         the store this agent writes into
   --codex-home <dir>    CODEX_HOME for the harness child
-  --checkout <dir>      the working directory a thread is opened on
+  --checkout <dir>      the agent's checkout, read-only, named in every turn's input
+  --work <dir>          the working directory a thread is opened on; the checkout's
+                        AGENTS.md and .agents are linked into it, because the harness
+                        reads those out of the working directory and out of nowhere else
   --binary <path>       the harness binary, when it is not under --harness-root
   --harness-root <dir>  where the pinned binaries are unpacked, one directory per version
   --reply-port <n>      the loopback port the reply tool listens on (default ${REPLY_PORT},
@@ -81,7 +85,7 @@ Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
   ${EXIT.LATCHED}  the terminal latch: a person decides, and carbon install clears it`;
 
 const BOOLEAN_FLAGS = [];
-const FLAGS = ['agent-dir', 'declaration', 'store', 'codex-home', 'checkout', 'binary',
+const FLAGS = ['agent-dir', 'declaration', 'store', 'codex-home', 'checkout', 'work', 'binary',
   'harness-root', 'reply-port', 'items', 'passes'];
 
 function parse(argv) {
@@ -109,7 +113,7 @@ function parse(argv) {
 
 function places(args, faults) {
   if (args['agent-dir']) {
-    for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'harness-root']) {
+    for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'work', 'harness-root']) {
       if (args[name]) {
         faults.push(fault('ARGUMENTS_CONFLICT', `--${name}`,
           '--agent-dir says where everything is, so a second path for the same thing is two answers to one question',
@@ -122,14 +126,15 @@ function places(args, faults) {
       storeDir: under.store,
       codexHome: under.codexHome,
       checkout: under.checkout,
+      work: under.work,
       harnessRoot: under.harnessRoot
     };
   }
-  for (const name of ['declaration', 'store', 'codex-home', 'checkout']) {
+  for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'work']) {
     if (!args[name]) {
       faults.push(fault('MISSING_ARGUMENT', `--${name}`,
         'a run without --agent-dir names every path itself, and this one is missing',
-        'pass --agent-dir <dir>, or pass --declaration, --store, --codex-home and --checkout'));
+        'pass --agent-dir <dir>, or pass --declaration, --store, --codex-home, --checkout and --work'));
     }
   }
   return {
@@ -137,6 +142,7 @@ function places(args, faults) {
     storeDir: args.store ? path.resolve(args.store) : null,
     codexHome: args['codex-home'] ? path.resolve(args['codex-home']) : null,
     checkout: args.checkout ? path.resolve(args.checkout) : null,
+    work: args.work ? path.resolve(args.work) : null,
     harnessRoot: args['harness-root'] ? path.resolve(args['harness-root']) : null
   };
 }
@@ -178,6 +184,7 @@ async function main(argv) {
     storeDir: where.storeDir,
     codexHome: where.codexHome,
     checkout: where.checkout,
+    work: where.work,
     harnessRoot: where.harnessRoot,
     binary: args.binary ? path.resolve(args.binary) : null,
     replyPort: args['reply-port'] ? Number(args['reply-port']) : REPLY_PORT,

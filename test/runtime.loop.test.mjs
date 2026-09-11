@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Store } from '../stream/store.mjs';
 import {
   ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
-  toolCallsIn, MAX_INLINE_ATTACHMENT_BYTES
+  checkoutLine, toolCallsIn, MAX_INLINE_ATTACHMENT_BYTES
 } from '../runtime/loop.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
@@ -52,7 +52,8 @@ function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED
     harness,
     session: harness.session,
     agent: AGENT,
-    checkout: dir
+    checkout: path.join(dir, 'repo'),
+    work: dir
   });
   return { loop, store, dir, harness };
 }
@@ -455,6 +456,36 @@ test('a turn that calls the reply tool is never followed up', async () => {
 
   assert.equal(harness.session.turns.length, 1, 'a reply was followed up anyway');
   assert.equal(result.released[0].reply, 'replied');
+});
+
+// PA-181. The sandbox makes `cwd` a writable root and binds `cwd/.git` over
+// itself, and the checkout is read-only with no `.git` in it, so a thread opened
+// on the checkout is a thread whose shell dies in bubblewrap before it runs
+// anything. The work directory is the agent user's own and is where a thread
+// opens.
+test('a thread is opened on the work directory and never on the checkout', async () => {
+  const { loop, harness, dir } = makeLoop();
+  await loop.pass([item(1, 'a question')]);
+  assert.equal(harness.session.opens.length, 1);
+  assert.equal(harness.session.opens[0].cwd, dir);
+  assert.notEqual(harness.session.opens[0].cwd, loop.checkout);
+});
+
+test('a loop with no work directory is refused rather than opened on the checkout', () => {
+  assert.throws(() => new ReleaseLoop({
+    declaration: declaration(), channel: declaration().channels[0], store: null, storeDir: '/tmp',
+    adapter: fixture, harness: null, session: null, agent: AGENT, checkout: '/tmp/repo'
+  }), (error) => error.faults.some((f) => f.code === 'WORK_DIR_UNNAMED'));
+});
+
+// The thread no longer opens on the checkout, so the turn says where it is: the
+// guidance and the skills are linked into the working directory and load by
+// themselves, and everything else in the repository is read by absolute path.
+test('the turn input names the checkout, because the thread is not opened on it', () => {
+  const record = { conversation_id: 'c-9', sender_id: 'someone', received_at: '2026-09-10T10:00:00.000Z', body: 'hello' };
+  const input = turnInput(record, 'release-1', { checkout: '/srv/carbon/a/current/repo' });
+  assert.ok(input.includes(checkoutLine('/srv/carbon/a/current/repo')), input);
+  assert.ok(!turnInput(record, 'release-1').includes('/srv/carbon/a/current/repo'));
 });
 
 test('the reply instruction is the first line and the last line of the turn', () => {
