@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Store } from '../stream/store.mjs';
 import {
   ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
-  checkoutLine, toolCallsIn, MAX_INLINE_ATTACHMENT_BYTES
+  checkoutLine, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES
 } from '../runtime/loop.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
@@ -715,4 +715,27 @@ test('an oversize attachment parks nothing, ends nothing, and the message still 
 
   assert.equal(inputs.length, 1, 'the turn the model saw never ran');
   assert.match(String(inputs[0]), /archive\.pdf \(application\/pdf, 40000000 bytes, sha256 b{64}\): too large to capture, so its bytes are not on this box\./);
+});
+
+// PA-181's third finding: a turn whose shell died in the sandbox looked, in the
+// log, exactly like a turn that chose to run nothing. A command is an item on the
+// turn and not a tool call, so the tool names never said. The text is left out the
+// way a tool call's arguments are; the working directory is in, because it says
+// which directory the thread was opened on.
+test('a turn that ran a local command says so in its log line, by status and never by text', () => {
+  const commands = commandsIn([
+    { type: 'commandExecution', command: "/bin/sh -c 'ls /srv/carbon/a/current/repo'", cwd: '/srv/carbon/a/work', status: 'completed', exitCode: 0 },
+    { type: 'mcpToolCall', server: 'carbon-reply', tool: 'reply', status: 'completed' },
+    { type: 'commandExecution', command: '/bin/sh -c false', cwd: '/srv/carbon/a/work', status: 'failed', exitCode: 1 }
+  ]);
+  assert.deepEqual(commands, [
+    { cwd: '/srv/carbon/a/work', status: 'completed', exit_code: 0 },
+    { cwd: '/srv/carbon/a/work', status: 'failed', exit_code: 1 }
+  ]);
+  assert.ok(!JSON.stringify(commands).includes('ls '));
+});
+
+test('a turn that ran nothing locally logs an empty list, which is an answer', () => {
+  assert.deepEqual(commandsIn([{ type: 'mcpToolCall', server: 'carbon-reply', tool: 'reply', status: 'completed' }]), []);
+  assert.deepEqual(commandsIn(null), []);
 });

@@ -120,11 +120,15 @@ Nine rules are worth stating on their own.
    id a turn carries, so the runtime tells the model which `request_id` to use,
    that id is the release id and is the same on a re-issue, and the store
    answers a repeat rather than sending twice.
-3. **A turn's log line says what it cost and which tools it called.** The token
-   breakdown and the tool names, by name and never by argument: an argument
-   carries the client's own content and the log is read by anyone who can read the
-   unit's output. Without the names, "did the agent read the client's system or
-   answer out of the conversation" cannot be settled from outside the box.
+3. **A turn's log line says what it cost, which tools it called and what it ran
+   locally.** The token breakdown, the tool names and one entry per shell command
+   with its working directory, status and exit code — never an argument and never
+   the command text, because both carry the client's own content and the log is
+   read by anyone who can read the unit's output. Without the names, "did the
+   agent read the client's system or answer out of the conversation" cannot be
+   settled from outside the box; without the commands, neither can "did the
+   agent's shell run at all", which is the question a turn whose shell died in
+   the sandbox answered by looking exactly like a turn that ran nothing.
 4. **A completed turn is not an answered message.** The reply tool is the one
    door out of a turn, and a model that writes its answer into its own message
    has delivered nothing. So the instruction is the first line and the last line
