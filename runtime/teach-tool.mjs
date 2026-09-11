@@ -114,7 +114,7 @@ function refuseOutsideManagement(management, { conversation_id }) {
   if (faults.length > 0) throw new ToolFault(faults);
 }
 
-function rememberHandler({ store, agent, teaching, management, now = () => new Date().toISOString() }) {
+function rememberHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }) {
   return (args) => {
     refuseOutsideManagement(management, args);
     let written;
@@ -126,6 +126,7 @@ function rememberHandler({ store, agent, teaching, management, now = () => new D
         source_message_id: args.source_message_id,
         max_active: teaching.max_active,
         max_chars: teaching.max_chars,
+        release_id: release(),
         now: now()
       });
     } catch (thrown) {
@@ -140,7 +141,7 @@ function rememberHandler({ store, agent, teaching, management, now = () => new D
   };
 }
 
-function raiseChangeHandler({ store, agent, teaching, management, now = () => new Date().toISOString() }) {
+function raiseChangeHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }) {
   return (args) => {
     refuseOutsideManagement(management, args);
     let written;
@@ -152,6 +153,7 @@ function raiseChangeHandler({ store, agent, teaching, management, now = () => ne
         source_message_id: args.source_message_id,
         failed_question: args.failed_question,
         max_chars: teaching.max_chars,
+        release_id: release(),
         now: now()
       });
     } catch (thrown) {
@@ -189,23 +191,38 @@ function forgetHandler({ store, management, now = () => new Date().toISOString()
   };
 }
 
-export function createTeachServer({ store, agent, declaration }) {
+// The release the turn being taken is under, which the record a call writes says
+// it was written under. The server does not work it out: the release loop is what
+// knows, and it says so before each turn and takes it back after. A caller that
+// runs no release loop — a scored run, which hosts these tools for the length of
+// one turn and has no release — names none, and the records it writes carry no
+// release_id, which is the truth about them.
+export function createTeachServer({ store, agent, declaration, release = () => null }) {
   const teaching = teachingOf(declaration);
   const management = managementConversationOf(declaration);
   return createServer({
     manifest: MANIFEST,
     handlers: {
-      remember: rememberHandler({ store, agent, teaching, management }),
-      raise_change: raiseChangeHandler({ store, agent, teaching, management }),
+      remember: rememberHandler({ store, agent, teaching, management, release }),
+      raise_change: raiseChangeHandler({ store, agent, teaching, management, release }),
       forget: forgetHandler({ store, management })
     }
   });
 }
 
 export async function serveTeachTool({ store, agent, declaration, host = '127.0.0.1', port = TEACH_PORT }) {
-  const server = createTeachServer({ store, agent, declaration });
+  // One value, held here and read at the moment a call arrives, because turns are
+  // taken one at a time in this process: two channels on one agent are two loops
+  // that never take a turn at the same moment.
+  let current = null;
+  const server = createTeachServer({ store, agent, declaration, release: () => current });
   const { server: http, url } = await server.serveHttp({ host, port });
-  return { http, url, close: () => new Promise((resolve) => http.close(resolve)) };
+  return {
+    http,
+    url,
+    setRelease: (release_id) => { current = release_id ?? null; },
+    close: () => new Promise((resolve) => http.close(resolve))
+  };
 }
 
 // ---- serving it as a process of its own -------------------------------------

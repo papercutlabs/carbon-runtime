@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // carbon-stream — the conformance check for the store contract.
 //
-// An adapter is a thing that passes its subset of the twenty-three cases. This is
+// An adapter is a thing that passes its subset of the twenty-four cases. This is
 // the command that says whether it does.
 
 import fs from 'node:fs';
@@ -34,7 +34,7 @@ The cases run are the ones that apply to what the adapter declared in
 capabilities: inbound, outbound, import, in any combination. A source that only
 produces is never asked about replies.
 
-The twenty-three cases:
+The twenty-four cases:
 ${CASES.map((c) => `  ${String(c.number).padStart(2)}  ${c.name} [${c.capabilities.join(', ')}]`).join('\n')}`;
 
 async function main(argv) {

@@ -1,4 +1,4 @@
-// The twenty-three conformance cases. An adapter is a thing that passes its subset
+// The twenty-four conformance cases. An adapter is a thing that passes its subset
 // of them: the check runs a case only when the adapter declared a capability the
 // case applies to.
 //
@@ -537,6 +537,34 @@ export const CASES = [
       assert.equal(raised.record.taught_by.sender_id, capture.sender_id);
       assert.equal(listTeachings(context.store).open.length, 1);
       throws(() => raiseChange(context.store, { ...call, failed_question: 9 }), 'TEACHING_QUESTION_UNKNOWN');
+    }
+  },
+  {
+    number: 24,
+    name: 'a reply held for the teach check is never sendable until it is let go, and its text is untouched',
+    capabilities: ['outbound'],
+    run(context) {
+      ingest(context, context.fixtures['inbound.json']);
+      const [request] = context.fixtures['outbound.json'];
+      const written = context.store.reply(replyRecord(context, request), { status: 'pending-teach-check' });
+      const on_disk = context.store.read(written.record.conversation_id, written.record.message_id, 0);
+      assert.equal(on_disk.delivery.status, 'pending-teach-check');
+
+      // A held reply is a written reply: one request id is one reply, whether it
+      // waits for the transport or for the check.
+      throws(() => context.store.reply(replyRecord(context, request)), 'REQUEST_ALREADY_PENDING');
+
+      const let_go = context.store.releaseHeldReply(request.request_id);
+      assert.equal(let_go.delivery.status, 'pending');
+      assert.equal(let_go.body, on_disk.body, 'letting a held reply go changed what it says');
+      assert.equal(
+        context.store.read(let_go.conversation_id, let_go.message_id, 0).delivery.status, 'pending');
+
+      // Only a held reply is let go, and a reply is written at no other status.
+      throws(() => context.store.releaseHeldReply(request.request_id), 'REPLY_NOT_HELD');
+      throws(() => context.store.reply(
+        replyRecord(context, request, { request_id: 'req-never-written-at-sent' }), { status: 'sent' }),
+      'REPLY_STATUS_UNWRITABLE');
     }
   }
 ];

@@ -290,7 +290,11 @@ export async function run(options) {
     // not connected holds release by name.
     await awaitToolServers(declaration, { log });
 
-    reply = await serveReplyTool({ store, agent: declaration.agent?.id, port: replyPort });
+    // The declaration goes to the reply tool because one room's replies are held:
+    // a reply written in the management conversation waits where it is until the
+    // runtime has asked the turn what it recorded. Every other conversation is
+    // untouched by it.
+    reply = await serveReplyTool({ store, agent: declaration.agent?.id, declaration, port: replyPort });
     log({ event: 'reply_tool.listening', url: reply.url });
 
     // The teaching tools, on the declaration's word and on nothing else. With
@@ -325,7 +329,7 @@ export async function run(options) {
     const loops = loaded.map(({ channel, adapter, interval_ms }) => {
       const loop = new ReleaseLoop({
         declaration, channel, store, storeDir, adapter, harness, session,
-        agent: declaration.agent?.id, checkout, work, log, now
+        agent: declaration.agent?.id, checkout, work, teach, log, now
       });
       loop.intervalMs = interval_ms;
       if (harness.onToolServerStatus) {

@@ -24,11 +24,12 @@ import path from 'node:path';
 
 import { fault, RuntimeFault, EXIT } from './faults.mjs';
 import { StreamFault } from '../stream/store.mjs';
-import { listTeachings } from '../stream/teachings.mjs';
+import { listTeachings, teachingsUnderRelease } from '../stream/teachings.mjs';
 import { latch } from './latch.mjs';
 import { REPLY_SERVER_NAME } from './reply-tool.mjs';
 import { TEACH_SERVER_NAME } from './teach-tool.mjs';
 import { conversationKindOf } from './channel.mjs';
+import { teachCheckConversation } from './reply-tool.mjs';
 import {
   failuresBeforeHold, holdFault, pollFault, pollState,
   recordPollFailure, recordPollSuccess
@@ -313,6 +314,11 @@ export function turnInput(record, releaseId, { store = null, checkout = null, de
     `from: ${record.sender_name ?? record.sender_id}`,
     `received_at: ${record.received_at}`,
     `conversation_id: ${record.conversation_id}`,
+    // The message's own id, which is what a tool that records something about
+    // this message is given as its source. Without it in the turn, a model that
+    // decided to remember what the client just said had no id to cite and could
+    // only invent one, which the store refuses by name.
+    `message_id: ${record.message_id}`,
     `request_id: ${releaseId}`,
     '',
     record.body ?? '',
@@ -348,6 +354,41 @@ export function saidNoReply(text) {
   return typeof text === 'string' && text.trim() === NO_REPLY;
 }
 
+// ---- the teach check --------------------------------------------------------
+//
+// The second follow-up, and it exists because of one observed run. On the first
+// real pass of increment 5's worked cases, the agent was told a restraint in the
+// management conversation, said back that it would follow it, and never called
+// `remember`: a reply that claimed a memory that does not exist, which is the
+// residual PA-172's safeguards name and which no code can catch by reading what
+// the sentence meant. This does not read the sentence. It reads the store, asks
+// once, and then decides — the same shape the reply enforcement already runs for
+// a turn that delivered nothing, applied to a turn that spoke and recorded
+// nothing.
+//
+// It runs in the management conversation and nowhere else. A customer or an ops
+// conversation pays no extra turn, because nothing said in either of them is a
+// standing instruction.
+export const NOTHING_TAUGHT = 'NOTHING_TAUGHT';
+
+export function saidNothingTaught(text) {
+  return typeof text === 'string' && text.trim() === NOTHING_TAUGHT;
+}
+
+// What the model is asked. Two ways out and no third, as the reply follow-up has:
+// record what was taught, or say that nothing was. It carries the ids a teaching
+// tool takes, because the call it is asking for cannot be made without them, and
+// it carries the taught list for the same reason the other follow-up does.
+export function teachCheckInput(record, releaseId, { store = null, declaration = null } = {}) {
+  return [
+    'Your reply on this conversation is written and has not gone out yet. Nothing was recorded this turn: no instruction was remembered and no change was raised.',
+    `If this client told you how to operate, record it now — remember for something you may follow within what you already have, raise_change for anything that needs more than that — with conversation_id ${JSON.stringify(record.conversation_id)} and source_message_id ${JSON.stringify(record.message_id)}.`,
+    `If nothing was taught, answer exactly ${NOTHING_TAUGHT}.`,
+    'Your reply goes out unchanged either way. Nothing you write here reaches the client.',
+    ...taughtBlock(store, declaration)
+  ].join('\n');
+}
+
 // Which faults end the process, and which one record's release.
 //
 // A record the runtime cannot release is one record: a message with no unit id,
@@ -379,7 +420,7 @@ export function endsTheProcess(error) {
 export class ReleaseLoop {
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
-    agent, checkout, work, log = () => {}, now = () => Date.now()
+    agent, checkout, work, teach = null, log = () => {}, now = () => Date.now()
   }) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -395,6 +436,11 @@ export class ReleaseLoop {
     this.session = session;
     this.agent = agent;
     this.checkout = checkout;
+    // The teaching server this process serves, when the declaration turns
+    // teaching on, so a record written during a turn can say which release it was
+    // written under. Null is the ordinary case and nothing about it is special:
+    // a record then carries no release and the teach check has nothing to hold.
+    this.teach = teach;
     // The directory a thread is opened on. It is the work directory and not the
     // checkout (PA-181): the harness's sandbox makes `cwd` a writable root and
     // binds `cwd/.git` over itself, and the checkout is read-only with no `.git`
@@ -737,10 +783,14 @@ export class ReleaseLoop {
     const reply = await this.ensureReply(record, {
       unitId, threadId, releaseId, result, completedAt
     });
+    // And a spoken turn in the management conversation is not a recorded one. The
+    // reply written there is held where it is until this is answered.
+    const teach = await this.ensureTeachCheck(record, { unitId, threadId, releaseId });
     this.store.completeRelease(record, completedAt);
     return {
       message_id: record.message_id, release_id: releaseId,
-      status: result.status, turn_id: result.turn_id, reply: reply.outcome
+      status: result.status, turn_id: result.turn_id, reply: reply.outcome,
+      teach_check: teach.outcome
     };
   }
 
@@ -748,18 +798,16 @@ export class ReleaseLoop {
   // cost and the first of what the model said, because the question asked about a
   // turn that delivered nothing is "what did it say", and nothing else keeps it.
   async takeTurn({ unitId, threadId, releaseId, input, clientUserMessageId }) {
-    const result = await this.harness.turn(this.session, {
-      threadId,
-      input,
-      effort: this.declaration.effort,
-      model: this.declaration.model,
-      sandboxPolicy: this.harness.policyFor(this.declaration.sandbox?.mode, {
-        writableRoots: [this.storeDir],
-        networkAccess: this.declaration.sandbox?.network === true
-      }),
-      clientUserMessageId,
-      timeoutMs: this.declaration.limits?.max_turn_ms
-    });
+    // The teaching server is told which release is being taken before the model
+    // can call it, and told nothing again after, so a call that arrives outside a
+    // turn writes a record that claims no release rather than the last one.
+    this.teach?.setRelease(releaseId);
+    let result;
+    try {
+      result = await this.turnOf({ threadId, input, clientUserMessageId });
+    } finally {
+      this.teach?.setRelease(null);
+    }
 
     // The harness reports a completion time the way the protocol gives it, which
     // on this one is epoch milliseconds. A record carries times as strings, so
@@ -782,6 +830,23 @@ export class ReleaseLoop {
       }]
     });
     return { result, completedAt };
+  }
+
+  // The turn itself, with everything the declaration decides about it in one
+  // place and nothing about the store in it.
+  async turnOf({ threadId, input, clientUserMessageId }) {
+    return this.harness.turn(this.session, {
+      threadId,
+      input,
+      effort: this.declaration.effort,
+      model: this.declaration.model,
+      sandboxPolicy: this.harness.policyFor(this.declaration.sandbox?.mode, {
+        writableRoots: [this.storeDir],
+        networkAccess: this.declaration.sandbox?.network === true
+      }),
+      clientUserMessageId,
+      timeoutMs: this.declaration.limits?.max_turn_ms
+    });
   }
 
   // Whether this release produced anything for the contact. The reply tool writes
@@ -838,6 +903,75 @@ export class ReleaseLoop {
         ? followUp.result.agent_message.slice(0, AGENT_MESSAGE_KEPT) : null
     });
     return { outcome: 'parked-no-reply' };
+  }
+
+  // The reply this release wrote and the runtime is holding, or null. A held reply
+  // exists only in the management conversation and only while its own turn is
+  // being taken, so null is the answer for every other conversation and for a
+  // turn that wrote no reply at all.
+  heldReply(record, releaseId) {
+    return this.store.recordsIn(record.conversation_id)
+      .find((r) => r.direction === 'outbound'
+        && r.delivery?.request_id === releaseId
+        && r.delivery?.status === 'pending-teach-check') ?? null;
+  }
+
+  // Whether this turn recorded anything at all. The question is about the store
+  // and never about what the model said: a record written under this release is
+  // the evidence, and a sentence is not.
+  recordedThisRelease(releaseId) {
+    return teachingsUnderRelease(this.store, releaseId).length > 0;
+  }
+
+  // The teach check, and the three ways it can end. It is the reply-enforcement
+  // shape with the store read in place of the delivery read.
+  async ensureTeachCheck(record, { unitId, threadId, releaseId }) {
+    const held = this.heldReply(record, releaseId);
+    if (held === null) return { outcome: 'not-held' };
+    if (this.recordedThisRelease(releaseId)) {
+      this.store.releaseHeldReply(releaseId);
+      return { outcome: 'released' };
+    }
+
+    this.log({ event: 'teach_check.nothing_recorded', message_id: record.message_id, release_id: releaseId });
+
+    const followUp = await this.takeTurn({
+      unitId, threadId, releaseId,
+      input: teachCheckInput(record, releaseId, { store: this.store, declaration: this.declaration }),
+      clientUserMessageId: `${releaseId}-teach-check`
+    });
+
+    if (this.recordedThisRelease(releaseId)) {
+      this.store.releaseHeldReply(releaseId);
+      this.log({ event: 'teach_check.recorded_after_follow_up', message_id: record.message_id, release_id: releaseId });
+      return { outcome: 'released-after-follow-up' };
+    }
+
+    // Said so, plainly: nothing was taught. The reply goes out exactly as it was
+    // written, because the runtime never rewrites what the model said to a client.
+    if (saidNothingTaught(followUp.result.agent_message)) {
+      this.store.releaseHeldReply(releaseId);
+      this.log({ event: 'teach_check.nothing_taught', message_id: record.message_id, release_id: releaseId });
+      return { outcome: 'released-nothing-taught' };
+    }
+
+    // Asked once, told plainly, and still nothing on record and no answer. The
+    // reply is parked where it is rather than sent: a sentence telling a client
+    // their agent will now do something, with nothing behind it, is the failure
+    // this whole check exists for. A person is the next thing that happens to it.
+    const cause = fault('TEACHING_UNRECORDED', record.message_id,
+      'a reply was composed in the management conversation, nothing was recorded in that turn, and the follow-up neither recorded anything nor answered ' + NOTHING_TAUGHT,
+      `read this reply: if it tells the client something will now be followed, record it with remember or raise_change and send the reply by hand; the reply text is kept exactly as the model wrote it`);
+    this.store.parkFailed(
+      this.store.read(held.conversation_id, held.message_id, held.revision),
+      cause, { reason: 'unrecorded-teaching' }
+    );
+    this.log({
+      event: 'teach_check.parked', message_id: record.message_id, release_id: releaseId,
+      said: typeof followUp.result.agent_message === 'string'
+        ? followUp.result.agent_message.slice(0, AGENT_MESSAGE_KEPT) : null
+    });
+    return { outcome: 'parked-unrecorded-teaching' };
   }
 
   // The reason a release closed with no message, written where the record is

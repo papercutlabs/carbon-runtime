@@ -17,12 +17,12 @@ function check(args) {
   }
 }
 
-test('the fixture adapter passes all twenty-three cases', () => {
+test('the fixture adapter passes all twenty-four cases', () => {
   const result = check(['check', '--adapter', FIXTURE_ADAPTER, '--fixtures', FIXTURES]);
   assert.equal(result.code, 0, result.out);
   const passes = result.out.split('\n').filter((line) => / pass /.test(line));
-  assert.equal(passes.length, 23, result.out);
-  for (let number = 1; number <= 23; number++) {
+  assert.equal(passes.length, 24, result.out);
+  for (let number = 1; number <= 24; number++) {
     assert.match(result.out, new RegExp(`case\\s+${number}\\s+pass`), `case ${number} did not pass`);
   }
 });
@@ -38,14 +38,14 @@ test('a deliberately broken adapter fails the case its break belongs to', () => 
 
 test('the check runs only the cases the adapter declared a capability for', () => {
   const result = check(['check', '--adapter', BROKEN, '--fixtures', FIXTURES]);
-  assert.match(result.out, /of 23 cases apply to \[inbound\]/);
+  assert.match(result.out, /of 24 cases apply to \[inbound\]/);
 });
 
 test('every command carries its manual and refuses a guess', () => {
   const help = check(['check', '--help']);
   assert.equal(help.code, 0);
   assert.match(help.out, /--adapter/);
-  assert.match(help.out, /The twenty-three cases:/);
+  assert.match(help.out, /The twenty-four cases:/);
 
   const missing = check(['check', '--adapter', FIXTURE_ADAPTER]);
   assert.equal(missing.code, 1);

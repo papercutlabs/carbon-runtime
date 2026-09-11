@@ -16,7 +16,11 @@ test('the vendored schema is the record shape this store writes', () => {
   for (const field of ['delivery', 'release', 'hold', 'disposition', 'historical', 'revision']) {
     assert.ok(schema.properties[field], `the schema does not name ${field}`);
   }
-  assert.deepEqual(schema.properties.delivery.properties.status.enum, ['pending', 'sent', 'unknown', 'failed']);
+  // pending-teach-check is a reply written in the management conversation and
+  // held until its own turn has been asked what it recorded. The deliver pass
+  // sends pending and nothing else, so a held reply cannot leave the box.
+  assert.deepEqual(schema.properties.delivery.properties.status.enum,
+    ['pending', 'pending-teach-check', 'sent', 'unknown', 'failed']);
 });
 
 // This repository is not the schema authority: it vendors a copy of the file
@@ -50,6 +54,11 @@ test('the vendored teaching schema is the record shape the teachings library wri
   assert.deepEqual(schema.properties.status.enum, ['active', 'forgotten', 'open', 'closed']);
   assert.deepEqual(schema.properties.failed_question.enum, [1, 2, 3, 4, 'size']);
   assert.equal(schema.properties.taught_by.additionalProperties, false);
+  // The release the turn that wrote the record was taking, when a runtime named
+  // one. It is not required: a record written by a server no release loop told
+  // carries none, and says so by its absence rather than by a made-up value.
+  assert.equal(schema.properties.release_id.type, 'string');
+  assert.ok(!schema.required.includes('release_id'), 'a record with no release would be refused');
   for (const field of ['id', 'kind', 'agent', 'text', 'conversation_id', 'source_message_id', 'taught_by', 'taught_at', 'status']) {
     assert.ok(schema.required.includes(field), `the schema does not require ${field}`);
   }

@@ -23,6 +23,7 @@
 import crypto from 'node:crypto';
 import { createServer } from '../tools/lib/mcp.mjs';
 import { StreamFault } from '../stream/store.mjs';
+import { managementConversationOf } from './channel.mjs';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
 // The reply tool listens here unless a caller names another port. It is a
@@ -58,7 +59,7 @@ export const MANIFEST = {
       returns: {
         what: 'what happened to the reply.',
         fields: [
-          { name: 'status', what: 'written when the reply is now queued to send, already_sent when this request_id was already delivered' },
+          { name: 'status', what: 'written when the reply is now queued to send, held when it is written and goes out at the end of this turn, already_sent when this request_id was already delivered' },
           { name: 'request_id', what: 'the fence this reply was written under' },
           { name: 'chunk_ids', what: 'the channel ids of an already delivered reply, empty for one just written' }
         ]
@@ -119,9 +120,26 @@ export function outboundRecord(store, { agent, conversation_id, request_id, text
   return record;
 }
 
+// Which conversation's replies are held until the turn that wrote them has been
+// asked about what it recorded, or null when none are. It is the management
+// conversation, and only when the declaration turns teaching on: that is the one
+// room where a message can be a standing instruction, so it is the one room where
+// a reply that claims a memory can be a reply about a memory that does not exist.
+// A customer or an ops conversation is untouched by any of this and its replies go
+// out exactly as they did before.
+export function teachCheckConversation(declaration) {
+  if (declaration?.teaching?.enabled !== true) return null;
+  return managementConversationOf(declaration);
+}
+
 // The handler, separated from the server so the fence can be tested without a
 // socket.
-export function replyHandler({ store, agent, now = () => new Date() }) {
+//
+// The declaration is what says whether this reply is held. Without one — which is
+// every caller that is not the runtime — nothing is held and the reply is written
+// as it always was.
+export function replyHandler({ store, agent, declaration = null, now = () => new Date() }) {
+  const heldIn = teachCheckConversation(declaration);
   return (args) => {
     const record = outboundRecord(store, {
       agent,
@@ -130,7 +148,8 @@ export function replyHandler({ store, agent, now = () => new Date() }) {
       text: args.text,
       now: now()
     });
-    const written = store.reply(record);
+    const held = heldIn !== null && args.conversation_id === heldIn;
+    const written = store.reply(record, { status: held ? 'pending-teach-check' : 'pending' });
     if (written.fenced === 'sent') {
       return {
         data: { status: 'already_sent', request_id: args.request_id, chunk_ids: written.chunk_ids },
@@ -138,21 +157,23 @@ export function replyHandler({ store, agent, now = () => new Date() }) {
       };
     }
     return {
-      data: { status: 'written', request_id: args.request_id, chunk_ids: [] },
-      text: 'The reply is written and will be sent on this channel.'
+      data: { status: held ? 'held' : 'written', request_id: args.request_id, chunk_ids: [] },
+      text: held
+        ? 'The reply is written and goes out when this turn ends. If this client just told you how to operate, record it now with remember or raise_change; what you say you will do and what is on record have to be the same thing.'
+        : 'The reply is written and will be sent on this channel.'
     };
   };
 }
 
-export function createReplyServer({ store, agent }) {
+export function createReplyServer({ store, agent, declaration = null }) {
   return createServer({
     manifest: MANIFEST,
-    handlers: { reply: replyHandler({ store, agent }) }
+    handlers: { reply: replyHandler({ store, agent, declaration }) }
   });
 }
 
-export async function serveReplyTool({ store, agent, host = '127.0.0.1', port = REPLY_PORT }) {
-  const server = createReplyServer({ store, agent });
+export async function serveReplyTool({ store, agent, declaration = null, host = '127.0.0.1', port = REPLY_PORT }) {
+  const server = createReplyServer({ store, agent, declaration });
   const { server: http, url } = await server.serveHttp({ host, port });
   return { http, url, close: () => new Promise((resolve) => http.close(resolve)) };
 }
