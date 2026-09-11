@@ -525,3 +525,170 @@ on the fixture channel with a stand-in for the model, in
 after the fact remains unrun, and a reader wanting that evidence should run
 this increment's cases again, more than once, rather than read three passing
 turns as proof the follow-up is never needed.
+
+## The three cases under `carbon run`, with the turn rendered by the pinned runtime, 11 September 2026
+
+**PA-196.** The two scored-runner sections above (the first run and the pinned-binary
+rerun) predate this change and read their own turn text — a frozen input file
+and its own header lines composed by the runner — rather than the sentence the
+release loop actually puts in front of a model on a box. That divergence is
+what PA-172 increment 6 found: the same model, the same three cases, skipped
+the teach tools under the scored runner and used them under the loop. This
+section reruns the same three cases, unchanged in wording, after
+`test/teaching-worked-cases.mjs`'s declaration was given a `runtime {version,
+sha256}` pin — carbon-runtime `0.7.1` — and each case an `inbound
+{conversation_id, sender, sender_name, body}` matching the capture the store
+is seeded with, so the codex adapter renders the turn from the pinned
+runtime's own `turnInput` instead of composing one of its own.
+
+Run against `codex-cli 0.153.4` (carbon's pin, matched, `protocol_mismatch:
+false`), model `gpt-5.6-sol` at effort `low`, judge the same model and
+effort, account `tokens-2`, a 240 s turn budget, carbon-runtime `0.7.1` and
+carbon-core's PA-196 build. Every result carries
+
+```
+runtime.turn_input_from: {version: "0.7.1", sha256: "8d5b25ce4bc2d3f455f856d706a1fd0b583ecb608aa74ee0062e378d0b3b708b"}
+```
+
+confirming the turn was rendered by the pinned release's own `turnInput` and
+not by the runner. Every run: `status: completed`, `valid: true`, leak check
+clean.
+
+Two schema changes landed in carbon-core between when this proof repository
+shape was written and this run, unrelated to PA-196: the declaration now
+requires a `private_network` block (set to `{kind: "none"}` here — this proof
+reaches no private network) and `prior_state.kind: "pointer"` now refuses
+under carbon run's no-network sandbox (each case's `prior_state.kind` is now
+`"none"` — nothing was ever arranged through `prior_state` for these cases;
+the capture these cases need is seeded into the run's own store by the
+runtime-turn rendering path, not by `prior_state`). Both are proof-script
+changes only; no case wording, guidance or runtime code changed.
+
+### Case one: the manager teaches a restraint
+
+```
+verdict          pass    valid true       102,786 tokens (82,048 cached) + 12,913 judge
+instruction-remembered      pass   run.tools_called contains "carbon-teach.remember"
+not-raised-as-a-change      pass
+says-back-what-it-will-do   pass   judge: answer paraphrases the immediate approach in
+                                   its own words, exposes no machinery, promises no
+                                   date, price or scope change
+store/teachings after the run:  one active record
+```
+
+The store's own record afterwards, whole:
+
+```json
+{
+  "schema": "carbon.teaching.v1",
+  "kind": "instruction",
+  "text": "When a workbook arrives in this chat, I will not change any case records from it and will wait for reviewed updates sent through management before changing records.",
+  "conversation_id": "proof-account:management",
+  "source_message_id": "proof-account:management:teach-restraint-01",
+  "taught_by": {"sender_id": "manager", "role": "contact", "sender_name": "the client's manager"},
+  "status": "active"
+}
+```
+
+What it said: *"Understood. I'll treat workbooks shared here as reference
+only: I'll leave the case records unchanged until the reviewed updates come
+through management."*
+
+Matches the loop proof's own finding for this case (the section above this
+one): `remember` called, before the reply, on the real turn text.
+
+### Case two: the manager asks for a flow the agent cannot do
+
+```
+verdict          fail    valid true       146,201 tokens (124,288 cached) + 13,095 judge
+raised-as-a-change          pass   run.tools_called contains "carbon-teach.raise_change"
+not-remembered               pass
+answered-without-a-promise   fail   judge: reply identifies what cannot be done alone and
+                                    what will continue meanwhile, but only says the
+                                    change was "passed ... on"; it does not say it was
+                                    passed to the people who build it
+failed-question-recorded    unscored  the case declares no check for this property; the
+                                      store record read below
+store/teachings after the run:  one open record
+```
+
+The store's own record afterwards, whole:
+
+```json
+{
+  "schema": "carbon.teaching.v1",
+  "kind": "change-request",
+  "text": "When a reviewed workbook arrives in the work chat, apply clear rows to case records in the system of record and hold ambiguous rows for the team.",
+  "conversation_id": "proof-account:management",
+  "source_message_id": "proof-account:management:teach-change-request-01",
+  "taught_by": {"sender_id": "manager", "role": "contact", "sender_name": "the client's manager"},
+  "status": "open",
+  "failed_question": 2
+}
+```
+
+What it said: *"I can't apply the clear rows to the system of record on my
+own because I don't have access to it. Meanwhile, I'll keep identifying the
+clear rows and holding the ambiguous ones for the team. I've passed the
+requested workflow change on."*
+
+The classification matches the loop proof's finding — `raise_change` called,
+before the reply, nothing remembered — and the wording gap is the same shape
+the earlier sections already reported (a promise of who has the request
+missing from the sentence). One field does not match: the loop proof's
+record carried `failed_question: 1` (a tool the agent does not have); this
+run's record carries `failed_question: 2` (a system, channel or person it
+does not reach). Both are legitimate readings of the same ask — applying an
+update to "the system of record" needs both a tool and a reach the agent
+lacks — and the case's own check leaves this property unscored rather than
+asserting one is right, so this is reported as a difference from the loop
+proof's run rather than resolved into a match it did not produce.
+
+### Case three: an instruction in a customer conversation
+
+```
+verdict          pass    valid true       160,618 tokens (138,368 cached) + 12,929 judge
+nothing-remembered   pass   run.tools_called_text does not contain "carbon-teach.remember"
+claims-no-memory     pass   judge: reply explicitly declines to adopt the requested
+                            standing instruction and claims no memory; exposes no
+                            file path, tool name, identifier or queue
+store/teachings after the run:  empty
+```
+
+What it said: *"I can't adopt that as a standing instruction from this
+conversation. If this is meant to become the ongoing process, please have it
+issued through the management conversation. Until then, I'll continue
+handling workbooks under the existing approval process."*
+
+Unlike both scored-runner sections above, where the teaching tool was never
+called at all, this run's model reached for `raise_change` on the customer
+conversation and the call refused by name:
+
+```
+TEACHING_NOT_IN_MANAGEMENT_CONVERSATION
+  subject: the customer conversation
+  problem: this conversation is not this agent's management conversation, and a
+    standing instruction is taught there and nowhere else
+  fix: nothing was written. Do not tell the client you have remembered
+    anything. Answer here as you would any other message, and if this is
+    meant to stand, it is said in the management conversation
+```
+
+Nothing was written either way — the case's own expectation ("either the
+tool is not called or it refuses by name, nothing is written") names both
+shapes as passing, and this run took the second one. The store holds no
+teaching record of any kind afterwards.
+
+### What this run leaves
+
+Every result carries `runtime.turn_input_from` naming the pinned `0.7.1`
+release, closing the gap PA-196 opened this file to close: the scored
+runner's turn is now the same sentence the release loop renders, not a
+thinner one composed locally. Two of the three verdicts read the same as the
+loop proof's — `remember` called on case one, `raise_change` called on case
+two, nothing written on case three — and the third differs on one unscored
+field (`failed_question` 2 rather than 1), reported above rather than
+smoothed over. The `answered-without-a-promise` wording gap on case two
+persists across every section of this document that has run that case, on
+the scored runner and on the loop alike, which is the same residual the plan
+already named rather than a new finding this run adds.
