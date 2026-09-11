@@ -44,11 +44,13 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `adapters/fixture/` | an adapter with no channel, so the conformance check has something to run |
 | `adapters/email/` | the email adapter: IMAP and SMTP through `curl`, a MIME reader of ours, threading by `References`; its own README is the contract |
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
+| `adapters/telegram/` | the Telegram adapter: the Bot API over https with no library, the long poll whose offset is the watermark, the declared chats and the declared operator |
 | `import/` | the history import: a zip reader with no dependency, and the map from an export's rows to records |
 | `conformance/cases.mjs` | the seventeen cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
+| `bin/carbon-telegram` | `probe --token-file <file>`, which asks the server what bot a token is; `send --token-file <file> --chat <id> --text <text>`, which puts one message in a chat in a proof and records nothing |
 | `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>` |
 | `test/` | `node --test "test/*.test.mjs"` |
 | `tools/` | the MCP scaffold the reply tool is served by, the identifier scan and the release build |
@@ -197,6 +199,7 @@ Nine rules are worth stating on their own.
 ```
 node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures
 node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures
+node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/telegram/fixtures
 node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
 node bin/carbon-stream check --store /path/to/an/agent/store
 node bin/carbon-stream check --help
@@ -217,7 +220,11 @@ workflow, no tools. It publishes nothing.
 
 Node 22, ES modules, and exactly one dependency: `@whiskeysockets/baileys`,
 pinned to an exact version in `package.json` and `package-lock.json`, because
-WhatsApp has no other way in that this programme will use. Nothing else here
-loads it — the store library, the conformance check and the import have none —
-and the workflow fails if a second dependency appears or the pin grows a range.
+WhatsApp has no other way in that this programme will use. The Telegram adapter
+is the counter-example that shows what the rule is for: its channel is JSON over
+HTTPS with no handshake and no session, `fetch` is in Node, and a client library
+would have been a second dependency and a second version to pin in exchange for
+nothing, so it has none. Nothing else here loads Baileys — the store library,
+the conformance check and the import have none — and the workflow fails if a
+second dependency appears or the pin grows a range.
 Why that version, and what it does not fix, is in `adapters/whatsapp/README.md`.

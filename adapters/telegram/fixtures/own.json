@@ -1,0 +1,26 @@
+[
+  {
+    "conversation": "-1001234567890",
+    "position": "000000000118",
+    "received_at": "2026-09-10T10:03:00.000Z",
+    "update": {
+      "update_id": 900018,
+      "message": {
+        "message_id": 118,
+        "from": {
+          "id": 7000001,
+          "is_bot": true,
+          "first_name": "Example Agent",
+          "username": "example_agent_bot"
+        },
+        "chat": {
+          "id": -1001234567890,
+          "type": "supergroup",
+          "title": "Example Corp and the agent"
+        },
+        "date": 1789039200,
+        "text": "This is the agent's own message coming back."
+      }
+    }
+  }
+]

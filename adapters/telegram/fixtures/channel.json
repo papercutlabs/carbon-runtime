@@ -1,0 +1,21 @@
+{
+  "kind": "telegram",
+  "account": "example_agent_bot",
+  "release": "immediate",
+  "max_attachment_bytes": 20971520,
+  "max_message_chars": 4096,
+  "allowed_chat_ids": [
+    887766554,
+    -1001234567890
+  ],
+  "operator_sender_ids": [
+    9988776
+  ],
+  "bot_id": 7000001,
+  "hold": {
+    "on_operator_message": true,
+    "release_after_ms": 3600000
+  },
+  "mode": "polling",
+  "long_poll_timeout_s": 25
+}

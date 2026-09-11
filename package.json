@@ -1,6 +1,6 @@
 {
   "name": "carbon-runtime",
-  "version": "0.5.6",
+  "version": "0.6.0",
   "description": "The part of Carbon that runs on a box: the store library, the adapters, the reply tool and the process a unit starts.",
   "type": "module",
   "license": "UNLICENSED",
@@ -12,6 +12,7 @@
     "carbon-runtime": "bin/carbon-runtime",
     "carbon-stream": "bin/carbon-stream",
     "carbon-whatsapp": "bin/carbon-whatsapp",
+    "carbon-telegram": "bin/carbon-telegram",
     "carbon-import": "bin/carbon-import",
     "carbon-tool-server": "bin/carbon-tool-server"
   },
@@ -20,6 +21,7 @@
     "check": "node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures",
     "check:email": "node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/fixtures",
     "check:whatsapp": "node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures",
+    "check:telegram": "node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/telegram/fixtures",
     "check:import": "node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures",
     "release": "node tools/release.mjs"
   },
