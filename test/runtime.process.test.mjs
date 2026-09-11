@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { PROVIDER_AUTH, providerKey, run, placesUnder, linkGuidance, GUIDANCE_NAMES } from '../runtime/index.mjs';
+import { PROVIDER_AUTH, providerKey, run, placesUnder, placeGuidance, GUIDANCE_NAMES } from '../runtime/index.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { takeLock, lockFile, commandLineOf } from '../runtime/lock.mjs';
 import { latch, refuseIfLatched } from '../runtime/latch.mjs';
@@ -344,56 +344,61 @@ test('the work directory is one of the places under an agent directory', () => {
 // The harness reads AGENTS.md and .agents out of the thread's working directory
 // and out of nowhere else (verified against the pinned binary, 11 September), so
 // moving the thread off the checkout would lose the agent's guidance and its
-// skills. They are linked rather than copied: the bytes stay in the checkout,
-// which is the authority, and `current` swinging is enough to change them.
-test('the checkout\'s guidance is linked into the work directory', () => {
+// skills. They are copied and not linked: the sandbox binds them read-only inside
+// the turn, and bubblewrap cannot bind through a symlink into a read-only tree.
+test('the checkout\'s guidance is placed in the work directory, as real files', () => {
+  const dir = tmp('guidance');
+  const checkout = path.join(dir, 'repo');
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(path.join(checkout, '.agents', 'skills', 'one'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, '.agents', 'skills', 'one', 'SKILL.md'), 'the skill\n');
+  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
+  fs.mkdirSync(work, { recursive: true });
+
+  assert.deepEqual(placeGuidance({ work, checkout }), GUIDANCE_NAMES);
+  for (const name of GUIDANCE_NAMES) {
+    assert.equal(fs.lstatSync(path.join(work, name)).isSymbolicLink(), false, `${name} is a symlink`);
+  }
+  assert.equal(fs.readFileSync(path.join(work, 'AGENTS.md'), 'utf8'), 'the guidance\n');
+  assert.equal(fs.readFileSync(path.join(work, '.agents', 'skills', 'one', 'SKILL.md'), 'utf8'), 'the skill\n');
+});
+
+// Including a symlink the client repository carries itself: the wall is the
+// sandbox's, not ours, and it does not care who made the link.
+test('nothing placed in the work directory is a symlink, wherever the checkout keeps one', () => {
   const dir = tmp('guidance');
   const checkout = path.join(dir, 'repo');
   const work = path.join(dir, 'work');
   fs.mkdirSync(path.join(checkout, '.agents', 'skills'), { recursive: true });
-  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
+  fs.mkdirSync(path.join(checkout, 'elsewhere', 'one'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'elsewhere', 'one', 'SKILL.md'), 'the skill\n');
+  fs.symlinkSync(path.join(checkout, 'elsewhere', 'one'), path.join(checkout, '.agents', 'skills', 'one'));
   fs.mkdirSync(work, { recursive: true });
 
-  assert.deepEqual(linkGuidance({ work, checkout }), GUIDANCE_NAMES);
-  for (const name of GUIDANCE_NAMES) {
-    assert.equal(fs.readlinkSync(path.join(work, name)), path.join(checkout, name));
-  }
+  placeGuidance({ work, checkout });
+  assert.equal(fs.lstatSync(path.join(work, '.agents', 'skills', 'one')).isDirectory(), true);
+  assert.equal(fs.readFileSync(path.join(work, '.agents', 'skills', 'one', 'SKILL.md'), 'utf8'), 'the skill\n');
+});
+
+// The two names belong to the runtime. What the checkout stopped carrying goes,
+// and what a turn wrote over them does not outlive the restart, so the installed
+// checkout is the only thing that decides what the agent is carrying.
+test('what stands at those two names is written again from the checkout at every start', () => {
+  const dir = tmp('guidance');
+  const checkout = path.join(dir, 'repo');
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(checkout, { recursive: true });
+  fs.mkdirSync(path.join(work, '.agents'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
+  fs.writeFileSync(path.join(work, 'AGENTS.md'), 'something a turn wrote\n');
+
+  assert.deepEqual(placeGuidance({ work, checkout }), ['AGENTS.md']);
   assert.equal(fs.readFileSync(path.join(work, 'AGENTS.md'), 'utf8'), 'the guidance\n');
-});
-
-test('a link left by an earlier install is repointed, and a name the checkout does not carry is left unlinked', () => {
-  const dir = tmp('guidance');
-  const checkout = path.join(dir, 'repo');
-  const work = path.join(dir, 'work');
-  fs.mkdirSync(checkout, { recursive: true });
-  fs.mkdirSync(work, { recursive: true });
-  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
-  fs.symlinkSync(path.join(dir, 'elsewhere', 'AGENTS.md'), path.join(work, 'AGENTS.md'));
-  fs.symlinkSync(path.join(dir, 'elsewhere', '.agents'), path.join(work, '.agents'));
-
-  assert.deepEqual(linkGuidance({ work, checkout }), ['AGENTS.md']);
-  assert.equal(fs.readlinkSync(path.join(work, 'AGENTS.md')), path.join(checkout, 'AGENTS.md'));
   assert.equal(fs.existsSync(path.join(work, '.agents')), false);
-});
-
-// A file the agent wrote is not guidance. The harness would read it in place of
-// the checkout's, and an agent whose guidance nobody installed is not the agent
-// the declaration describes.
-test('a real file standing where the guidance link goes is refused by name', () => {
-  const dir = tmp('guidance');
-  const checkout = path.join(dir, 'repo');
-  const work = path.join(dir, 'work');
-  fs.mkdirSync(checkout, { recursive: true });
-  fs.mkdirSync(work, { recursive: true });
-  fs.writeFileSync(path.join(checkout, 'AGENTS.md'), 'the guidance\n');
-  fs.writeFileSync(path.join(work, 'AGENTS.md'), 'something the model wrote\n');
-
-  assert.throws(() => linkGuidance({ work, checkout }),
-    (error) => error.faults.some((f) => f.code === 'GUIDANCE_NAME_OCCUPIED'));
 });
 
 test('a run with no work directory on the box is refused rather than opened somewhere else', () => {
   const dir = tmp('guidance');
-  assert.throws(() => linkGuidance({ work: path.join(dir, 'work'), checkout: dir }),
+  assert.throws(() => placeGuidance({ work: path.join(dir, 'work'), checkout: dir }),
     (error) => error.faults.some((f) => f.code === 'WORK_DIR_ABSENT'));
 });
