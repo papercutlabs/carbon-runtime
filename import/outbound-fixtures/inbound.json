@@ -1,0 +1,38 @@
+[
+  {
+    "kind": "event",
+    "message_id": "SENT_9002",
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "sender_jid": "15550009999@s.whatsapp.net",
+    "sender_name": null,
+    "timestamp": "2025-04-02T11:04:00.000Z",
+    "text": "A second send in the same chat.",
+    "message_type": "text",
+    "reply_to": null,
+    "status": null,
+    "answers_refs": [],
+    "has_media": false,
+    "media": [],
+    "fields": {}
+  },
+  {
+    "kind": "turn",
+    "message_id": "PATURN_1",
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "sender_jid": null,
+    "sender_name": null,
+    "timestamp": "2025-04-02T18:00:00.000Z",
+    "text": "A turn no capture recorded.",
+    "message_type": "text",
+    "reply_to": null,
+    "status": null,
+    "answers_refs": [
+      "LEDGER_9002"
+    ],
+    "has_media": false,
+    "media": [],
+    "fields": {}
+  }
+]

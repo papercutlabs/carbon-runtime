@@ -88,7 +88,6 @@
     "SHAPE_ERROR_PATH adapters/whatsapp/auth-state.mjs": 2,
     "SHAPE_ERROR_PATH adapters/whatsapp/channel-state.mjs": 1,
     "SHAPE_ERROR_PATH adapters/whatsapp/socket.mjs": 1,
-    "SHAPE_ERROR_PATH bin/carbon-import": 1,
     "SHAPE_ERROR_PATH bin/carbon-tool-server": 1,
     "SHAPE_ERROR_PATH runtime/lock.mjs": 1,
     "SHAPE_ERROR_PATH runtime/tool-servers.mjs": 1,

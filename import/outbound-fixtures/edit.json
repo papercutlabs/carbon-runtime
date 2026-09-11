@@ -1,0 +1,19 @@
+[
+  {
+    "kind": "event",
+    "message_id": "SENT_9004",
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "sender_jid": "15550009999@s.whatsapp.net",
+    "sender_name": null,
+    "timestamp": "2025-04-02T11:06:00.000Z",
+    "text": "A later send in the same chat.",
+    "message_type": "text",
+    "reply_to": null,
+    "status": null,
+    "answers_refs": [],
+    "has_media": false,
+    "media": [],
+    "fields": {}
+  }
+]

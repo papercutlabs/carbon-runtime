@@ -53,6 +53,9 @@ jobs:
       - name: the history import passes its subset
         run: node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures
 
+      - name: the outbound import passes its subset
+        run: node bin/carbon-stream check --adapter import/carbon-ledger-outbound --fixtures import/outbound-fixtures
+
       - name: the email adapter passes the cases that apply to it
         run: node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/fixtures
 
