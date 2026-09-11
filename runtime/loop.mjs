@@ -127,6 +127,32 @@ export function toolCallsIn(items) {
   return calls;
 }
 
+// What a turn ran locally, by status and exit code and never by command text.
+//
+// A shell command is an item on the completed turn and not a tool call, so the
+// tool names say nothing about it: a turn that ran ten commands and called no
+// tool logged an empty list, and "did the agent's shell run at all" was a
+// question the box could not answer about itself. That question is the whole of
+// PA-181 — a turn whose shell died in the sandbox looked, in the log, exactly
+// like a turn that chose not to run anything.
+//
+// The command text is left out for the same reason a tool call's arguments are:
+// it carries the client's own content and this line is read by anyone who can
+// read the unit's log. The working directory is in, because it is the box's own
+// path and it is the thing that says which directory the thread was opened on.
+export function commandsIn(items) {
+  const commands = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item?.type !== 'commandExecution') continue;
+    commands.push({
+      cwd: item.cwd ?? null,
+      status: item.status ?? null,
+      exit_code: item.exitCode ?? null
+    });
+  }
+  return commands;
+}
+
 export function releaseIdFor(record) {
   return `release-${record.message_id}-${record.revision ?? 0}`;
 }
@@ -612,7 +638,8 @@ export class ReleaseLoop {
       event: 'turn', message_id: record.message_id, release_id: releaseId,
       thread_id: threadId, turn_id: result.turn_id, status: result.status,
       token_usage: result.token_usage ?? null,
-      tool_calls: toolCallsIn(result.items)
+      tool_calls: toolCallsIn(result.items),
+      commands: commandsIn(result.items)
     });
 
     if (result.status !== 'completed') {
