@@ -1,3 +1,4 @@
+// purpose: the six operations that are the only thing outside this directory may use, and the Codex app-server protocol they are spoken over.
 // The one entry module of the Codex harness. Everything outside harness/ imports
 // from here and from nowhere else, and what it gets is six operations: install,
 // start, turn, inject, tools, events. A second harness is a second directory beside

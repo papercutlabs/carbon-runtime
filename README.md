@@ -10,7 +10,7 @@ The one contract in this repository is the stream contract: **every adapter
 writes one record shape into one store**. An email arriving, a chat message, a
 history import, a nightly timer and the agent's own reply are the same record
 with a different `source`. Nothing downstream knows the channel except as a
-field. An adapter is a thing that passes its subset of seventeen conformance
+field. An adapter is a thing that passes its subset of twenty-three conformance
 cases, and `bin/carbon-stream check` is what says whether it does.
 
 ## What this is not
@@ -39,14 +39,14 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `harness/codex/` | a copy of the Codex harness the runtime spawns and drives; `harness/HARNESS-SOURCE` says where it came from and that nothing here edits it |
 | `lib/faults.mjs`, `tools/lib/` | the fault shape and the MCP server scaffold, copied under the same rule |
 | `schema/carbon.message.v1.json` | the vendored record shape; one JSON file per record |
-| `stream/` | the store library: path derivation and containment, the write order, the two cursors, the merge, the arrivals index, the outbound records and the reply fence |
+| `stream/` | the store library: path derivation and containment, the write order, the two cursors, the merge, the arrivals index, the outbound records, the reply fence and the teachings |
 | `stream/adapter.md` | the adapter contract: the three capabilities, the five operations, the optional poll, the fixtures an adapter ships |
 | `adapters/fixture/` | an adapter with no channel, so the conformance check has something to run |
 | `adapters/email/` | the email adapter: IMAP and SMTP through `curl`, a MIME reader of ours, threading by `References`; its own README is the contract |
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
 | `adapters/telegram/` | the Telegram adapter: the Bot API over https with no library, the long poll whose offset is the watermark, the declared chats and the declared operator |
 | `import/` | the history import: a zip reader with no dependency, and the map from an export's rows to records |
-| `conformance/cases.mjs` | the seventeen cases, by number and name |
+| `conformance/cases.mjs` | the twenty-three cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
@@ -67,6 +67,7 @@ index.jsonl        one line per record first seen, appended and fsynced
 cursors/<conversation>.json    the two capture cursors
 threads/<unit-id>.json         one file per unit of work
 outbound/requests/<request-id>.json    the reply fence
+teachings/<id>.json                   one thing the client taught this agent
 ```
 
 Six rules hold it together.
@@ -208,6 +209,34 @@ node bin/carbon-stream check --help
 Every command takes each argument explicitly with no default that guesses, every
 fault is one JSON line of `{code, subject, problem, fix}` with all faults from
 one run reported together, and any fault exits non-zero.
+
+## Shape
+
+`node tools/shape-check.mjs --help` prints every rule with the reason it is a
+rule; `node tools/shape-check.mjs .` runs them, and the workflow runs it on every
+push. The script is a copy — the private half is its authority, under the same
+rule as the harness copy — so the two repositories cannot end up with two
+slightly different sets of rules. A rule with a cap is escaped by a
+`// shape: justified <reason>` line in the file, or inside the function for the
+per-function caps; the rest have no escape. `tools/shape-baseline.json` holds
+what was already in the tree the day the check landed — it prints on every run
+and it is the follow-up list, and anything new fails.
+
+1. Exactly one runtime dependency, `@whiskeysockets/baileys`, pinned to an exact version, and no development dependencies.
+2. No client, internal, machine or person name anywhere in this public tree.
+3. Every copied file says where it came from, and the byte-for-byte comparison with its authority runs in the private half's workflow, which can check this repository out because this one is public. It cannot run here: fetching the private half from a public workflow would mean carrying a credential that reads it.
+4. An adapter imports only `stream/`, `lib/` and its own directory: never another adapter, never `runtime/`.
+5. This repository never imports the private half, by path or by package name.
+6. Every field in the agent declaration is read somewhere in `lib/` or `runtime/` — checked in the private half, which has the schema.
+7. No prune or retention path in `stream/`, `adapters/`, `import/`, `conformance/`, `bin/` or `runtime/`.
+8. A source file is at most 600 lines and a function at most 80.
+9. A function has at most 15 independent paths.
+10. A module imports at most 12 of this repository's own modules.
+11. No import cycles, at all.
+12. Imports run down the layers `schema < stream, lib < adapters < runtime < bin`, never up.
+13. No block of 20 or more near-identical lines in two places, here or across the two repositories.
+14. No exported symbol that nothing imports, and no command-line subcommand that no test names.
+15. No bare `throw new Error` and no empty `catch` outside the fault library.
 
 ## Releases
 
