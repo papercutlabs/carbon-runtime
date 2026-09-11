@@ -8,11 +8,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { Store } from '../stream/store.mjs';
 import { listTeachings } from '../stream/teachings.mjs';
 import { checkManifest } from '../tools/lib/manifest.mjs';
 import {
-  MANIFEST, TEACH_PORT, TEACH_SERVER_NAME, createTeachServer, serveTeachTool, managementFaults, teachingOf
+  MANIFEST, TEACH_PORT, TEACH_SERVER_NAME, createTeachServer, serveTeachTool, managementFaults,
+  teachingOf, argumentFaults, parseServeArgv
 } from '../runtime/teach-tool.mjs';
 
 const AGENT = 'test-agent';
@@ -325,4 +327,64 @@ test('teaching disabled is the whole path off: no server is built at all', () =>
   assert.equal(teachingOf(declaration()).max_active, 40);
   assert.equal(Number.isInteger(TEACH_PORT), true);
   assert.notEqual(TEACH_PORT, 8730);
+});
+
+// ---- served as a process of its own -----------------------------------------
+//
+// On a box the runtime serves these tools in its own process. A scored `carbon
+// run` hosts them as a declared tool server instead, started the way the box's
+// launcher starts one: the declaration, the host and the port on the command
+// line, and what the server has to reach in the declaration's runtime.env.
+
+test('the serve entry is told the declaration, the host, the port and the store, and guesses none of them', () => {
+  assert.deepEqual(argumentFaults({}).map((f) => f.code),
+    ['MISSING_ARGUMENT', 'MISSING_ARGUMENT', 'MISSING_ARGUMENT', 'TEACH_STORE_UNNAMED']);
+  assert.deepEqual(
+    argumentFaults({ declaration: '/d.json', host: '127.0.0.1', port: '8731', store: '/s' }), []);
+  assert.deepEqual(
+    parseServeArgv(['--declaration', '/d.json', '--host', '127.0.0.1', '--port', '8731']),
+    { declaration: '/d.json', host: '127.0.0.1', port: '8731', store: process.env.CARBON_TEACH_STORE });
+});
+
+test('started as its own process, it serves the same three tools and writes into the store it was named', async (t) => {
+  const store = taught();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-teach-serve-'));
+  const declarationPath = path.join(dir, 'carbon.agent.json');
+  fs.writeFileSync(declarationPath, JSON.stringify(declaration()));
+  const at = port();
+
+  const child = spawn(process.execPath, [
+    path.join(import.meta.dirname, '..', 'runtime', 'teach-tool.mjs'),
+    '--declaration', declarationPath, '--host', '127.0.0.1', '--port', String(at)
+  ], { stdio: ['ignore', 'pipe', 'pipe'], env: { CARBON_TEACH_STORE: store.dir, PATH: process.env.PATH } });
+  t.after(() => child.kill('SIGKILL'));
+
+  const listening = await new Promise((resolve) => {
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (text) => {
+      const line = text.split('\n').find((l) => l.includes('teach_tool.listening'));
+      if (line) resolve(JSON.parse(line));
+    });
+  });
+  assert.equal(listening.store, store.dir, 'it says which store it writes into, on its own stdout');
+
+  const post = async (body) => {
+    const response = await fetch(listening.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...body })
+    });
+    return (await response.json()).result;
+  };
+
+  assert.deepEqual((await post({ method: 'tools/list' })).tools.map((tool) => tool.name).sort(),
+    ['forget', 'raise_change', 'remember']);
+  const called = await post({
+    method: 'tools/call',
+    params: { name: 'remember', arguments: { text: 'I will wait for the reviewed updates.', conversation_id: CONVERSATION, source_message_id: SOURCE } }
+  });
+  assert.equal(called.isError ?? false, false, JSON.stringify(called));
+  const [written] = listTeachings(store).active;
+  assert.equal(written.text, 'I will wait for the reviewed updates.');
+  assert.equal(written.taught_by.sender_name, 'Ada', 'the teacher is read off the capture, not off the call');
 });
