@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -8,12 +9,13 @@ import { execFileSync } from 'node:child_process';
 import { Store } from '../stream/store.mjs';
 import {
   ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
-  checkoutLine, followUpInput, taughtBlock, holdApplies, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES
+  checkoutLine, followUpInput, taughtBlock, holdApplies, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES,
+  NOTHING_TAUGHT, saidNothingTaught, teachCheckInput
 } from '../runtime/loop.mjs';
 import { EXIT } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
 import { serveTeachTool } from '../runtime/teach-tool.mjs';
-import { remember } from '../stream/teachings.mjs';
+import { listTeachings, remember } from '../stream/teachings.mjs';
 import { fakeHarness } from './fake-harness.mjs';
 import * as fixture from '../adapters/fixture/index.mjs';
 
@@ -1099,4 +1101,203 @@ test('with teaching off the turn carries no block and the harness lists no teach
   assert.doesNotMatch(inputs[0], /has taught you/);
   assert.deepEqual(REPLY_LISTED().map((s) => s.name), ['carbon-reply']);
   assert.deepEqual(fs.readdirSync(path.join(dir, 'teachings')), [], 'a path that is off wrote a record');
+});
+
+// ---- increment 6: the teach check on a management reply ---------------------
+//
+// The residual the plan names, observed on the first real run of the worked
+// cases: the agent was told a restraint in the management conversation, said
+// back that it would follow it, and never called `remember`. Nothing here reads
+// what the agent said. The reply it wrote is held where it is, the store is
+// asked whether that turn recorded anything, and the answer decides.
+
+// A loop whose declaration turns teaching on, with the real teaching server on
+// loopback and the loop holding it, so a record written in a turn says which
+// release it was written under.
+async function teachCheckLoop({ onTurn }) {
+  const decl = teachingDeclaration();
+  const made = makeLoop({ decl, statuses: TEACH_LISTED, onTurn });
+  const served = await serveTeachTool({
+    store: made.store, agent: AGENT, declaration: decl, port: await freePort()
+  });
+  made.loop.teach = served;
+  return { ...made, decl, served };
+}
+
+// A port nothing is on, asked of the kernel rather than guessed, because a guess
+// collides and a collision is a test that fails for a reason that is not the
+// rule it is about. The server binds an explicit port, so the port is taken here
+// and handed over.
+async function freePort() {
+  const probe = net.createServer();
+  return new Promise((resolve, reject) => {
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+// The tool call the model would make, made over the real server so the record is
+// written by the path a box writes it by.
+async function callTeachTool(url, name, args) {
+  const called = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })
+  });
+  return (await called.json()).result;
+}
+
+// What the model answers with: the reply tool, told which declaration it is
+// serving, which is what holds a management reply where it is.
+function replyWith(store, decl, params, text) {
+  return replyHandler({ store, agent: AGENT, declaration: decl })({
+    conversation_id: params.input.match(/conversation_id: (\S+)/)[1],
+    request_id: params.clientUserMessageId.replace(/-(follow-up|teach-check)$/, ''),
+    text
+  });
+}
+
+test('a management turn that recorded what it was taught sends its reply and takes no second turn', async () => {
+  let served = null;
+  const { loop, store, harness, decl } = await teachCheckLoop({
+    onTurn: (s) => async (session, params) => {
+      const capture = s.rebuild().find((r) => r.direction === 'inbound');
+      const result = await callTeachTool(served.url, 'remember', {
+        text: 'When a workbook lands here I will not change any records off it.',
+        conversation_id: params.input.match(/conversation_id: (\S+)/)[1],
+        source_message_id: params.input.match(/message_id: (\S+)/)[1]
+      });
+      assert.notEqual(result.isError, true, JSON.stringify(result));
+      assert.equal(capture.message_id, params.input.match(/message_id: (\S+)/)[1],
+        'the turn stated a message_id that is not this message');
+      replyWith(s, decl, params, 'Understood. I will wait for the reviewed updates.');
+      return 'completed';
+    }
+  });
+  served = loop.teach;
+
+  let result;
+  try {
+    result = await loop.pass([item(1, 'A workbook landing here is not permission to change records.', { sender_name: 'Ada' })]);
+  } finally {
+    await served.close();
+  }
+
+  assert.equal(harness.session.turns.length, 1, 'a turn that recorded what it was taught was followed up anyway');
+  assert.equal(result.released[0].teach_check, 'released');
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
+  const outbound = store.rebuild().find((r) => r.direction === 'outbound');
+  assert.equal(outbound.delivery.status, 'sent');
+  assert.equal(outbound.body, 'Understood. I will wait for the reviewed updates.');
+  // The record says which release it was written under, and it was written by
+  // the server rather than by anything the model passed.
+  const [teaching] = listTeachings(store).active;
+  assert.equal(teaching.release_id, result.released[0].release_id);
+});
+
+test('a management turn that recorded nothing is asked once, and NOTHING_TAUGHT sends the reply unchanged', async () => {
+  let served = null;
+  const inputs = [];
+  const { loop, store, harness, decl } = await teachCheckLoop({
+    onTurn: (s) => (session, params) => {
+      inputs.push(params.input);
+      if (inputs.length === 1) {
+        replyWith(s, decl, params, 'Both cases are with the reviewer.');
+        return 'completed';
+      }
+      return { status: 'completed', agent_message: `  ${NOTHING_TAUGHT}\n` };
+    }
+  });
+  served = loop.teach;
+
+  let result;
+  try {
+    result = await loop.pass([item(1, 'What is the position on the two cases?', { sender_name: 'Ada' })]);
+  } finally {
+    await served.close();
+  }
+
+  assert.equal(harness.session.turns.length, 2, 'exactly one teach check');
+  const capture = store.rebuild().find((r) => r.direction === 'inbound');
+  assert.equal(inputs[1], teachCheckInput(capture, result.released[0].release_id,
+    { store, declaration: decl }));
+  assert.match(inputs[1], /^Your reply on this conversation is written and has not gone out yet\./);
+  assert.match(inputs[1], /answer exactly NOTHING_TAUGHT/);
+  assert.match(inputs[1], /source_message_id "account-1:c1:1"/);
+  assert.equal(result.released[0].teach_check, 'released-nothing-taught');
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
+  const outbound = store.rebuild().find((r) => r.direction === 'outbound');
+  assert.equal(outbound.delivery.status, 'sent');
+  // Never rewritten: the reply that goes out is the one the model wrote.
+  assert.equal(outbound.body, 'Both cases are with the reviewer.');
+  assert.deepEqual(listTeachings(store).records, []);
+});
+
+test('a management reply whose teach check is answered by neither a record nor NOTHING_TAUGHT is parked, unsent and unchanged', async () => {
+  let served = null;
+  const { loop, store, harness, decl } = await teachCheckLoop({
+    onTurn: (s) => (session, params) => {
+      if (params.clientUserMessageId.endsWith('-teach-check')) {
+        return { status: 'completed', agent_message: 'Yes, I have noted that and will follow it.' };
+      }
+      replyWith(s, decl, params, 'Understood. I will not change any cases off a workbook.');
+      return 'completed';
+    }
+  });
+  served = loop.teach;
+
+  let result;
+  try {
+    result = await loop.pass([item(1, 'A workbook landing here is not permission to change records.', { sender_name: 'Ada' })]);
+  } finally {
+    await served.close();
+  }
+
+  assert.equal(harness.session.turns.length, 2, 'asked more than once, or not at all');
+  // The answer was a sentence about remembering, which is exactly not the thing
+  // the check accepts: only a record, or the one literal word.
+  assert.equal(saidNothingTaught('Yes, I have noted that and will follow it.'), false);
+  assert.equal(result.released[0].teach_check, 'parked-unrecorded-teaching');
+  assert.deepEqual(result.delivered, [], 'a reply claiming a memory nothing holds was sent');
+
+  const outbound = store.rebuild().find((r) => r.direction === 'outbound');
+  assert.equal(outbound.disposition, 'parked');
+  assert.equal(outbound.adapter_fields.park_reason, 'unrecorded-teaching');
+  assert.equal(outbound.adapter_fields.park_faults[0].code, 'TEACHING_UNRECORDED');
+  // Held, so no deliver pass will ever take it, and the text is the model's own.
+  assert.equal(outbound.delivery.status, 'pending-teach-check');
+  assert.equal(outbound.body, 'Understood. I will not change any cases off a workbook.');
+  assert.deepEqual(listTeachings(store).records, []);
+});
+
+test('a customer or an ops conversation pays no teach check: one turn, and the reply goes out', async () => {
+  let served = null;
+  const { loop, store, harness, decl } = await teachCheckLoop({
+    onTurn: (s) => (session, params) => {
+      replyWith(s, decl, params, 'On it.');
+      return 'completed';
+    }
+  });
+  served = loop.teach;
+
+  let result;
+  try {
+    // c2 is the work chat, declared ops; c3 is declared by nothing and takes the
+    // channel's default, which is customer.
+    result = await loop.pass([
+      item(1, 'Please chase the two open ones.', { conversation: 'c2', sender_name: 'Sam' }),
+      item(2, 'Any news?', { conversation: 'c3', sender_name: 'A customer' })
+    ]);
+  } finally {
+    await served.close();
+  }
+
+  assert.equal(harness.session.turns.length, 2, 'a conversation that is not the management one was teach-checked');
+  assert.deepEqual(result.released.map((r) => r.teach_check), ['not-held', 'not-held']);
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent', 'sent']);
+  assert.ok(store.rebuild().filter((r) => r.direction === 'outbound')
+    .every((r) => r.delivery.status === 'sent' && r.disposition !== 'parked'));
 });

@@ -511,8 +511,23 @@ export class Store {
   //   already failed   allowed; a failure is a known non-delivery, so a new
   //                    request under the same id is a retry of something that
   //                    demonstrably did not arrive
-  reply(record) {
+  //
+  // `status` is the status the reply is written at, and there are two. `pending`
+  // is a reply the deliver pass sends on the next sweep. `pending-teach-check` is
+  // a reply written in the management conversation and held where it is until its
+  // own turn completes and the runtime has asked whether what the client taught
+  // was recorded; the deliver pass sends `pending` and nothing else, so a held
+  // reply cannot leave the box by any path, including a restart that recovers a
+  // written reply. Which of the two a reply is written at is the caller's, not
+  // this library's: the store knows what a held reply is and the runtime knows
+  // which room holds one.
+  reply(record, { status = 'pending' } = {}) {
     const faults = [];
+    if (status !== 'pending' && status !== 'pending-teach-check') {
+      faults.push(fault('REPLY_STATUS_UNWRITABLE', String(status),
+        'a reply is written pending, or pending-teach-check when it is held until its turn completes, and never at any other status',
+        'write the reply at pending, or at pending-teach-check to hold it; a sent, unknown or failed status is settled later and never written here'));
+    }
     if (record.direction !== 'outbound') {
       faults.push(fault('REPLY_NOT_OUTBOUND', record.message_id,
         'a reply is an outbound record',
@@ -539,9 +554,13 @@ export class Store {
     if (existing && existing.status === 'sent') {
       return { fenced: 'sent', chunk_ids: existing.chunk_ids ?? [], message_id: existing.message_id };
     }
-    if (existing && existing.status === 'pending') {
+    // A held reply is a written reply, so it fences the same way: one request id
+    // is one reply, whether it is waiting for the transport or for the check.
+    if (existing && (existing.status === 'pending' || existing.status === 'pending-teach-check')) {
       throw new StreamFault([fault('REQUEST_ALREADY_PENDING', record.delivery.request_id,
-        'a reply with this request_id is already written and not yet sent',
+        existing.status === 'pending-teach-check'
+          ? 'a reply with this request_id is already written and is held until this turn completes'
+          : 'a reply with this request_id is already written and not yet sent',
         'wait for the send to finish; do not write a second reply under one request id')]);
     }
     if (existing && existing.status === 'unknown') {
@@ -550,11 +569,11 @@ export class Store {
         'a person decides what happened to this send')]);
     }
 
-    const pending = { ...record, delivery: { ...record.delivery, status: 'pending' } };
+    const pending = { ...record, delivery: { ...record.delivery, status } };
     const result = this.capture(pending);
     writeAtomic(this.requestFile(record.delivery.request_id), JSON.stringify({
       request_id: record.delivery.request_id,
-      status: 'pending',
+      status,
       conversation_id: record.conversation_id,
       message_id: record.message_id,
       revision: record.revision,
@@ -578,6 +597,21 @@ export class Store {
       ...request, status, chunk_ids: extra.chunk_ids ?? request.chunk_ids ?? []
     }, null, 2) + '\n');
     return { ...record, delivery };
+  }
+
+  // A held reply, let go. It becomes an ordinary pending reply and the next
+  // deliver pass sends it; its text is not touched, because the runtime never
+  // rewrites what the model said, and the record is the one the reply tool wrote.
+  releaseHeldReply(request_id) {
+    const request = this.readRequest(request_id);
+    if (!request || request.status !== 'pending-teach-check') {
+      throw new StreamFault([fault('REPLY_NOT_HELD', request_id,
+        request
+          ? `the reply under this request id is ${request.status} and only a reply held at pending-teach-check is let go`
+          : 'no reply was written under this request id, so there is nothing held',
+        'let go only a reply this runtime held for the teach check')]);
+    }
+    return this.settleDelivery(request_id, 'pending');
   }
 
   // Every chunk id a split reply produced is written back, so a person reading

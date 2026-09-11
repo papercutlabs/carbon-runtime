@@ -227,8 +227,8 @@ function freeId(store, source_message_id, at) {
     'read the teachings directory; something is writing records in a loop')]);
 }
 
-function base(store, { agent, text, conversation_id, source_message_id, capture, now }) {
-  return {
+function base(store, { agent, text, conversation_id, source_message_id, capture, now, release_id }) {
+  const record = {
     schema: 'carbon.teaching.v1',
     id: freeId(store, source_message_id, now),
     agent,
@@ -238,6 +238,21 @@ function base(store, { agent, text, conversation_id, source_message_id, capture,
     taught_by: taughtBy(capture),
     taught_at: now
   };
+  // The release the turn was taking, when whoever started the teaching server
+  // knew it. It is written here and nowhere else, so a caller that knows no
+  // release simply writes a record without one rather than inventing a value.
+  if (typeof release_id === 'string' && release_id.length > 0) record.release_id = release_id;
+  return record;
+}
+
+// Every record written under one release of one turn. It is what the release
+// loop asks at the end of a turn in the management conversation: did this turn
+// record anything at all, or did the agent only say it would. A record with no
+// release_id was written by a server no release loop told, and belongs to no
+// release here.
+export function teachingsUnderRelease(store, release_id) {
+  if (typeof release_id !== 'string' || release_id.length === 0) return [];
+  return listTeachings(store).records.filter((r) => r.release_id === release_id);
 }
 
 // Copied from the capture, never from the caller. sender_name is written only
@@ -271,7 +286,7 @@ function agentFaults(agent, capture) {
 // Two calls quoting the same source message and the same text are one thing
 // taught once: the second returns the first record and writes nothing. A client
 // repeating themselves, and a turn re-issued after a restart, are both that.
-export function remember(store, { agent, text, conversation_id, source_message_id, max_active, max_chars, now = new Date().toISOString() } = {}) {
+export function remember(store, { agent, text, conversation_id, source_message_id, max_active, max_chars, release_id = null, now = new Date().toISOString() } = {}) {
   const { capture, faults: sourceFaults } = citedCapture(store, conversation_id, source_message_id);
   const faults = [...sourceFaults, ...textFaults(text, max_chars), ...agentFaults(agent, capture)];
 
@@ -295,7 +310,7 @@ export function remember(store, { agent, text, conversation_id, source_message_i
   if (faults.length > 0) throw new StreamFault(faults);
 
   const written = writeTeaching(store, {
-    ...base(store, { agent, text, conversation_id, source_message_id, capture, now }),
+    ...base(store, { agent, text, conversation_id, source_message_id, capture, now, release_id }),
     kind: 'instruction',
     status: 'active'
   });
@@ -305,7 +320,7 @@ export function remember(store, { agent, text, conversation_id, source_message_i
 // Record an instruction the agent refused as a change for the people who build
 // it, with which boundary question was answered yes. The same shape and the same directory:
 // one record set, one writer, one reader.
-export function raiseChange(store, { agent, text, conversation_id, source_message_id, failed_question, max_chars, now = new Date().toISOString() } = {}) {
+export function raiseChange(store, { agent, text, conversation_id, source_message_id, failed_question, max_chars, release_id = null, now = new Date().toISOString() } = {}) {
   const { capture, faults: sourceFaults } = citedCapture(store, conversation_id, source_message_id);
   const faults = [...sourceFaults, ...textFaults(text, max_chars), ...agentFaults(agent, capture)];
   if (!QUESTIONS.includes(failed_question)) {
@@ -323,7 +338,7 @@ export function raiseChange(store, { agent, text, conversation_id, source_messag
 
   return {
     ...writeTeaching(store, {
-      ...base(store, { agent, text, conversation_id, source_message_id, capture, now }),
+      ...base(store, { agent, text, conversation_id, source_message_id, capture, now, release_id }),
       kind: 'change-request',
       status: 'open',
       failed_question

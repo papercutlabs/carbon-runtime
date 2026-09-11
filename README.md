@@ -10,7 +10,7 @@ The one contract in this repository is the stream contract: **every adapter
 writes one record shape into one store**. An email arriving, a chat message, a
 history import, a nightly timer and the agent's own reply are the same record
 with a different `source`. Nothing downstream knows the channel except as a
-field. An adapter is a thing that passes its subset of twenty-three conformance
+field. An adapter is a thing that passes its subset of twenty-four conformance
 cases, and `bin/carbon-stream check` is what says whether it does.
 
 ## What this is not
@@ -46,7 +46,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
 | `adapters/telegram/` | the Telegram adapter: the Bot API over https with no library, the long poll whose offset is the watermark, the declared chats and the declared operator |
 | `import/` | the history imports: a zip reader with no dependency and the map from an export's rows to records, and the ledger import, which reads a client's own SQLite ledger through a mapping file that names its tables and columns, and the outbound import, which reads the places that system recorded what the agent itself sent |
-| `conformance/cases.mjs` | the twenty-three cases, by number and name |
+| `conformance/cases.mjs` | the twenty-four cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
@@ -93,7 +93,11 @@ Six rules hold it together.
    `pending` before any transport is called. A second reply under a request id
    already `sent` gets the stored chunk ids back and sends nothing; one already
    `pending` is refused; one whose acceptance is `unknown` is never retried,
-   because an uncertain send is a person's decision.
+   because an uncertain send is a person's decision. A reply written in the
+   management conversation is written at `pending-teach-check` and is held there
+   until its own turn has been asked what it recorded; the deliver pass sends
+   `pending` and nothing else, so a held reply cannot leave the box by any path,
+   including a restart.
 
 ## The two history imports
 
@@ -185,6 +189,21 @@ Nine rules are worth stating on their own.
    that reason on the record. Anything else parks the record with reason
    `no-reply`, and what the model said is kept on the thread record so a person
    can read why it thought it had answered.
+
+   **And a turn that spoke is not a turn that recorded.** In the management
+   conversation — the one room where what a client says can be a standing
+   instruction — the reply is held at `pending-teach-check` until the turn ends.
+   If a teaching record was written under that release, or the conversation is
+   any other kind, the reply goes out as it always did. If nothing was recorded,
+   the runtime takes exactly one more follow-up turn on the same thread: record
+   it now with `remember` or `raise_change`, or answer exactly `NOTHING_TAUGHT`.
+   Either answer sends the reply unchanged; a second silence parks the reply with
+   reason `unrecorded-teaching`, unsent, and doctor names it from outside the box
+   as a parked record. The runtime never rewrites the reply's text, and a customer
+   or an ops conversation pays none of this. It exists because of one observed
+   run: an agent told a restraint in the management conversation said back that it
+   would follow it and never called `remember`, which is a reply claiming a memory
+   that does not exist.
 5. **A required tool server that is down holds release, by name.** The status is
    read after the unit's thread is open, because that is the only way the
    harness reports it, and a startup notification re-raises the hold. A server

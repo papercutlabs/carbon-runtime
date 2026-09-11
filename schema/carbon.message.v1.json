@@ -69,10 +69,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["request_id", "status", "text_sha256"],
-      "description": "Outbound only. unknown is never retried.",
+      "description": "Outbound only. unknown is never retried. pending-teach-check is a reply written in the management conversation and held until its own turn completes: the deliver pass sends pending and never sends a held reply, so nothing reaches the client before the runtime has asked whether what the client taught was recorded.",
       "properties": {
         "request_id": { "type": "string", "minLength": 1 },
-        "status": { "enum": ["pending", "sent", "unknown", "failed"] },
+        "status": { "enum": ["pending", "pending-teach-check", "sent", "unknown", "failed"] },
         "text_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "chunk_ids": { "type": "array", "items": { "type": "string" } },
         "completed_at": { "type": "string", "minLength": 1 }

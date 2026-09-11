@@ -41,6 +41,11 @@
       }
     },
     "taught_at": { "type": "string", "minLength": 1, "description": "The record's write time, UTC." },
+    "release_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The release the turn that wrote this record was taking, when a runtime named one. It is written by the teaching server from what the release loop told it and never by the model, and it is absent when the server was started by something that runs no release loop, such as a scored run. It is what lets the runtime ask, at the end of a turn in the management conversation, whether anything was recorded in that turn."
+    },
     "status": {
       "enum": ["active", "forgotten", "open", "closed"],
       "description": "active or forgotten for an instruction; open or closed for a change request. A revocation is a status change and never a delete: there is no path here that takes a record away."

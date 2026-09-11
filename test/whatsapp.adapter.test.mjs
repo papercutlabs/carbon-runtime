@@ -1,4 +1,4 @@
-// What this channel does that the twenty-three cases do not name.
+// What this channel does that the twenty-four cases do not name.
 //
 // The conformance check proves the adapter writes the one record shape. These
 // prove the decisions particular to WhatsApp: one key per chat under the linked

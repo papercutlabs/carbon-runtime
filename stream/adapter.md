@@ -5,7 +5,7 @@ chat session, a poller against a ticket system, a nightly timer, a form, an
 operator's note, a one-off import of a history export. Nothing downstream knows
 the channel except as a field on the record.
 
-An adapter is a thing that passes its subset of the twenty-three conformance cases.
+An adapter is a thing that passes its subset of the twenty-four conformance cases.
 `bin/carbon-stream check --adapter <path> --fixtures <dir>` runs them.
 
 ## What an adapter declares
