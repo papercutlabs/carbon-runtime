@@ -1,0 +1,17 @@
+[
+  {
+    "chat_jid": "15550001111@s.whatsapp.net",
+    "chat_name": "Ada",
+    "message_id": "LEDGER_9004",
+    "sender_jid": "15550001111@s.whatsapp.net",
+    "sender_name": "Ada",
+    "text": "A later row in the same chat.",
+    "message_type": "text",
+    "from_me": false,
+    "timestamp": "2025-04-02T11:03:00.000Z",
+    "has_media": false,
+    "media": [],
+    "reply_to": null,
+    "fields": {}
+  }
+]

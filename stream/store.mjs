@@ -39,7 +39,15 @@ const SCHEMA = JSON.parse(fs.readFileSync(
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
-const MERGING_SOURCE = 'import:carbon-capture';
+// An import merges into what a live adapter already captured; a live adapter
+// never merges into another's record. There is more than one import — an export
+// and a client's own SQLite ledger are both the client's past — and what makes
+// one of them a merging source is that it is an import, not which import it is.
+const MERGING_PREFIX = 'import:';
+
+function merges(source) {
+  return typeof source === 'string' && source.startsWith(MERGING_PREFIX);
+}
 
 let tempCounter = 0;
 
@@ -188,7 +196,7 @@ export class Store {
       let written = record;
       if (fs.existsSync(places.record)) {
         const existing = JSON.parse(fs.readFileSync(places.record, 'utf8'));
-        if (existing.source !== record.source && record.source !== MERGING_SOURCE) {
+        if (existing.source !== record.source && !merges(record.source)) {
           throw new StreamFault([fault('MESSAGE_ID_CLAIMED', record.message_id,
             `this message_id is already written by the adapter whose source is ${existing.source}`,
             'two live adapters cannot write one message_id; give the record its own conversation-scoped id')]);
