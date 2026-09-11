@@ -4,7 +4,7 @@ WhatsApp through an unofficial library that pairs as a linked device, the way th
 desktop application does. The official business API is not used and will not be.
 
 The adapter declares `inbound` and `outbound`, and passes the sixteen of the
-seventeen conformance cases that apply to those two capabilities:
+twenty-three conformance cases that apply to those two capabilities:
 
 ```
 node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/whatsapp/fixtures

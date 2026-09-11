@@ -29,7 +29,8 @@ const WORDS = path.join(HERE, 'denied-words.sha256');
 // authority's own published domain. Changing it here would break that identity,
 // which the byte-for-byte test in test/ is there to hold.
 const EXEMPT = new Map([
-  ['schema/carbon.message.v1.json', 'the vendored schema is byte-identical to its authority, whose $id names a published domain']
+  ['schema/carbon.message.v1.json', 'the vendored schema is byte-identical to its authority, whose $id names a published domain'],
+  ['schema/carbon.teaching.v1.json', 'the vendored schema is byte-identical to its authority, whose $id names a published domain']
 ]);
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);

@@ -1,4 +1,4 @@
-// The seventeen conformance cases. An adapter is a thing that passes its subset
+// The twenty-three conformance cases. An adapter is a thing that passes its subset
 // of them: the check runs a case only when the adapter declared a capability the
 // case applies to.
 //
@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { StreamFault } from '../stream/store.mjs';
+import { forget, listTeachings, raiseChange, remember, writeTeaching } from '../stream/teachings.mjs';
 
 function sha256(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
@@ -108,6 +109,27 @@ function replyRecord(context, request, overrides = {}) {
 }
 
 const RELEASE = { released_at: '2026-09-10T10:00:00.000Z', thread_id: 'unit-1', turn_id: 'turn-1' };
+
+// Cases 18 to 23 are about what a client taught their agent. They need one
+// inbound capture to cite, because a teaching record refers to the message that
+// taught it, so they run wherever the inbound cases run.
+const TAUGHT = { max_active: 40, max_chars: 400 };
+
+function teach(context, overrides = {}) {
+  const [captured] = ingest(context, context.fixtures['inbound.json'].slice(0, 1));
+  return {
+    capture: captured.record,
+    call: {
+      agent: context.agent,
+      text: 'A workbook arriving in this chat is not permission to change records.',
+      conversation_id: captured.record.conversation_id,
+      source_message_id: captured.record.message_id,
+      now: '2026-09-11T10:15:00.000Z',
+      ...TAUGHT,
+      ...overrides
+    }
+  };
+}
 
 export const CASES = [
   {
@@ -357,6 +379,164 @@ export const CASES = [
         'the fixture revision does not sit below the message cursor, so nothing is proved');
       const [written] = ingest(context, pending);
       assert.ok(context.store.release(written.record, RELEASE).release, 'the revision did not release');
+    }
+  },
+  {
+    number: 18,
+    name: 'a teaching whose source is not a capture in this store is refused before any write',
+    capabilities: ['inbound'],
+    run(context) {
+      const { capture, call } = teach(context);
+      const before = tree(context.store.dir);
+      throws(() => remember(context.store, { ...call, source_message_id: `${capture.conversation_id}:nobody-sent-this` }),
+        'TEACHING_SOURCE_NOT_A_CAPTURE');
+      assert.deepEqual(tree(context.store.dir), before, 'a teaching with no source changed the store');
+      assert.deepEqual(listTeachings(context.store).active, []);
+
+      // The teacher is copied from the capture and is never an argument.
+      const written = remember(context.store, call);
+      assert.equal(written.record.taught_by.sender_id, capture.sender_id);
+      assert.equal(written.record.taught_by.role, capture.role);
+      assert.equal(written.record.kind, 'instruction');
+      assert.equal(written.record.status, 'active');
+      assert.equal(fs.statSync(written.file).mode & 0o777, 0o600);
+    }
+  },
+  {
+    number: 19,
+    name: 'a remember at the cap is refused and the cap is named in the fault',
+    capabilities: ['inbound'],
+    run(context) {
+      const { call } = teach(context);
+      const cap = 2;
+      for (let i = 0; i < cap; i++) {
+        remember(context.store, { ...call, text: `${call.text} (${i})`, max_active: cap });
+      }
+      assert.equal(listTeachings(context.store).active.length, cap);
+      const refused = throws(() => remember(context.store, { ...call, text: 'one more thing', max_active: cap }),
+        'TEACHING_AT_CAP');
+      const named = refused.faults.find((f) => f.code === 'TEACHING_AT_CAP');
+      assert.match(`${named.subject} ${named.problem}`, new RegExp(String(cap)), 'the fault does not name the cap');
+      assert.match(named.fix, /forget/, 'the fault does not say what to do instead');
+      assert.equal(listTeachings(context.store).active.length, cap, 'the refused instruction was written anyway');
+
+      // The size refusal is the same path: an instruction that does not fit.
+      throws(() => remember(context.store, { ...call, text: 'x'.repeat(call.max_chars + 1), max_active: 40 }),
+        'TEACHING_TEXT_TOO_LONG');
+      throws(() => remember(context.store, { ...call, text: '', max_active: 40 }), 'TEACHING_TEXT_EMPTY');
+    }
+  },
+  {
+    number: 20,
+    name: 'forget moves an instruction to forgotten, leaves its bytes otherwise intact, and takes it off the active list',
+    capabilities: ['inbound'],
+    run(context) {
+      const { capture, call } = teach(context);
+      const written = remember(context.store, call);
+      const before = JSON.parse(fs.readFileSync(written.file, 'utf8'));
+
+      const revoked = forget(context.store, {
+        id: written.id,
+        conversation_id: capture.conversation_id,
+        source_message_id: capture.message_id,
+        now: '2026-09-12T09:00:00.000Z'
+      });
+      const after = JSON.parse(fs.readFileSync(written.file, 'utf8'));
+      assert.equal(after.status, 'forgotten');
+      assert.deepEqual(after.forgotten, { at: '2026-09-12T09:00:00.000Z', source_message_id: capture.message_id });
+      assert.deepEqual(
+        { ...after, status: null, forgotten: null },
+        { ...before, status: null, forgotten: null },
+        'forgetting an instruction changed something other than its status'
+      );
+
+      const list = listTeachings(context.store);
+      assert.deepEqual(list.active, [], 'the forgotten instruction is still active');
+      assert.equal(list.forgotten.length, 1, 'the forgotten instruction is not in the forgotten list');
+      assert.equal(revoked.active, 0);
+
+      // Only an active instruction is forgotten, and only one this agent holds.
+      throws(() => forget(context.store, {
+        id: written.id, conversation_id: capture.conversation_id, source_message_id: capture.message_id
+      }), 'TEACHING_NOT_ACTIVE');
+      throws(() => forget(context.store, {
+        id: 'teach-20260911T101500Z-00000000',
+        conversation_id: capture.conversation_id,
+        source_message_id: capture.message_id
+      }), 'TEACHING_NOT_ACTIVE');
+    }
+  },
+  {
+    number: 21,
+    name: 'two remembers quoting the same source and the same text write one record',
+    capabilities: ['inbound'],
+    run(context) {
+      const { call } = teach(context);
+      const first = remember(context.store, call);
+      const second = remember(context.store, { ...call, now: '2026-09-11T11:00:00.000Z' });
+      assert.equal(second.id, first.id, 'the same thing taught twice wrote a second record');
+      assert.equal(second.already, true);
+      assert.equal(listTeachings(context.store).active.length, 1);
+      assert.equal(fs.readdirSync(context.store.under('teachings')).filter((n) => n.endsWith('.json')).length, 1);
+
+      // The same source saying something else is a second instruction.
+      const other = remember(context.store, { ...call, text: 'Send the weekly summary on a Friday.' });
+      assert.notEqual(other.id, first.id);
+      assert.equal(listTeachings(context.store).active.length, 2);
+    }
+  },
+  {
+    number: 22,
+    name: 'a teachings read of a store with a corrupt record reports that file by name and still returns the others',
+    capabilities: ['inbound'],
+    run(context) {
+      const { call } = teach(context);
+      const written = remember(context.store, call);
+      const corrupt = context.store.under('teachings', 'teach-20260911T101500Z-deadbeef.json');
+      fs.writeFileSync(corrupt, '{ this is not a record\n');
+
+      const list = listTeachings(context.store);
+      assert.equal(list.active.length, 1, 'the readable record was dropped with the unreadable one');
+      assert.equal(list.active[0].id, written.id);
+      assert.equal(list.unreadable.length, 1);
+      assert.match(list.unreadable[0].subject, /teach-20260911T101500Z-deadbeef\.json/,
+        'the unreadable file is not named');
+      assert.deepEqual(Object.keys(list.unreadable[0]).sort(), ['code', 'fix', 'problem', 'subject']);
+      assert.ok(fs.existsSync(corrupt), 'the unreadable file was taken away rather than reported');
+    }
+  },
+  {
+    number: 23,
+    name: 'a teaching record survives a store round-trip with a field an older or a newer writer added',
+    capabilities: ['inbound'],
+    run(context) {
+      const { capture, call } = teach(context);
+      const written = remember(context.store, call);
+      const from_another_version = { ...written.record, scope: 'one conversation only' };
+      const again = writeTeaching(context.store, from_another_version);
+      assert.equal(again.record.scope, 'one conversation only', 'the unknown field was dropped on the way through');
+
+      const list = listTeachings(context.store);
+      assert.equal(list.active.length, 1);
+      assert.equal(list.active[0].scope, 'one conversation only', 'the unknown field did not survive the read');
+
+      // A kind no version of this schema has is refused rather than carried.
+      throws(() => writeTeaching(context.store, { ...written.record, kind: 'note' }), 'TEACHING_KIND_UNKNOWN');
+
+      // The change request is the same shape with a different kind, and it names
+      // which boundary question was answered yes.
+      const raised = raiseChange(context.store, {
+        ...call,
+        text: 'Take the reviewed workbook and apply its rows to the records.',
+        failed_question: 1,
+        now: '2026-09-11T10:20:00.000Z'
+      });
+      assert.equal(raised.record.kind, 'change-request');
+      assert.equal(raised.record.status, 'open');
+      assert.equal(raised.record.failed_question, 1);
+      assert.equal(raised.record.taught_by.sender_id, capture.sender_id);
+      assert.equal(listTeachings(context.store).open.length, 1);
+      throws(() => raiseChange(context.store, { ...call, failed_question: 9 }), 'TEACHING_QUESTION_UNKNOWN');
     }
   }
 ];

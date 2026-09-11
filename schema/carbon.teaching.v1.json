@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://papercutlabs.com/carbon/schema/carbon.teaching.v1.json",
+  "title": "carbon.teaching.v1",
+  "description": "One JSON file per record, under an agent's own store at teachings/<id>.json. What a client taught their agent, or what the agent refused as a change for the people who build it. A declared field of the wrong type is refused; a field this version does not name is carried, so a record an older or a newer writer wrote is never parked on a strict key check. There is no maxLength here because carbon's validator implements none: the length cap is the declaration's teaching.max_chars and the writer enforces it, naming the cap in its refusal.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "id", "kind", "agent", "text", "conversation_id", "source_message_id", "taught_by", "taught_at", "status"],
+  "properties": {
+    "schema": { "const": "carbon.teaching.v1" },
+    "id": {
+      "type": "string",
+      "pattern": "^teach-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$",
+      "description": "teach-<utc compact>-<first 8 of the sha256 of source_message_id>."
+    },
+    "kind": {
+      "enum": ["instruction", "change-request"],
+      "description": "An instruction the agent remembered, or an instruction it refused and raised as a change for the people who build it. One shape, two kinds: there is no second schema for a change request."
+    },
+    "agent": { "type": "string", "minLength": 1, "description": "The agent id, as in the declaration." },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "For an instruction, what the agent will now do, in plain words. For a change request, what the client asked for. At most the declaration's teaching.max_chars."
+    },
+    "conversation_id": { "type": "string", "minLength": 1, "description": "Channel-native, as in the message record." },
+    "source_message_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The <conversation_id>:<platform message id> of the inbound capture that taught it. A record whose source is not a capture in this agent's own store is refused before any write."
+    },
+    "taught_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sender_id", "role"],
+      "description": "Copied from the cited capture and never supplied by the caller, so an instruction cannot be attributed to someone who did not send it. sender_name is absent when the capture carries none.",
+      "properties": {
+        "sender_id": { "type": "string", "minLength": 1 },
+        "sender_name": { "type": "string" },
+        "role": { "enum": ["contact", "operator", "agent", "system"] }
+      }
+    },
+    "taught_at": { "type": "string", "minLength": 1, "description": "The record's write time, UTC." },
+    "status": {
+      "enum": ["active", "forgotten", "open", "closed"],
+      "description": "active or forgotten for an instruction; open or closed for a change request. A revocation is a status change and never a delete: there is no path here that takes a record away."
+    },
+    "failed_question": {
+      "enum": [1, 2, 3, 4, "size"],
+      "description": "Change requests only: which boundary question was answered yes. 1 a tool the agent does not have, 2 a system, channel or person it does not reach, 3 a permission it was not given, 4 a change to what was agreed to be done for this client; size is the instruction that does not fit under the caps."
+    },
+    "forgotten": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "source_message_id"],
+      "description": "Written when the client revoked the instruction, absent otherwise. The revoking message is named so the revocation is as traceable as the instruction was.",
+      "properties": {
+        "at": { "type": "string", "minLength": 1 },
+        "source_message_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "closed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "issue", "by"],
+      "description": "Written when a change request was closed from outside the box, absent otherwise. The work item's id is the one field of it that ever reaches the box: nothing here mints, reads or closes one.",
+      "properties": {
+        "at": { "type": "string", "minLength": 1 },
+        "issue": { "type": "string", "minLength": 1 },
+        "by": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

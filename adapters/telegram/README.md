@@ -1,7 +1,7 @@
 # The Telegram adapter
 
 One bot in, one bot out, over the Bot API's long poll. It declares `inbound` and
-`outbound`, so sixteen of the seventeen conformance cases apply to it and it
+`outbound`, so twenty-two of the twenty-three conformance cases apply to it and it
 passes all sixteen:
 
 ```
