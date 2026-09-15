@@ -12,6 +12,8 @@ const CONVERSATION = `${ACCOUNT}:c1`;
 
 function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-reply-'));
+  const work = path.join(dir, 'work');
+  fs.mkdirSync(work);
   const store = Store.open(path.join(dir, 'store'));
   store.capture({
     schema: 'carbon.message.v1',
@@ -32,16 +34,26 @@ function setup() {
     historical: false,
     disposition: 'captured'
   });
-  return { dir, store, handle: replyHandler({ store, agent: AGENT }) };
+  return { dir, work, store, handle: replyHandler({ store, agent: AGENT, work }) };
 }
 
 function pdfBytes() {
   return Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n', 'latin1');
 }
 
+function refuse(run) {
+  try {
+    run();
+  } catch (error) {
+    assert.ok(error instanceof StreamFault);
+    return error;
+  }
+  throw new assert.AssertionError({ message: 'nothing was refused' });
+}
+
 test('a reply with a PDF attachment writes a pending record the adapter would send', () => {
-  const { dir, store, handle } = setup();
-  const file = path.join(dir, 'bor.pdf');
+  const { work, store, handle } = setup();
+  const file = path.join(work, 'bor.pdf');
   fs.writeFileSync(file, pdfBytes());
   const result = handle({
     conversation_id: CONVERSATION,
@@ -75,19 +87,59 @@ test('a reply without attachments still writes text only', () => {
 });
 
 test('a missing attachment file is a fault with a fix', () => {
-  const { handle } = setup();
-  try {
-    handle({
-      conversation_id: CONVERSATION,
-      request_id: 'r-missing',
-      text: 'BOR attached.',
-      attachments: ['/tmp/carbon-reply-does-not-exist.pdf']
-    });
-  } catch (error) {
-    assert.ok(error instanceof StreamFault);
-    assert.equal(error.faults[0].code, 'ATTACHMENT_MISSING');
-    assert.ok(error.faults[0].fix);
-    return;
-  }
-  throw new assert.AssertionError({ message: 'missing file was not refused' });
+  const { work, handle } = setup();
+  const error = refuse(() => handle({
+    conversation_id: CONVERSATION,
+    request_id: 'r-missing',
+    text: 'BOR attached.',
+    attachments: [path.join(work, 'gone.pdf')]
+  }));
+  assert.equal(error.faults[0].code, 'ATTACHMENT_MISSING');
+  assert.ok(error.faults[0].fix);
+});
+
+test('an absolute path outside the work directory is refused', () => {
+  const { store, handle } = setup();
+  const error = refuse(() => handle({
+    conversation_id: CONVERSATION,
+    request_id: 'r-outside',
+    text: 'BOR attached.',
+    attachments: ['/etc/hosts']
+  }));
+  assert.equal(error.faults[0].code, 'ATTACHMENT_OUTSIDE_WORK');
+  assert.equal(store.rebuild().some((r) => r.direction === 'outbound'), false);
+});
+
+test('a symlink that resolves outside the work directory is refused', () => {
+  const { work, store, handle } = setup();
+  const link = path.join(work, 'escape.hosts');
+  fs.symlinkSync('/etc/hosts', link);
+  const error = refuse(() => handle({
+    conversation_id: CONVERSATION,
+    request_id: 'r-symlink',
+    text: 'BOR attached.',
+    attachments: [link]
+  }));
+  assert.equal(error.faults[0].code, 'ATTACHMENT_OUTSIDE_WORK');
+  assert.equal(store.rebuild().some((r) => r.direction === 'outbound'), false);
+});
+
+test('a valid PDF followed by a missing file writes nothing and leaves no orphan', () => {
+  const { work, store, handle } = setup();
+  const file = path.join(work, 'bor.pdf');
+  fs.writeFileSync(file, pdfBytes());
+  const error = refuse(() => handle({
+    conversation_id: CONVERSATION,
+    request_id: 'r-mixed',
+    text: 'BOR attached.',
+    attachments: [file, path.join(work, 'gone.pdf')]
+  }));
+  assert.equal(error.faults[0].code, 'ATTACHMENT_MISSING');
+  assert.equal(store.rebuild().some((r) => r.direction === 'outbound'), false);
+  const places = store.paths({
+    conversation_id: CONVERSATION,
+    message_id: `${CONVERSATION}:reply-r-mixed`,
+    revision: 0
+  });
+  assert.equal(fs.existsSync(places.attachments), false);
 });
