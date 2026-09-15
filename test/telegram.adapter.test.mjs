@@ -24,6 +24,7 @@ const FIXTURES = path.join(import.meta.dirname, '..', 'adapters', 'telegram', 'f
 
 const CHAT = '887766554';
 const GROUP = '-1001234567890';
+const TOKEN = '7000001:AAH-this-is-not-a-real-token_0123456789';
 
 function fixture(name) {
   return JSON.parse(fs.readFileSync(path.join(FIXTURES, name), 'utf8'));
@@ -227,6 +228,72 @@ test('an item is matched to the delivery it belongs to by its id, and by its tex
     chunk_ids: [],
     text_sha256: '1e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
   }), false);
+});
+
+// ---- what a reply's file goes out as -----------------------------------------
+
+test('a reply document carries its record name, PDF suffix, type and bytes', async () => {
+  const previous = globalThis.fetch;
+  const calls = [];
+  let nextMessageId = 201;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      status: 200,
+      json: async () => ({ ok: true, result: { message_id: nextMessageId++ } })
+    };
+  };
+
+  try {
+    const cases = [
+      { filename: 'quote.pdf', mime: 'application/pdf', name: 'quote.pdf', type: 'application/pdf' },
+      { filename: 'quote', mime: 'application/pdf', name: 'quote.pdf', type: 'application/pdf' },
+      { mime: 'application/pdf', digestName: true, type: 'application/pdf' },
+      { filename: 'notes.txt', name: 'notes.txt', type: 'application/octet-stream', omitMime: true }
+    ];
+
+    for (const [index, expected] of cases.entries()) {
+      const c = context({ dry_run: false, transport: { token: TOKEN } });
+      const record = {
+        conversation_id: `${c.account}:${CHAT}`,
+        conversation_kind: 'direct',
+        message_id: `${c.account}:${CHAT}:reply-${index}`,
+        body: 'The requested file is attached.',
+        delivery: { request_id: `r-${index + 1}` }
+      };
+      const bytes = expected.filename === 'notes.txt'
+        ? Buffer.from('plain notes')
+        : Buffer.from('%PDF-1.4\n% invented fixture\n');
+      const attachment = c.store.putAttachment(record, bytes, {
+        mime: expected.mime,
+        filename: expected.filename
+      });
+      if (expected.omitMime) delete attachment.mime;
+      record.attachments = [attachment];
+
+      const callStart = calls.length;
+      const outcome = await adapter.send(c, record);
+      assert.deepEqual(outcome, {
+        status: 'sent',
+        chunk_ids: [String(201 + index * 2), String(202 + index * 2)]
+      });
+
+      const [messageCall, documentCall] = calls.slice(callStart);
+      assert.match(messageCall.url, /\/sendMessage$/);
+      assert.match(documentCall.url, /\/sendDocument$/);
+      assert.ok(documentCall.options.body instanceof FormData);
+      assert.equal(documentCall.options.body.get('chat_id'), CHAT);
+      const part = documentCall.options.body.get('document');
+      assert.equal(part.name, expected.digestName ? `${attachment.sha256}.pdf` : expected.name);
+      assert.equal(part.type, expected.type);
+      assert.deepEqual(Buffer.from(await part.arrayBuffer()), bytes);
+      if (expected.mime === 'application/pdf') {
+        assert.equal(Buffer.from(await part.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+      }
+    }
+  } finally {
+    globalThis.fetch = previous;
+  }
 });
 
 // ---- what a failed send means --------------------------------------------------
