@@ -86,7 +86,7 @@ export function openReleaseIn(store, conversation_id) {
     .at(-1) ?? null;
 }
 
-export function attachmentsFromPaths(store, record, paths) {
+function attachmentsFromPaths(store, record, paths) {
   const faults = [];
   const written = [];
   for (const given of paths ?? []) {
