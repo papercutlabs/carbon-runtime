@@ -17,12 +17,15 @@
 //   already unknown   refused; an uncertain send is never retried blindly
 //   already failed    allowed; a failure is a known non-delivery
 //
-// Three arguments, all explicit, none guessed: which conversation, which request,
-// what text.
+// Four arguments, all explicit, none guessed: which conversation, which request,
+// what text, and optionally which files this turn created to send with it.
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createServer } from '../tools/lib/mcp.mjs';
 import { StreamFault } from '../stream/store.mjs';
+import { fault } from '../stream/faults.mjs';
 import { managementConversationOf } from './channel.mjs';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
@@ -53,7 +56,11 @@ export const MANIFEST = {
         properties: {
           conversation_id: { type: 'string', minLength: 1, description: 'the conversation the message arrived on, exactly as this turn stated it' },
           request_id: { type: 'string', minLength: 1, description: 'the request_id this turn was given; a second call with the same one never sends twice' },
-          text: { type: 'string', minLength: 1, description: 'what to say' }
+          text: { type: 'string', minLength: 1, description: 'what to say' },
+          attachments: {
+            type: 'array',
+            description: 'absolute paths of files this turn created under the work directory, for example ["/srv/carbon/mtu-agent/work/bor.pdf"]; omit or pass [] when there is no file'
+          }
         }
       },
       returns: {
@@ -79,7 +86,88 @@ export function openReleaseIn(store, conversation_id) {
     .at(-1) ?? null;
 }
 
-export function outboundRecord(store, { agent, conversation_id, request_id, text, now = new Date() }) {
+function resolveWorkRoot(work) {
+  if (typeof work !== 'string' || work.length === 0) {
+    throw new StreamFault([fault('WORK_DIR_ABSENT', String(work ?? ''),
+      'the reply tool sends only files from the turn workspace, and no workspace was given',
+      'start the reply server with the agent work directory')]);
+  }
+  try {
+    return fs.realpathSync(work);
+  } catch {
+    throw new StreamFault([fault('WORK_DIR_ABSENT', work,
+      'the work directory does not exist',
+      'run carbon install, which places the work directory')]);
+  }
+}
+
+function insideWork(root, resolved) {
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  return resolved === root || resolved.startsWith(prefix);
+}
+
+function readAttachments(paths, work) {
+  const list = paths ?? [];
+  if (list.length === 0) return [];
+  const root = resolveWorkRoot(work);
+  const faults = [];
+  const ready = [];
+  for (const given of list) {
+    if (typeof given !== 'string' || !given.startsWith('/')) {
+      faults.push(fault('PATH_NOT_ABSOLUTE', String(given),
+        'a reply attachment is an absolute workspace path',
+        'pass the absolute path of a file this turn created'));
+      continue;
+    }
+    let resolved;
+    try {
+      resolved = fs.realpathSync(given);
+    } catch {
+      faults.push(fault('ATTACHMENT_MISSING', given,
+        'no file exists at this path',
+        'write the file first, then pass its absolute path'));
+      continue;
+    }
+    if (!insideWork(root, resolved)) {
+      faults.push(fault('ATTACHMENT_OUTSIDE_WORK', given,
+        'a reply attachment must resolve inside the turn workspace',
+        'pass a file this turn created under the work directory'));
+      continue;
+    }
+    let stat;
+    try {
+      stat = fs.statSync(resolved);
+    } catch {
+      faults.push(fault('ATTACHMENT_MISSING', given,
+        'no file exists at this path',
+        'write the file first, then pass its absolute path'));
+      continue;
+    }
+    if (!stat.isFile()) {
+      faults.push(fault('ATTACHMENT_NOT_A_FILE', given,
+        'this path is not a file',
+        'pass the absolute path of a file this turn created'));
+      continue;
+    }
+    const bytes = fs.readFileSync(resolved);
+    const mime = bytes.slice(0, 5).toString() === '%PDF-' || resolved.toLowerCase().endsWith('.pdf')
+      ? 'application/pdf'
+      : 'application/octet-stream';
+    ready.push({ bytes, mime, filename: path.basename(resolved) });
+  }
+  if (faults.length > 0) throw new StreamFault(faults);
+  return ready;
+}
+
+function attachmentsFromPaths(store, record, paths, work) {
+  const ready = readAttachments(paths, work);
+  return ready.map((one) => store.putAttachment(record, one.bytes, {
+    mime: one.mime,
+    filename: one.filename
+  }));
+}
+
+export function outboundRecord(store, { agent, conversation_id, request_id, text, attachments = [], work = null, now = new Date() }) {
   const inbound = store.recordsIn(conversation_id).filter((r) => r.direction === 'inbound');
   if (inbound.length === 0) {
     throw new StreamFault([{
@@ -117,6 +205,7 @@ export function outboundRecord(store, { agent, conversation_id, request_id, text
     }
   };
   if (open) record.reply_to = open.message_id;
+  record.attachments = attachmentsFromPaths(store, record, attachments, work);
   return record;
 }
 
@@ -138,7 +227,7 @@ export function teachCheckConversation(declaration) {
 // The declaration is what says whether this reply is held. Without one — which is
 // every caller that is not the runtime — nothing is held and the reply is written
 // as it always was.
-export function replyHandler({ store, agent, declaration = null, now = () => new Date() }) {
+export function replyHandler({ store, agent, declaration = null, work = null, now = () => new Date() }) {
   const heldIn = teachCheckConversation(declaration);
   return (args) => {
     const record = outboundRecord(store, {
@@ -146,6 +235,8 @@ export function replyHandler({ store, agent, declaration = null, now = () => new
       conversation_id: args.conversation_id,
       request_id: args.request_id,
       text: args.text,
+      attachments: args.attachments,
+      work,
       now: now()
     });
     const held = heldIn !== null && args.conversation_id === heldIn;
@@ -165,15 +256,15 @@ export function replyHandler({ store, agent, declaration = null, now = () => new
   };
 }
 
-export function createReplyServer({ store, agent, declaration = null }) {
+export function createReplyServer({ store, agent, declaration = null, work = null }) {
   return createServer({
     manifest: MANIFEST,
-    handlers: { reply: replyHandler({ store, agent, declaration }) }
+    handlers: { reply: replyHandler({ store, agent, declaration, work }) }
   });
 }
 
-export async function serveReplyTool({ store, agent, declaration = null, host = '127.0.0.1', port = REPLY_PORT }) {
-  const server = createReplyServer({ store, agent, declaration });
+export async function serveReplyTool({ store, agent, declaration = null, work = null, host = '127.0.0.1', port = REPLY_PORT }) {
+  const server = createReplyServer({ store, agent, declaration, work });
   const { server: http, url } = await server.serveHttp({ host, port });
   return { http, url, close: () => new Promise((resolve) => http.close(resolve)) };
 }

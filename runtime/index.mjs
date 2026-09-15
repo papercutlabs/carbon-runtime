@@ -294,7 +294,7 @@ export async function run(options) {
     // a reply written in the management conversation waits where it is until the
     // runtime has asked the turn what it recorded. Every other conversation is
     // untouched by it.
-    reply = await serveReplyTool({ store, agent: declaration.agent?.id, declaration, port: replyPort });
+    reply = await serveReplyTool({ store, agent: declaration.agent?.id, declaration, work, port: replyPort });
     log({ event: 'reply_tool.listening', url: reply.url });
 
     // The teaching tools, on the declaration's word and on nothing else. With
