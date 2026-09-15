@@ -488,7 +488,8 @@ async function sendLive(context, record, channel, chat, chunks) {
 
   // An attachment the model put on the reply. It goes as a document rather than
   // as a photo whatever it is, because a photo sent as a photo is recompressed
-  // by the server and a document is the bytes the store holds.
+  // by the server and a document is the bytes the store holds. The part is named
+  // by the record, so the chat shows the name the agent gave it.
   for (const attachment of record.attachments ?? []) {
     if (attachment.download_failed === true) continue;
     let sent;
@@ -508,8 +509,19 @@ async function sendAttachment(context, transport, chat, attachment) {
   const form = new FormData();
   form.append('chat_id', String(chat));
   form.append('document', new Blob([bytes], { type: attachment.mime ?? 'application/octet-stream' }),
-    attachment.file.split('/').pop());
+    documentNameOf(attachment));
   return callForm(transport, 'sendDocument', form);
+}
+
+// The name the part carries, which is the name Telegram shows and the extension
+// the apps type the file by. The record's filename is the name the agent wrote;
+// the digest is the fallback for a record that has none; a PDF whose name lacks
+// .pdf is given one, because a part typed application/pdf under a bare name
+// went out as a generic file.
+function documentNameOf(attachment) {
+  const name = attachment.filename ?? attachment.file.split('/').pop();
+  const bare = attachment.mime === 'application/pdf' && !/\.pdf$/i.test(name);
+  return bare ? `${name}.pdf` : name;
 }
 
 // The one method that is not JSON. A document is multipart, because the Bot API
