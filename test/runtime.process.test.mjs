@@ -294,7 +294,7 @@ test('the reply tool answers over loopback and writes a pending record', async (
     const listed = await call({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
     assert.deepEqual(listed.result.tools.map((t) => t.name), ['reply']);
     assert.deepEqual(Object.keys(listed.result.tools[0].inputSchema.properties).sort(),
-      ['conversation_id', 'request_id', 'text']);
+      ['attachments', 'conversation_id', 'request_id', 'text']);
 
     const called = await call({
       jsonrpc: '2.0', id: 2, method: 'tools/call',

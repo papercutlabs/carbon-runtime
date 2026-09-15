@@ -17,12 +17,15 @@
 //   already unknown   refused; an uncertain send is never retried blindly
 //   already failed    allowed; a failure is a known non-delivery
 //
-// Three arguments, all explicit, none guessed: which conversation, which request,
-// what text.
+// Four arguments, all explicit, none guessed: which conversation, which request,
+// what text, and optionally which files this turn created to send with it.
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createServer } from '../tools/lib/mcp.mjs';
 import { StreamFault } from '../stream/store.mjs';
+import { fault } from '../stream/faults.mjs';
 import { managementConversationOf } from './channel.mjs';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
@@ -53,7 +56,11 @@ export const MANIFEST = {
         properties: {
           conversation_id: { type: 'string', minLength: 1, description: 'the conversation the message arrived on, exactly as this turn stated it' },
           request_id: { type: 'string', minLength: 1, description: 'the request_id this turn was given; a second call with the same one never sends twice' },
-          text: { type: 'string', minLength: 1, description: 'what to say' }
+          text: { type: 'string', minLength: 1, description: 'what to say' },
+          attachments: {
+            type: 'array',
+            description: 'absolute workspace paths of files this turn created to send with the reply, for example ["/srv/carbon/work/bor.pdf"]; omit or pass [] when there is no file'
+          }
         }
       },
       returns: {
@@ -79,7 +86,42 @@ export function openReleaseIn(store, conversation_id) {
     .at(-1) ?? null;
 }
 
-export function outboundRecord(store, { agent, conversation_id, request_id, text, now = new Date() }) {
+export function attachmentsFromPaths(store, record, paths) {
+  const faults = [];
+  const written = [];
+  for (const given of paths ?? []) {
+    if (typeof given !== 'string' || !given.startsWith('/')) {
+      faults.push(fault('PATH_NOT_ABSOLUTE', String(given),
+        'a reply attachment is an absolute workspace path',
+        'pass the absolute path of a file this turn created'));
+      continue;
+    }
+    let stat;
+    try {
+      stat = fs.statSync(given);
+    } catch {
+      faults.push(fault('ATTACHMENT_MISSING', given,
+        'no file exists at this path',
+        'write the file first, then pass its absolute path'));
+      continue;
+    }
+    if (!stat.isFile()) {
+      faults.push(fault('ATTACHMENT_NOT_A_FILE', given,
+        'this path is not a file',
+        'pass the absolute path of a file this turn created'));
+      continue;
+    }
+    const bytes = fs.readFileSync(given);
+    const mime = bytes.slice(0, 5).toString() === '%PDF-' || given.toLowerCase().endsWith('.pdf')
+      ? 'application/pdf'
+      : 'application/octet-stream';
+    written.push(store.putAttachment(record, bytes, { mime, filename: path.basename(given) }));
+  }
+  if (faults.length > 0) throw new StreamFault(faults);
+  return written;
+}
+
+export function outboundRecord(store, { agent, conversation_id, request_id, text, attachments = [], now = new Date() }) {
   const inbound = store.recordsIn(conversation_id).filter((r) => r.direction === 'inbound');
   if (inbound.length === 0) {
     throw new StreamFault([{
@@ -117,6 +159,7 @@ export function outboundRecord(store, { agent, conversation_id, request_id, text
     }
   };
   if (open) record.reply_to = open.message_id;
+  record.attachments = attachmentsFromPaths(store, record, attachments);
   return record;
 }
 
@@ -146,6 +189,7 @@ export function replyHandler({ store, agent, declaration = null, now = () => new
       conversation_id: args.conversation_id,
       request_id: args.request_id,
       text: args.text,
+      attachments: args.attachments,
       now: now()
     });
     const held = heldIn !== null && args.conversation_id === heldIn;
