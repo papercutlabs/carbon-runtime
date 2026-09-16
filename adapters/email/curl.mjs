@@ -27,6 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { fault } from '../../stream/faults.mjs';
 
 export const NEVER_ARRIVED = new Set([6, 7, 51, 60, 67]);
+export const IMAP_CONNECT_AND_GREETING_TIMEOUT_SECONDS = 15;
 
 export class TransportFault extends Error {
   constructor(faults) {
@@ -60,7 +61,16 @@ export function runCurl(args, { timeout_ms = 120000 } = {}) {
 function imapArgs({ netrc, host, port = 993, mailbox = null, request = null, uid = null }) {
   const at = mailbox === null ? '' : encodeURIComponent(mailbox);
   const url = `imaps://${host}:${port}/${at}${uid === null ? '' : `;UID=${uid}`}`;
-  const args = ['--silent', '--show-error', '--netrc-file', netrc, '--url', url];
+  // curl's connection timeout ends when TLS completes, before an IMAP server
+  // sends its greeting. The total timeout covers both phases. Each IMAP call
+  // uses a fresh connection, so both limits belong on every inbound call.
+  const args = [
+    '--silent', '--show-error',
+    '--connect-timeout', String(IMAP_CONNECT_AND_GREETING_TIMEOUT_SECONDS),
+    '--max-time', String(IMAP_CONNECT_AND_GREETING_TIMEOUT_SECONDS),
+    '--netrc-file', netrc,
+    '--url', url
+  ];
   if (request !== null) args.push('--request', request);
   return args;
 }
