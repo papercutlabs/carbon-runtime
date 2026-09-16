@@ -12,7 +12,10 @@ import { fault } from '../../lib/faults.mjs';
 import { HarnessFault } from './session.mjs';
 
 // The workspace-write policy the plan names: the work directory writable, the
-// store writable, the network closed.
+// store writable, the network closed. `/tmp` stays writable because LibreOffice
+// creates its IPC socket only under `/tmp` or `/var/tmp` and ignores TMPDIR for
+// that path (PA-246 live turn: `ERROR: no valid pipe path found`). `$TMPDIR`
+// outside the declared roots stays closed.
 export function workspaceWritePolicy({ writableRoots, networkAccess }) {
   if (!Array.isArray(writableRoots)) {
     throw new HarnessFault(fault('HARNESS_WRITABLE_ROOTS_ABSENT', 'sandboxPolicy.writableRoots',
@@ -24,7 +27,7 @@ export function workspaceWritePolicy({ writableRoots, networkAccess }) {
       'a turn was asked for without saying whether the model may reach the network',
       'pass networkAccess explicitly; the declaration carries the answer'));
   }
-  return { type: 'workspaceWrite', writableRoots, networkAccess, excludeSlashTmp: true, excludeTmpdirEnvVar: true };
+  return { type: 'workspaceWrite', writableRoots, networkAccess, excludeSlashTmp: false, excludeTmpdirEnvVar: true };
 }
 
 export function readOnlyPolicy({ networkAccess }) {
