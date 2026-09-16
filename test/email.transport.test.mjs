@@ -13,7 +13,7 @@ import path from 'node:path';
 import { Store, StreamFault } from '../stream/store.mjs';
 import { ingest } from '../conformance/cases.mjs';
 import * as adapter from '../adapters/email/index.mjs';
-import { STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.mjs';
+import { DEFAULT_IMAP_STATUS_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.mjs';
 
 const HERE = import.meta.dirname;
 const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
@@ -113,9 +113,22 @@ test('a greeting timeout is retried and a later success completes the same poll 
   const firstArgs = JSON.parse(fs.readFileSync(path.join(recorded, '.status.args-1.json'), 'utf8'));
   assert.deepEqual(
     firstArgs.slice(firstArgs.indexOf('--connect-timeout'), firstArgs.indexOf('--connect-timeout') + 4),
-    ['--connect-timeout', String(STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS), '--max-time', '15']
+    ['--connect-timeout', String(DEFAULT_IMAP_STATUS_TIMEOUT_SECONDS), '--max-time', '15']
   );
   assert.equal(adapter.STATUS_ATTEMPTS, 3);
+});
+
+test('a declaration can give the initial status connection and greeting 300 seconds', () => {
+  const recorded = recordedAs({
+    'status-1.txt': fs.readFileSync(path.join(RECORDED, 'status.txt'))
+  });
+
+  assert.equal(adapter.poll(context(recorded, { imap_status_timeout_seconds: 300 })).items.length, 2);
+  const args = JSON.parse(fs.readFileSync(path.join(recorded, '.status.args-1.json'), 'utf8'));
+  assert.deepEqual(
+    args.slice(args.indexOf('--connect-timeout'), args.indexOf('--connect-timeout') + 4),
+    ['--connect-timeout', '300', '--max-time', '300']
+  );
 });
 
 test('one poll cycle fails after three unsuccessful attempts', () => {
