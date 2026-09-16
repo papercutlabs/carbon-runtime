@@ -13,7 +13,7 @@ import path from 'node:path';
 import { Store, StreamFault } from '../stream/store.mjs';
 import { ingest } from '../conformance/cases.mjs';
 import * as adapter from '../adapters/email/index.mjs';
-import { IMAP_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.mjs';
+import { STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.mjs';
 
 const HERE = import.meta.dirname;
 const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
@@ -113,9 +113,9 @@ test('a greeting timeout is retried and a later success completes the same poll 
   const firstArgs = JSON.parse(fs.readFileSync(path.join(recorded, '.status.args-1.json'), 'utf8'));
   assert.deepEqual(
     firstArgs.slice(firstArgs.indexOf('--connect-timeout'), firstArgs.indexOf('--connect-timeout') + 4),
-    ['--connect-timeout', String(IMAP_CONNECT_AND_GREETING_TIMEOUT_SECONDS), '--max-time', '15']
+    ['--connect-timeout', String(STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS), '--max-time', '15']
   );
-  assert.equal(adapter.POLL_ATTEMPTS, 3);
+  assert.equal(adapter.STATUS_ATTEMPTS, 3);
 });
 
 test('one poll cycle fails after three unsuccessful attempts', () => {
@@ -130,6 +130,26 @@ test('one poll cycle fails after three unsuccessful attempts', () => {
 
   assert.throws(() => adapter.poll(context(recorded)), /curl exited 28/);
   assert.equal(fs.readFileSync(path.join(recorded, '.status.calls'), 'utf8'), '3');
+});
+
+test('a permanent initial status failure is not retried', () => {
+  const recorded = recordedAs({
+    'status-1.txt': '',
+    'status-1.exit': '67\n'
+  });
+
+  assert.throws(() => adapter.poll(context(recorded)), /curl exited 67/);
+  assert.equal(fs.readFileSync(path.join(recorded, '.status.calls'), 'utf8'), '1');
+});
+
+test('a later message fetch keeps the ordinary timeout', () => {
+  const firstMessage = fs.readFileSync(path.join(RECORDED, 'fetch-1.txt'));
+  const recorded = recordedAs({ 'fetch-1-1.txt': firstMessage });
+
+  assert.equal(adapter.poll(context(recorded)).items.length, 2);
+  const fetchArgs = JSON.parse(fs.readFileSync(path.join(recorded, '.fetch-1.args-1.json'), 'utf8'));
+  assert.equal(fetchArgs.includes('--connect-timeout'), false);
+  assert.equal(fetchArgs.includes('--max-time'), false);
 });
 
 test('the outbound record is on disk as pending before the transport is called', () => {
