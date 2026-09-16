@@ -84,7 +84,7 @@ function fullMessage({ internalId, messageId, timestamp, from, references = [], 
   };
 }
 
-function recordedServer() {
+function recordedServer({ metadataStatus = 200, downloadStatus = 200 } = {}) {
   const asked = [];
   let empty = false;
   const first = fullMessage({
@@ -109,11 +109,16 @@ function recordedServer() {
     const url = new URL(input);
     asked.push({ url, authorization: options.headers?.authorization });
     if (url.hostname === 'cdn.agentmail.to') {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => Buffer.from('file') };
+      return {
+        ok: downloadStatus >= 200 && downloadStatus < 300,
+        status: downloadStatus,
+        statusText: downloadStatus === 200 ? 'OK' : 'Service Unavailable',
+        arrayBuffer: async () => Buffer.from('file')
+      };
     }
     assert.equal(options.headers.authorization, `Bearer ${API_KEY}`);
     if (url.pathname.endsWith('/attachments/attachment-1')) {
-      return json({ attachment_id: 'attachment-1', download_url: 'https://cdn.agentmail.to/object?signature=fixture' });
+      return json({ attachment_id: 'attachment-1', download_url: 'https://cdn.agentmail.to/object?signature=fixture' }, metadataStatus);
     }
     if (url.pathname.endsWith('/provider-message-1')) return json(first);
     if (url.pathname.endsWith('/provider-message-2')) return json(second);
@@ -212,4 +217,47 @@ test('an AgentMail 5xx is one failed runtime poll cycle and reaches the existing
   } finally {
     globalThis.fetch = previous;
   }
+});
+
+async function rejectedAttachmentCycle(serverOptions, code) {
+  const running = context();
+  const server = recordedServer(serverOptions);
+  try {
+    const harness = fakeHarness({ statuses: () => [] });
+    const loop = new ReleaseLoop({
+      declaration: { agent: { id: running.agent }, channels: [running.channel] },
+      channel: running.channel,
+      store: running.store,
+      storeDir: running.store.dir,
+      adapter,
+      harness,
+      session: harness.session,
+      agent: running.agent,
+      checkout: '/nowhere/repo',
+      work: '/nowhere/work'
+    });
+    const result = await loop.poll();
+    assert.equal(result.failures, 1);
+    assert.equal(result.holding, false);
+    assert.equal(result.items.length, 0);
+    assert.match(result.fault.problem, new RegExp(`^${code}:`));
+    assert.equal(pollState(running.store, ACCOUNT, 'email').consecutive_failures, 1);
+    assert.equal(pollState(running.store, ACCOUNT, 'email').holding, false);
+    assert.equal(running.store.rebuild().length, 0, 'the failed poll created a capture');
+    assert.equal(
+      running.store.cursors(adapter.pollWatermarkConversation(running, 'INBOX')).message,
+      null,
+      'the failed poll advanced the AgentMail watermark'
+    );
+  } finally {
+    server.restore();
+  }
+}
+
+test('an attachment metadata 5xx fails the poll before capture or cursor movement', async () => {
+  await rejectedAttachmentCycle({ metadataStatus: 503 }, 'AGENTMAIL_API_REFUSED');
+});
+
+test('a failed CDN download fails the poll before capture or cursor movement', async () => {
+  await rejectedAttachmentCycle({ downloadStatus: 503 }, 'AGENTMAIL_ATTACHMENT_DOWNLOAD_REFUSED');
 });

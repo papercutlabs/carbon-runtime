@@ -8,9 +8,9 @@ import fs from 'node:fs';
 import { fault } from '../../stream/faults.mjs';
 import { TransportFault } from './curl.mjs';
 
-export const DEFAULT_API_HOST = 'api.agentmail.to';
-export const DEFAULT_LIST_LIMIT = 100;
-export const CALL_TIMEOUT_MS = 60000;
+const DEFAULT_API_HOST = 'api.agentmail.to';
+const DEFAULT_LIST_LIMIT = 100;
+const CALL_TIMEOUT_MS = 60000;
 
 export class AgentMailFault extends TransportFault {
   constructor(faults, transport = {}) {
@@ -87,7 +87,7 @@ async function jsonFor(transport, pathname, search = null) {
   }
 }
 
-export async function listMessages(transport, inboxId, { after = null, limit = DEFAULT_LIST_LIMIT } = {}) {
+async function listMessages(transport, inboxId, { after = null, limit = DEFAULT_LIST_LIMIT } = {}) {
   const messages = [];
   let pageToken = null;
   do {
@@ -109,40 +109,43 @@ export async function listMessages(transport, inboxId, { after = null, limit = D
   return messages;
 }
 
-export function getMessage(transport, inboxId, messageId) {
+function getMessage(transport, inboxId, messageId) {
   return jsonFor(transport,
     `/v0/inboxes/${encodeURIComponent(inboxId)}/messages/${encodeURIComponent(messageId)}`);
 }
 
-export async function getAttachment(transport, inboxId, messageId, attachment) {
+async function getAttachment(transport, inboxId, messageId, attachment) {
   const pathname = `/v0/inboxes/${encodeURIComponent(inboxId)}/messages/${encodeURIComponent(messageId)}` +
     `/attachments/${encodeURIComponent(attachment.attachment_id)}`;
+  const metadata = await jsonFor(transport, pathname);
+  if (typeof metadata?.download_url !== 'string') {
+    throw new AgentMailFault([fault('AGENTMAIL_ATTACHMENT_METADATA_UNREADABLE', attachment.attachment_id,
+      'the attachment metadata carries no download_url',
+      'the whole poll cycle failed before capture; check the provider response before allowing the cursor to move')]);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
   try {
-    const metadata = await jsonFor(transport, pathname);
-    if (typeof metadata?.download_url !== 'string') throw new Error('the response carries no download_url');
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
-    try {
-      const response = await fetch(metadata.download_url, { signal: controller.signal });
-      if (!response.ok) throw new Error(`the attachment host answered ${response.status} ${response.statusText}`);
-      const bytes = Buffer.from(await response.arrayBuffer());
-      return {
-        bytes,
-        mime: attachment.content_type ?? metadata.content_type ?? 'application/octet-stream',
-        ...(attachment.filename ?? metadata.filename ? { filename: attachment.filename ?? metadata.filename } : {})
-      };
-    } finally {
-      clearTimeout(timer);
+    const response = await fetch(metadata.download_url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new AgentMailFault([fault('AGENTMAIL_ATTACHMENT_DOWNLOAD_REFUSED', attachment.attachment_id,
+        `the attachment host answered ${response.status} ${response.statusText}`,
+        'the whole poll cycle failed before capture; read the HTTP status and retry when the attachment service recovers')],
+      { status: response.status });
     }
-  } catch {
+    const bytes = Buffer.from(await response.arrayBuffer());
     return {
-      file: `unavailable/${attachment.attachment_id}`,
-      mime: attachment.content_type ?? 'application/octet-stream',
-      bytes: Number.isInteger(attachment.size) ? attachment.size : 0,
-      sha256: '0'.repeat(64),
-      download_failed: true,
-      ...(attachment.filename ? { filename: attachment.filename } : {})
+      bytes,
+      mime: attachment.content_type ?? metadata.content_type ?? 'application/octet-stream',
+      ...(attachment.filename ?? metadata.filename ? { filename: attachment.filename ?? metadata.filename } : {})
     };
+  } catch (error) {
+    if (error instanceof AgentMailFault) throw error;
+    throw new AgentMailFault([fault('AGENTMAIL_ATTACHMENT_DOWNLOAD_FAILED', attachment.attachment_id,
+      error?.message ?? String(error),
+      'the whole poll cycle failed before capture; read the network error and restore access to the returned attachment URL')]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -180,7 +183,7 @@ function headerLines(message) {
   return headers;
 }
 
-export function itemFor(message, attachments, mailbox = 'INBOX') {
+function itemFor(message, attachments, mailbox = 'INBOX') {
   const timestamp = new Date(message.timestamp).toISOString();
   const text = message.text ?? message.extracted_text;
   const html = text === undefined || text === null ? (message.html ?? message.extracted_html) : null;

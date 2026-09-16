@@ -284,9 +284,9 @@ test('a channel names a secret and gets its path, never its value', () => {
 test('an AgentMail email channel resolves the API key path without carrying its value', () => {
   const decl = declaration({
     kind: 'email',
-    transport: { inbound: 'agentmail-api', inbox_id: 'inbox-01', api_key_ref: 'AGENTMAIL_API_KEY' }
+    transport: { inbound: 'agentmail-api', inbox_id: 'inbox-01', api_key_ref: 'agentmail_api_key' }
   });
-  decl.secrets.push({ name: 'AGENTMAIL_API_KEY', path: '/nowhere/agentmail-api-key', purpose: 'AgentMail inbound' });
+  decl.secrets.push({ name: 'agentmail_api_key', path: '/nowhere/agentmail-api-key', purpose: 'AgentMail inbound' });
   const resolved = resolveChannel(decl, decl.channels[0]);
   assert.equal(resolved.inbound, 'agentmail-api');
   assert.equal(resolved.inbox_id, 'inbox-01');

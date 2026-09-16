@@ -87,7 +87,7 @@ same SMTP fields and netrc:
     "inbound": "agentmail-api",
     "inbox_id": "the AgentMail inbox id",
     "api_host": "api.agentmail.to",
-    "api_key_ref": "AGENTMAIL_API_KEY",
+    "api_key_ref": "agentmail_api_key",
     "smtp_host": "smtp.example.test",
     "smtp_port": 465,
     "netrc_ref": "mailbox_netrc"
@@ -95,7 +95,7 @@ same SMTP fields and netrc:
 }
 ```
 
-The declaration lists `AGENTMAIL_API_KEY` under `secrets`. The secret file holds
+The declaration lists `agentmail_api_key` under `secrets`. The secret file holds
 the API key alone on one line. `outbound_hosts` includes
 `api.agentmail.to:443` for API calls and `cdn.agentmail.to:443` for the
 short-lived attachment download URLs returned by the attachment endpoint.
