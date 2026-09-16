@@ -27,12 +27,14 @@ import { spawnSync } from 'node:child_process';
 import { fault } from '../../stream/faults.mjs';
 
 export const NEVER_ARRIVED = new Set([6, 7, 51, 60, 67]);
+export const STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS = 15;
 
 export class TransportFault extends Error {
-  constructor(faults) {
+  constructor(faults, transport = {}) {
     super(faults.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('\n'));
     this.name = 'TransportFault';
     this.faults = faults;
+    this.transport = transport;
   }
 }
 
@@ -52,25 +54,34 @@ export function runCurl(args, { timeout_ms = 120000 } = {}) {
   }
   return {
     code: result.status ?? -1,
+    timed_out: result.error?.code === 'ETIMEDOUT',
     stdout: (result.stdout ?? Buffer.alloc(0)).toString('latin1'),
     stderr: (result.stderr ?? Buffer.alloc(0)).toString('latin1').split('\n').slice(-4).join('\n').trim()
   };
 }
 
-function imapArgs({ netrc, host, port = 993, mailbox = null, request = null, uid = null }) {
+function imapArgs({ netrc, host, port = 993, mailbox = null, request = null, uid = null, timeoutSeconds = null }) {
   const at = mailbox === null ? '' : encodeURIComponent(mailbox);
   const url = `imaps://${host}:${port}/${at}${uid === null ? '' : `;UID=${uid}`}`;
-  const args = ['--silent', '--show-error', '--netrc-file', netrc, '--url', url];
+  const args = ['--silent', '--show-error'];
+  if (timeoutSeconds !== null) {
+    // curl's connection timeout ends when TLS completes. The total timeout is
+    // what also bounds the server greeting that must follow it.
+    args.push('--connect-timeout', String(timeoutSeconds), '--max-time', String(timeoutSeconds));
+  }
+  args.push('--netrc-file', netrc, '--url', url);
   if (request !== null) args.push('--request', request);
   return args;
 }
 
-function readOrThrow(args, subject, what) {
+function readOrThrow(args, subject, what, operation = null) {
   const result = runCurl(args);
   if (result.code !== 0) {
     throw new TransportFault([fault('IMAP_READ_FAILED', subject,
       `curl exited ${result.code} while ${what}${result.stderr ? `: ${result.stderr}` : ''}`,
-      'check the host, the port and the netrc file the declaration names; a login denial is exit 67')]);
+      'check the host, the port and the netrc file the declaration names; a login denial is exit 67')], {
+      operation, exit: result.code, timed_out: result.timed_out
+    });
   }
   return result.stdout;
 }
@@ -90,8 +101,12 @@ export function listMailboxes({ netrc, host, port = 993 }) {
 // UIDVALIDITY has renumbered every message in it, so every uid we hold is void.
 export function status({ netrc, host, port = 993, mailbox }) {
   const out = readOrThrow(
-    imapArgs({ netrc, host, port, mailbox, request: `STATUS ${mailbox} (UIDVALIDITY UIDNEXT MESSAGES)` }),
-    `${host} ${mailbox}`, 'reading the mailbox status');
+    imapArgs({
+      netrc, host, port, mailbox,
+      request: `STATUS ${mailbox} (UIDVALIDITY UIDNEXT MESSAGES)`,
+      timeoutSeconds: STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS
+    }),
+    `${host} ${mailbox}`, 'reading the mailbox status', 'status');
   const uidvalidity = out.match(/UIDVALIDITY (\d+)/);
   const uidnext = out.match(/UIDNEXT (\d+)/);
   const messages = out.match(/MESSAGES (\d+)/);

@@ -49,12 +49,25 @@ else if (/^UID SEARCH UNSEEN$/i.test(request)) slug = 'search-unseen';
 else if (/^UID SEARCH\b/i.test(request)) slug = 'search';
 else if (/^UID STORE\b/i.test(request)) slug = 'store';
 
-const body = path.join(dir, `${slug}.txt`);
+// A numbered first response makes this invocation sequence-aware. Tests use
+// that form to make one connection fail and a later connection succeed while
+// the adapter and its process boundary remain unchanged.
+let suffix = '';
+if (fs.existsSync(path.join(dir, `${slug}-1.txt`)) || fs.existsSync(path.join(dir, `${slug}-1.exit`))) {
+  const callsFile = path.join(dir, `.${slug}.calls`);
+  const calls = fs.existsSync(callsFile) ? Number(fs.readFileSync(callsFile, 'utf8')) + 1 : 1;
+  fs.writeFileSync(callsFile, String(calls));
+  fs.writeFileSync(path.join(dir, `.${slug}.args-${calls}.json`), JSON.stringify(args));
+  suffix = fs.existsSync(path.join(dir, `${slug}-${calls}.txt`)) ? `-${calls}` : '';
+}
+
+const body = path.join(dir, `${slug}${suffix}.txt`);
 if (!fs.existsSync(body)) {
   process.stderr.write(`curl shim: nothing recorded for ${slug}\n`);
   process.exit(78);
 }
 process.stdout.write(fs.readFileSync(body));
 
-const exitFile = path.join(dir, `${slug}.exit`);
+const numberedExit = path.join(dir, `${slug}${suffix}.exit`);
+const exitFile = fs.existsSync(numberedExit) ? numberedExit : path.join(dir, `${slug}.exit`);
 process.exit(fs.existsSync(exitFile) ? Number(fs.readFileSync(exitFile, 'utf8').trim()) : 0);

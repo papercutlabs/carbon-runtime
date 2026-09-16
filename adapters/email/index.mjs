@@ -50,6 +50,7 @@ export const capabilities = ['inbound', 'outbound'];
 // rather than quietly raised, because a number nobody honours is worse than a
 // number nobody likes.
 export const POLL_INTERVAL_FLOOR_MS = 30000;
+export const STATUS_ATTEMPTS = 3;
 
 export const DEFAULTS = {
   mailbox: 'INBOX',
@@ -595,11 +596,30 @@ function writeTemp(text) {
 // (uidvalidity, uid), kept in the store's own cursor under a conversation id
 // shaped like a mailbox, so there is one place cursors live and one write order
 // that moves them.
+// STATUS is the small first request that establishes the poll cycle. A timeout
+// there is the transient missing-greeting case; every other fault and every
+// later IMAP operation keeps its ordinary one-attempt behavior.
+function initialStatus(where) {
+  let lastError;
+  for (let attempt = 1; attempt <= STATUS_ATTEMPTS; attempt++) {
+    try {
+      return status(where);
+    } catch (error) {
+      const timedOut = error instanceof TransportFault && error.transport?.operation === 'status' &&
+        (error.transport.exit === 28 || error.transport.timed_out === true);
+      if (!timedOut) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 export function poll(context) {
   const channel = channelOf(context);
   const mailbox = channel.mailbox;
   const held = context.store.cursors(watermarkConversation(context.account, mailbox)).message;
-  const live = status({ netrc: channel.netrc, host: channel.imap_host, port: channel.imap_port, mailbox });
+  const where = { netrc: channel.netrc, host: channel.imap_host, port: channel.imap_port, mailbox };
+  const live = initialStatus(where);
 
   let fromUid = 1;
   let rescanned = false;
@@ -616,7 +636,6 @@ export function poll(context) {
     }
   }
 
-  const where = { netrc: channel.netrc, host: channel.imap_host, port: channel.imap_port, mailbox };
   const uids = searchUids({ ...where, fromUid });
   // Read the unread set before reading anything, so the flag can go back: a
   // fetch marks a message read, and this mailbox may be one a person also reads.
