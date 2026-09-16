@@ -37,6 +37,7 @@ import path from 'node:path';
 import { fault } from '../../stream/faults.mjs';
 import { MimeUnreadable, decodeWords, header, headerRaw, headersAll, readMessage } from './mime.mjs';
 import { TransportFault, fetchMessage, listMailboxes, restoreUnseen, searchUids, sendMessage, status, unseenUids } from './curl.mjs';
+import { pollAgentMail } from './agentmail-api.mjs';
 
 export const capabilities = ['inbound', 'outbound'];
 
@@ -51,6 +52,7 @@ export const capabilities = ['inbound', 'outbound'];
 // number nobody likes.
 export const POLL_INTERVAL_FLOOR_MS = 30000;
 export const STATUS_ATTEMPTS = 3;
+export const AGENTMAIL_API_INBOUND = 'agentmail-api';
 
 export const DEFAULTS = {
   mailbox: 'INBOX',
@@ -118,6 +120,11 @@ export function watermarkConversation(account, mailbox) {
   return `${account}:mailbox:${mailbox}`;
 }
 
+export function pollWatermarkConversation(context, mailbox) {
+  const base = watermarkConversation(context.account, mailbox);
+  return channelOf(context).inbound === AGENTMAIL_API_INBOUND ? `${base}:agentmail-api` : base;
+}
+
 export function idsIn(value = '') {
   return [...value.matchAll(/<([^<>]*)>/g)].map((match) => match[1].trim()).filter(Boolean);
 }
@@ -174,6 +181,7 @@ export function readItem(context, item) {
   let headers = [];
   try {
     const message = readMessage(item.rfc822, { maxAttachmentBytes: channel.max_attachment_bytes });
+    if (Array.isArray(item.agentmail_attachments)) message.attachments = item.agentmail_attachments;
     headers = message.headers;
     const ownId = idsIn(headerRaw(headers, 'message-id') ?? '')[0];
     if (ownId === undefined) {
@@ -261,8 +269,8 @@ export function consume(context, item) {
   const read = readItem(context, item);
   context.store.advanceCursor(read.conversation_id, read.cursorKind, item.position);
   context.store.advanceCursor(
-    watermarkConversation(context.account, item.mailbox ?? channelOf(context).mailbox),
-    'message', item.position);
+    pollWatermarkConversation(context, item.mailbox ?? channelOf(context).mailbox),
+    'message', item.mailbox_position ?? item.position);
 }
 
 // 3. turn a batch into the payload the store writes
@@ -617,7 +625,8 @@ function initialStatus(where) {
 export function poll(context) {
   const channel = channelOf(context);
   const mailbox = channel.mailbox;
-  const held = context.store.cursors(watermarkConversation(context.account, mailbox)).message;
+  const held = context.store.cursors(pollWatermarkConversation(context, mailbox)).message;
+  if (channel.inbound === AGENTMAIL_API_INBOUND) return pollAgentMail({ ...context, channel }, { held });
   const where = { netrc: channel.netrc, host: channel.imap_host, port: channel.imap_port, mailbox };
   const live = initialStatus(where);
 
