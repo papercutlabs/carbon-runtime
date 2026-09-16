@@ -56,6 +56,7 @@ one record. The outbound record exists on disk, `pending`, before the SMTP call.
   "mailbox": "INBOX",
   "imap_host": "imap.example.test",
   "imap_port": 993,
+  "imap_status_timeout_seconds": 15,
   "smtp_host": "smtp.example.test",
   "smtp_port": 465,
   "netrc": "/srv/carbon/agent-01/secrets/mail.netrc",
@@ -66,6 +67,11 @@ one record. The outbound record exists on disk, `pending`, before the SMTP call.
   "hold": { "release_after_ms": 3600000 }
 }
 ```
+
+`imap_status_timeout_seconds` bounds the initial `STATUS` connection, TLS
+handshake and server greeting. It defaults to 15 seconds. The three initial
+`STATUS` attempts use this value; later `SEARCH`, `FETCH` and `STORE` operations
+keep their ordinary transport timeout.
 
 `addresses` is every other address this mailbox owns; a message that names one
 of them, or the account, is answerable, and one that names none is not.

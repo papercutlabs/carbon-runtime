@@ -27,7 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { fault } from '../../stream/faults.mjs';
 
 export const NEVER_ARRIVED = new Set([6, 7, 51, 60, 67]);
-export const STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS = 15;
+export const DEFAULT_IMAP_STATUS_TIMEOUT_SECONDS = 15;
 
 export class TransportFault extends Error {
   constructor(faults, transport = {}) {
@@ -74,8 +74,8 @@ function imapArgs({ netrc, host, port = 993, mailbox = null, request = null, uid
   return args;
 }
 
-function readOrThrow(args, subject, what, operation = null) {
-  const result = runCurl(args);
+function readOrThrow(args, subject, what, operation = null, timeoutMs = 120000) {
+  const result = runCurl(args, { timeout_ms: timeoutMs });
   if (result.code !== 0) {
     throw new TransportFault([fault('IMAP_READ_FAILED', subject,
       `curl exited ${result.code} while ${what}${result.stderr ? `: ${result.stderr}` : ''}`,
@@ -99,14 +99,18 @@ export function listMailboxes({ netrc, host, port = 993 }) {
 
 // The watermark's first half. A mailbox that comes back with a different
 // UIDVALIDITY has renumbered every message in it, so every uid we hold is void.
-export function status({ netrc, host, port = 993, mailbox }) {
+export function status({
+  netrc, host, port = 993, mailbox,
+  imap_status_timeout_seconds = DEFAULT_IMAP_STATUS_TIMEOUT_SECONDS
+}) {
   const out = readOrThrow(
     imapArgs({
       netrc, host, port, mailbox,
       request: `STATUS ${mailbox} (UIDVALIDITY UIDNEXT MESSAGES)`,
-      timeoutSeconds: STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS
+      timeoutSeconds: imap_status_timeout_seconds
     }),
-    `${host} ${mailbox}`, 'reading the mailbox status', 'status');
+    `${host} ${mailbox}`, 'reading the mailbox status', 'status',
+    Math.max(120000, imap_status_timeout_seconds * 1000 + 5000));
   const uidvalidity = out.match(/UIDVALIDITY (\d+)/);
   const uidnext = out.match(/UIDNEXT (\d+)/);
   const messages = out.match(/MESSAGES (\d+)/);

@@ -36,7 +36,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fault } from '../../stream/faults.mjs';
 import { MimeUnreadable, decodeWords, header, headerRaw, headersAll, readMessage } from './mime.mjs';
-import { TransportFault, fetchMessage, listMailboxes, restoreUnseen, searchUids, sendMessage, status, unseenUids } from './curl.mjs';
+import { DEFAULT_IMAP_STATUS_TIMEOUT_SECONDS, TransportFault, fetchMessage, listMailboxes, restoreUnseen, searchUids, sendMessage, status, unseenUids } from './curl.mjs';
 
 export const capabilities = ['inbound', 'outbound'];
 
@@ -55,6 +55,7 @@ export const STATUS_ATTEMPTS = 3;
 export const DEFAULTS = {
   mailbox: 'INBOX',
   imap_port: 993,
+  imap_status_timeout_seconds: DEFAULT_IMAP_STATUS_TIMEOUT_SECONDS,
   smtp_port: 465,
   // TLS from the first byte. A channel whose box cannot open 465 declares
   // starttls and port 587 instead; see SMTP_SECURITY in ./curl.mjs.
@@ -618,7 +619,13 @@ export function poll(context) {
   const channel = channelOf(context);
   const mailbox = channel.mailbox;
   const held = context.store.cursors(watermarkConversation(context.account, mailbox)).message;
-  const where = { netrc: channel.netrc, host: channel.imap_host, port: channel.imap_port, mailbox };
+  const where = {
+    netrc: channel.netrc,
+    host: channel.imap_host,
+    port: channel.imap_port,
+    mailbox,
+    imap_status_timeout_seconds: channel.imap_status_timeout_seconds
+  };
   const live = initialStatus(where);
 
   let fromUid = 1;
