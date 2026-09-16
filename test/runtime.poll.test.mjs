@@ -281,19 +281,6 @@ test('a channel names a secret and gets its path, never its value', () => {
   assert.equal(resolved.netrc_ref, undefined);
 });
 
-test('an AgentMail email channel resolves the API key path without carrying its value', () => {
-  const decl = declaration({
-    kind: 'email',
-    transport: { inbound: 'agentmail-api', inbox_id: 'inbox-01', api_key_ref: 'agentmail_api_key' }
-  });
-  decl.secrets.push({ name: 'agentmail_api_key', path: '/nowhere/agentmail-api-key', purpose: 'AgentMail inbound' });
-  const resolved = resolveChannel(decl, decl.channels[0]);
-  assert.equal(resolved.inbound, 'agentmail-api');
-  assert.equal(resolved.inbox_id, 'inbox-01');
-  assert.equal(resolved.api_key, '/nowhere/agentmail-api-key');
-  assert.equal(resolved.api_key_ref, undefined);
-});
-
 test('a channel naming a secret nobody declared is refused by name at start', () => {
   const decl = declaration({ kind: 'email', transport: { netrc_ref: 'not_declared' } });
   assert.throws(() => resolveChannel(decl, decl.channels[0]),

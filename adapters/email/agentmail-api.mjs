@@ -19,32 +19,100 @@ export class AgentMailFault extends TransportFault {
   }
 }
 
-export function readApiKey(file) {
+function readNetrc(file) {
   if (typeof file !== 'string' || file.length === 0) {
-    throw new AgentMailFault([fault('AGENTMAIL_API_KEY_PATH_ABSENT', 'transport.api_key_ref',
-      'this AgentMail API transport names no declared secret holding its API key',
-      'declare transport.api_key_ref as the name of the AGENTMAIL_API_KEY secret')]);
+    throw new AgentMailFault([fault('AGENTMAIL_NETRC_PATH_ABSENT', 'transport.netrc_ref',
+      'this AgentMail API transport names no declared netrc secret',
+      'declare transport.netrc_ref as the existing mailbox netrc secret')]);
   }
-  let text;
   try {
-    text = fs.readFileSync(file, 'utf8');
+    return fs.readFileSync(file, 'utf8');
   } catch (error) {
-    throw new AgentMailFault([fault('AGENTMAIL_API_KEY_UNREADABLE', file,
+    throw new AgentMailFault([fault('AGENTMAIL_NETRC_UNREADABLE', file,
       error?.code === 'ENOENT' ? 'there is no file at this path' : `this account cannot read the file: ${error?.code ?? error?.message}`,
-      'place the API key through the existing secret grant, mode 0600, owned by the runtime account')]);
+      'place the mailbox netrc through the existing secret grant, mode 0600, owned by the runtime account')]);
   }
-  const key = text.trim();
-  if (key.length === 0 || /\s/.test(key)) {
-    throw new AgentMailFault([fault('AGENTMAIL_API_KEY_MALFORMED', file,
-      'the secret file is empty or contains whitespace inside the key',
-      'place the AgentMail API key alone on one line')]);
+}
+
+function quotedToken(text, start, file) {
+  let value = '';
+  for (let i = start + 1; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') return { value, next: i + 1 };
+    if (char !== '\\') { value += char; continue; }
+    const escaped = text[++i];
+    const replacements = { '"': '"', '\\': '\\', n: '\n', r: '\r', t: '\t' };
+    if (escaped === undefined || replacements[escaped] === undefined) {
+      throw new AgentMailFault([fault('AGENTMAIL_NETRC_MALFORMED', file,
+        `the quoted netrc value carries an unsupported escape ${JSON.stringify(escaped ?? 'end of file')}`,
+        'use curl netrc quoted strings with only escaped quote, backslash, n, r or t')]);
+    }
+    value += replacements[escaped];
   }
-  return key;
+  throw new AgentMailFault([fault('AGENTMAIL_NETRC_MALFORMED', file,
+    'a quoted netrc value reaches the end of the file without a closing quote',
+    'close the quoted value before the end of the file')]);
+}
+
+function netrcTokens(text, file) {
+  const tokens = [];
+  let at = 0;
+  while (at < text.length) {
+    while (/\s/.test(text[at] ?? '')) at++;
+    if (at >= text.length) break;
+    if (text[at] === '#') {
+      throw new AgentMailFault([fault('AGENTMAIL_NETRC_SYNTAX_UNSUPPORTED', file,
+        'the netrc carries a comment, which this REST reader does not interpret',
+        'remove comments; keep only machine, login and password fields, using quoted strings where needed')]);
+    }
+    if (text[at] === '"') {
+      const quoted = quotedToken(text, at, file);
+      tokens.push(quoted.value);
+      at = quoted.next;
+      continue;
+    }
+    let end = at;
+    while (end < text.length && !/\s/.test(text[end])) end++;
+    tokens.push(text.slice(at, end));
+    at = end;
+  }
+  return tokens;
+}
+
+function passwordIn(tokens, start, machine) {
+  for (let i = start; i < tokens.length; i++) {
+    if (tokens[i] === 'machine' || tokens[i] === 'default' || tokens[i] === 'macdef') break;
+    if (tokens[i] !== 'password') continue;
+    if (typeof tokens[i + 1] === 'string' && tokens[i + 1].length > 0) return tokens[i + 1];
+    break;
+  }
+  throw new AgentMailFault([fault('AGENTMAIL_NETRC_PASSWORD_ABSENT', machine,
+    'the declared mailbox netrc entry carries no password, so there is no AgentMail Bearer token',
+    `add the password to the machine ${machine} entry in mailbox_netrc`)]);
+}
+
+export function readNetrcPassword(file, machine) {
+  if (typeof machine !== 'string' || machine.length === 0) {
+    throw new AgentMailFault([fault('AGENTMAIL_NETRC_MACHINE_UNSTATED', 'transport.imap_host',
+      'the AgentMail REST transport needs the IMAP machine name whose password is its API key',
+      'declare transport.imap_host as the AgentMail IMAP host')]);
+  }
+  const tokens = netrcTokens(readNetrc(file), file);
+  let at = -1;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (tokens[i] === 'machine' && tokens[i + 1] === machine) { at = i + 2; break; }
+  }
+  if (at === -1) {
+    throw new AgentMailFault([fault('AGENTMAIL_NETRC_MACHINE_ABSENT', machine,
+      'the declared mailbox netrc carries no entry for this machine',
+      `add the existing AgentMail credential as a machine ${machine} entry in mailbox_netrc`)]);
+  }
+  return passwordIn(tokens, at, machine);
 }
 
 function transportOf(channel) {
   return {
-    apiKey: readApiKey(channel.api_key),
+    apiKey: readNetrcPassword(channel.netrc, channel.imap_host),
     apiHost: channel.api_host ?? DEFAULT_API_HOST
   };
 }
@@ -74,7 +142,7 @@ async function jsonFor(transport, pathname, search = null) {
     throw new AgentMailFault([fault('AGENTMAIL_API_REFUSED', pathname,
       `the AgentMail API answered ${response.status} ${response.statusText}`,
       response.status === 401
-        ? 'the API key is wrong or revoked; place AGENTMAIL_API_KEY again through the secret grant'
+        ? 'the password in the declared AgentMail netrc entry is wrong or revoked; replace mailbox_netrc through its existing grant'
         : 'the whole poll cycle failed; the runtime records it and applies the declared channel hold')],
     { status: response.status });
   }
