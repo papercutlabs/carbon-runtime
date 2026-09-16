@@ -87,7 +87,7 @@ same SMTP fields and netrc:
     "inbound": "agentmail-api",
     "inbox_id": "the AgentMail inbox id",
     "api_host": "api.agentmail.to",
-    "api_key_ref": "agentmail_api_key",
+    "imap_host": "imap.agentmail.to",
     "smtp_host": "smtp.example.test",
     "smtp_port": 465,
     "netrc_ref": "mailbox_netrc"
@@ -95,14 +95,16 @@ same SMTP fields and netrc:
 }
 ```
 
-The declaration lists `agentmail_api_key` under `secrets`. The secret file holds
-the API key alone on one line. `outbound_hosts` includes
+The existing `mailbox_netrc` secret carries the `imap.agentmail.to` machine
+entry. AgentMail uses that entry's password as its REST API key, so the adapter
+reads that password only when it makes a request and sends it as the Bearer
+token. No second secret path is needed. `outbound_hosts` includes
 `api.agentmail.to:443` for API calls and `cdn.agentmail.to:443` for the
 short-lived attachment download URLs returned by the attachment endpoint.
 
 ## The secret
 
-One netrc file, placed by the mailbox's owner, owned by the tools user and
+One netrc file, placed by the mailbox's owner, owned by the agent user and
 readable by nobody else, at the path the declaration's `secrets` entry names. It
 holds one line per host, and nothing else:
 
@@ -115,12 +117,12 @@ machine smtp.example.test login agent-01@example.test password THE-MAILBOX-PASSW
 chmod 0600 mail.netrc
 ```
 
-Two lines, because curl matches the machine line to the host it is dialling, and
-the IMAP host and the SMTP host are two hosts even when the password is one. The
-adapter passes the path to curl as `--netrc-file` and never opens the file
-itself, so the password does not pass through this process, does not reach a
-command line another user can read in the process table, and does not reach a
-log.
+Two lines, because a credential is selected by machine name. On the IMAP path,
+the adapter passes the file path to curl as `--netrc-file`; curl opens it and the
+password never enters the runtime process. On the AgentMail REST path, the
+runtime reads the password from the declared IMAP machine entry and uses it only
+to form the request's Bearer header. In neither path does the password reach a
+command line or a log.
 
 ## How it works
 

@@ -12,14 +12,15 @@ import { ReleaseLoop } from '../runtime/loop.mjs';
 import { pollState } from '../runtime/poll.mjs';
 import { fakeHarness } from './fake-harness.mjs';
 import * as adapter from '../adapters/email/index.mjs';
-import { AgentMailFault, readApiKey } from '../adapters/email/agentmail-api.mjs';
+import { AgentMailFault, readNetrcPassword } from '../adapters/email/agentmail-api.mjs';
 
 const ACCOUNT = 'agent-01@example.test';
 const API_KEY = 'am_fixture_key';
+const NETRC = path.join(import.meta.dirname, 'fixtures', 'agentmail.netrc');
 
-function keyFile(body = `${API_KEY}\n`) {
+function netrcFile(body) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-agentmail-key-'));
-  const file = path.join(dir, 'key');
+  const file = path.join(dir, 'netrc');
   fs.writeFileSync(file, body, { mode: 0o600 });
   return file;
 }
@@ -35,14 +36,14 @@ function context() {
       account: ACCOUNT,
       inbound: 'agentmail-api',
       inbox_id: 'inbox-fixture',
-      api_key: keyFile(),
+      netrc: NETRC,
+      imap_host: 'imap.agentmail.to',
       api_host: 'api.agentmail.to',
       agentmail_list_limit: 1,
       mailbox: 'INBOX',
       addresses: [],
       smtp_host: 'smtp.example.test',
       smtp_port: 465,
-      netrc: '/nowhere/netrc',
       poll_interval_ms: 30000,
       poll_failures_before_hold: 2,
       max_attachment_bytes: 1000,
@@ -139,10 +140,20 @@ function recordedServer({ metadataStatus = 200, downloadStatus = 200 } = {}) {
   return { asked, makeEmpty: () => { empty = true; }, restore: () => { globalThis.fetch = previous; } };
 }
 
-test('the API key is read from its declared file at call time', () => {
-  assert.equal(readApiKey(keyFile()), API_KEY);
-  assert.throws(() => readApiKey('/no/such/key'), (error) => error.faults[0].code === 'AGENTMAIL_API_KEY_UNREADABLE');
-  assert.throws(() => readApiKey(keyFile('bad key\n')), (error) => error.faults[0].code === 'AGENTMAIL_API_KEY_MALFORMED');
+test('the Bearer token is the password from the declared AgentMail netrc machine', () => {
+  assert.equal(readNetrcPassword(NETRC, 'imap.agentmail.to'), API_KEY);
+  assert.equal(readNetrcPassword(netrcFile('machine imap.agentmail.to login "agent one" password "am key"\n'),
+    'imap.agentmail.to'), 'am key');
+  assert.throws(() => readNetrcPassword('/no/such/netrc', 'imap.agentmail.to'),
+    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_UNREADABLE');
+  assert.throws(() => readNetrcPassword(netrcFile('machine smtp.agentmail.to login agent password smtp\n'), 'imap.agentmail.to'),
+    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_MACHINE_ABSENT');
+  assert.throws(() => readNetrcPassword(netrcFile('machine imap.agentmail.to login agent\n'), 'imap.agentmail.to'),
+    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_PASSWORD_ABSENT');
+  assert.throws(() => readNetrcPassword(netrcFile('# machine imap.agentmail.to password wrong\n'), 'imap.agentmail.to'),
+    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_SYNTAX_UNSUPPORTED');
+  assert.throws(() => readNetrcPassword(netrcFile('machine imap.agentmail.to password "unterminated\n'), 'imap.agentmail.to'),
+    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_MALFORMED');
 });
 
 test('list pagination and full fetch produce the existing email capture and hold semantics', async () => {
@@ -150,6 +161,7 @@ test('list pagination and full fetch produce the existing email capture and hold
   const server = recordedServer();
   try {
     const first = await adapter.poll(running);
+    assert.equal(running.channel.api_key, undefined, 'the channel carried the Bearer token as a value');
     assert.equal(first.items.length, 2);
     assert.equal(server.asked.filter((call) => call.url.pathname.endsWith('/messages')).length, 2,
       'the second list page was not read');
