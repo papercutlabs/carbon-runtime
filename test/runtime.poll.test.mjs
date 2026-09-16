@@ -16,7 +16,7 @@ import { ReleaseLoop } from '../runtime/loop.mjs';
 import { run } from '../runtime/index.mjs';
 import { resolveChannel } from '../runtime/channel.mjs';
 import {
-  POLL_FAILURES_BEFORE_HOLD, failuresBeforeHold, pollIntervalFor, pollState
+  POLL_FAILURES_BEFORE_HOLD, failuresBeforeHold, inboundTransportOf, pollIntervalFor, pollState
 } from '../runtime/poll.mjs';
 import { readChannelState } from '../runtime/channel-state.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
@@ -219,6 +219,58 @@ test('the channel state file is one file per channel, shared with whatever else 
   assert.equal(state.account, ACCOUNT);
   assert.equal(state.poll.last_success_at !== null, true);
   assert.equal(state.poll.last_item_count, 0);
+});
+
+test('every email poll result records the inbound transport that produced it', async () => {
+  let up = false;
+  const { loop, store } = makeLoop({
+    adapter: polling(() => {
+      if (!up) throw new Error('the REST endpoint is down');
+      return { items: [] };
+    }),
+    channel: { kind: 'email', inbound: 'agentmail-api' }
+  });
+  await loop.pass();
+  assert.equal(pollState(store, ACCOUNT, 'email').inbound_transport, 'agentmail-api');
+  up = true;
+  await loop.pass();
+  assert.equal(pollState(store, ACCOUNT, 'email').inbound_transport, 'agentmail-api');
+  assert.equal(pollState(store, ACCOUNT, 'email').consecutive_failures, 0);
+});
+
+test('an email declaration with no switch records the compatible IMAP transport name', () => {
+  assert.equal(inboundTransportOf({ kind: 'email' }), 'imap');
+  assert.equal(inboundTransportOf({ kind: 'email', inbound: 'agentmail-api' }), 'agentmail-api');
+  assert.equal(inboundTransportOf({ kind: 'telegram' }), null);
+});
+
+test('a new inbound transport starts its own failure count instead of inheriting the old one', async () => {
+  const first = makeLoop({
+    adapter: polling(() => { throw new Error('IMAP is down'); }),
+    channel: { kind: 'email', poll_failures_before_hold: 3 }
+  });
+  await first.loop.pass();
+  await first.loop.pass();
+  assert.equal(pollState(first.store, ACCOUNT, 'email').consecutive_failures, 2);
+
+  const harness = fakeHarness({ statuses: REPLY_LISTED });
+  const restLoop = new ReleaseLoop({
+    declaration: first.declaration,
+    channel: { ...first.declaration.channels[0], kind: 'email', inbound: 'agentmail-api' },
+    store: first.store,
+    storeDir: first.dir,
+    adapter: polling(() => { throw new Error('REST is down'); }),
+    harness,
+    session: harness.session,
+    agent: AGENT,
+    checkout: path.join(first.dir, 'repo'),
+    work: first.dir
+  });
+  await restLoop.pass();
+  const state = pollState(first.store, ACCOUNT, 'email');
+  assert.equal(state.inbound_transport, 'agentmail-api');
+  assert.equal(state.consecutive_failures, 1);
+  assert.equal(state.holding, false);
 });
 
 test('an interval below the adapter floor is refused by name, and never quietly raised', () => {

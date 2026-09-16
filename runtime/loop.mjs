@@ -32,7 +32,7 @@ import { conversationKindOf } from './channel.mjs';
 import { teachCheckConversation } from './reply-tool.mjs';
 import {
   failuresBeforeHold, holdFault, pollFault, pollState,
-  recordPollFailure, recordPollSuccess
+  inboundTransportOf, recordPollFailure, recordPollSuccess
 } from './poll.mjs';
 
 // The unit of work a record belongs to. One harness thread per unit, named by the
@@ -565,7 +565,7 @@ export class ReleaseLoop {
     } catch (error) {
       const cause = pollFault(this.channel, error);
       const state = recordPollFailure(this.store, this.channel.account, this.channel.kind,
-        { at, cause, threshold });
+        { at, cause, threshold, inbound_transport: inboundTransportOf(this.channel) });
       this.log({ event: 'poll.failed', channel: this.channel.kind, account: this.channel.account,
         consecutive_failures: state.consecutive_failures, holding: state.holding, fault: cause });
       if (state.holding) this.log({ event: 'poll.hold', fault: holdFault(this.channel, state) });
@@ -573,7 +573,8 @@ export class ReleaseLoop {
     }
     const items = result?.items ?? [];
     const before = pollState(this.store, this.channel.account, this.channel.kind);
-    recordPollSuccess(this.store, this.channel.account, this.channel.kind, { at, items: items.length });
+    recordPollSuccess(this.store, this.channel.account, this.channel.kind,
+      { at, items: items.length, inbound_transport: inboundTransportOf(this.channel) });
     if (before.holding) {
       this.log({ event: 'poll.hold_cleared', channel: this.channel.kind, account: this.channel.account });
     }

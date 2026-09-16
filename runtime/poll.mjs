@@ -72,6 +72,15 @@ export function failuresBeforeHold(channel) {
   return POLL_FAILURES_BEFORE_HOLD;
 }
 
+// The declaration's explicit inbound choice, including the email adapter's
+// compatible default. This is written by the system that already knows it; a
+// persisted failure must say which transport produced it so a later declaration
+// can tell current evidence from stale evidence after a transport change.
+export function inboundTransportOf(channel) {
+  if (channel?.kind !== 'email') return null;
+  return channel.inbound ?? 'imap';
+}
+
 // What the channel's poll block says now. `holding` is the only field anything
 // downstream branches on; the rest is there so that a person who reads the file
 // knows what happened without reading a log.
@@ -86,9 +95,10 @@ export function pollState(store, account, kind) {
   };
 }
 
-export function recordPollSuccess(store, account, kind, { at, items }) {
+export function recordPollSuccess(store, account, kind, { at, items, inbound_transport = null }) {
   const poll = {
     ...pollState(store, account, kind),
+    ...(inbound_transport === null ? {} : { inbound_transport }),
     last_attempt_at: at,
     last_success_at: at,
     last_item_count: items,
@@ -104,11 +114,13 @@ export function recordPollSuccess(store, account, kind, { at, items }) {
 // two still leaves the count on disk: the hold has to survive a restart, or a
 // channel that fails on every poll and restarts on every failure never reaches
 // the count that would stop it.
-export function recordPollFailure(store, account, kind, { at, cause, threshold }) {
+export function recordPollFailure(store, account, kind, { at, cause, threshold, inbound_transport = null }) {
   const previous = pollState(store, account, kind);
-  const consecutive = (previous.consecutive_failures ?? 0) + 1;
+  const sameTransport = inbound_transport === null || previous.inbound_transport === inbound_transport;
+  const consecutive = (sameTransport ? (previous.consecutive_failures ?? 0) : 0) + 1;
   const poll = {
     ...previous,
+    ...(inbound_transport === null ? {} : { inbound_transport }),
     last_attempt_at: at,
     consecutive_failures: consecutive,
     holding: consecutive >= threshold,
