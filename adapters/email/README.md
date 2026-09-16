@@ -11,9 +11,10 @@ node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/
 
 ## The contract
 
-**Inputs.** The channel's declaration block; the IMAP and SMTP hosts, which are
-also named in the agent declaration's `outbound_hosts`; and the credential file
-named in the declaration's `secrets`.
+**Inputs.** The channel's declaration block; the inbound API or IMAP host and
+the SMTP host, which are also named in the agent declaration's
+`outbound_hosts`; and the credential files named in the declaration's
+`secrets`.
 
 **Standards, by pointer.** `carbon.message.v1` for the record;
 `stream/adapter.md` for what an adapter is; the writing standard for anything
@@ -40,11 +41,13 @@ one record. The outbound record exists on disk, `pending`, before the SMTP call.
    it.
 5. Polling runs at `poll_interval_ms`, and never faster than the floor of 30
    seconds. A declaration below the floor is refused, not quietly raised.
-6. The watermark is `(uidvalidity, uid)`. A UIDVALIDITY change re-scans the
+6. The IMAP watermark is `(uidvalidity, uid)`. A UIDVALIDITY change re-scans the
    mailbox from the first uid, and the `Message-ID` dedup absorbs the re-read: a
-   repeated write merges and changes no capture bytes.
-7. The credential is never read by this code, never logged, and never placed on
-   a command line.
+   repeated write merges and changes no capture bytes. The AgentMail REST
+   watermark is the last captured message timestamp. It is passed as `after` on
+   the next ascending list request and moves only after capture succeeds.
+7. A credential is read only at the operation that uses it. Neither the IMAP
+   netrc nor the AgentMail API key is logged or placed on a command line.
 
 ## The declaration block
 
@@ -73,6 +76,30 @@ of them, or the account, is answerable, and one that names none is not.
 mails, each with its own `Message-ID`; those Message-IDs are the chunk ids the
 store keeps.
 
+AgentMail REST is an explicit inbound-only alternative. Outbound remains on the
+same SMTP fields and netrc:
+
+```json
+{
+  "kind": "email",
+  "account": "agent-01@example.test",
+  "transport": {
+    "inbound": "agentmail-api",
+    "inbox_id": "the AgentMail inbox id",
+    "api_host": "api.agentmail.to",
+    "api_key_ref": "AGENTMAIL_API_KEY",
+    "smtp_host": "smtp.example.test",
+    "smtp_port": 465,
+    "netrc_ref": "mailbox_netrc"
+  }
+}
+```
+
+The declaration lists `AGENTMAIL_API_KEY` under `secrets`. The secret file holds
+the API key alone on one line. `outbound_hosts` includes
+`api.agentmail.to:443` for API calls and `cdn.agentmail.to:443` for the
+short-lived attachment download URLs returned by the attachment endpoint.
+
 ## The secret
 
 One netrc file, placed by the mailbox's owner, owned by the tools user and
@@ -97,13 +124,27 @@ log.
 
 ## How it works
 
-**Reading.** `poll` reads the mailbox status, compares the UIDVALIDITY with the
-one the watermark holds, searches from the watermark up, and fetches each
-message whole. The watermark lives in the store's own cursor, under a
+**Reading by IMAP.** `poll` reads the mailbox status, compares the UIDVALIDITY
+with the one the watermark holds, searches from the watermark up, and fetches
+each message whole. The watermark lives in the store's own cursor, under a
 conversation id shaped like a mailbox, `<account>:mailbox:<mailbox>`, so there is
-one place cursors live and one write order that moves them. `consume` is the
-only thing that moves a cursor, and it moves two: the conversation's, and the
-mailbox watermark.
+one place cursors live and one write order that moves them.
+
+**Reading by AgentMail REST.** `poll` calls
+`GET /v0/inboxes/{inbox_id}/messages` with `ascending=true`, the held timestamp
+as `after`, and every returned `page_token`. It then calls
+`GET /v0/inboxes/{inbox_id}/messages/{message_id}` for every preview row. An
+attachment is resolved through
+`GET /v0/inboxes/{inbox_id}/messages/{message_id}/attachments/{attachment_id}`
+and fetched from the returned short-lived URL. The full response is made into
+the same item the MIME capture path reads, so record identity, policy drops,
+operator holds, raw capture and SMTP replies do not fork by inbound transport.
+Its watermark is `<account>:mailbox:<mailbox>:agentmail-api` so changing the
+explicit inbound switch cannot interpret an IMAP UID as a timestamp.
+
+For both inbound transports, `consume` is the only operation that moves a
+cursor. It moves the conversation cursor and the mailbox watermark only after
+the record is on disk.
 
 **Threading.** A message's conversation is the first id in its `References`
 chain; with no `References`, the id in `In-Reply-To`; with neither, its own
