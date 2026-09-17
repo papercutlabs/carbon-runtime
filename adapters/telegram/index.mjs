@@ -564,6 +564,29 @@ export async function poll(context) {
   return { items: await arrivals({ ...context, channel: channelOf(context) }) };
 }
 
+// ---- 8. the signal that a turn is running -------------------------------------
+
+// Sent while the runtime is taking a turn on a message, so the chat shows what
+// every chat shows when the other side is working. The runtime repeats it: this
+// action lasts about five seconds on the server and one call is worse than
+// useless on a turn that takes a minute.
+export async function typing(context, record, state) {
+  // The Bot API has no stop action. The indicator expires on its own and the
+  // arriving reply clears it, so `paused` is a call this channel does not make;
+  // the empty branch is the answer, not an omission.
+  if (state !== 'composing') return;
+  const channel = channelOf(context);
+  const chat = chatIdOf(context, record);
+  // A chat the declaration does not answer in gets no signal either, and this is
+  // a silent return rather than a fault: a signal is never a place to raise one.
+  if (!answersIn(channel, chat)) return;
+  if (context.dry_run) return;
+  await call(context.transport ?? transportFor(context), 'sendChatAction', {
+    chat_id: chat,
+    action: 'typing'
+  });
+}
+
 // ---- 7. stop -----------------------------------------------------------------
 
 // The long poll is a task that outlives a pass, so this channel has an ending and
