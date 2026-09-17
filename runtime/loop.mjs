@@ -29,6 +29,7 @@ import { latch } from './latch.mjs';
 import { REPLY_SERVER_NAME } from './reply-tool.mjs';
 import { TEACH_SERVER_NAME } from './teach-tool.mjs';
 import { conversationKindOf } from './channel.mjs';
+import { startTyping } from './typing.mjs';
 import { teachCheckConversation } from './reply-tool.mjs';
 import {
   failuresBeforeHold, holdFault, pollFault, pollState,
@@ -719,10 +720,27 @@ export class ReleaseLoop {
     return { released, held, parked, holding: this.holdFaults.map((f) => f.subject) };
   }
 
+  // One release, wrapped in the signal that says a turn is running. The signal
+  // starts after the thread is open and after the hold check has let this record
+  // through: a record held because a required tool server is down shows nothing,
+  // because no turn is being taken and no reply is coming. It is switched off in
+  // the `finally`, which is what holds the stop on the two endings that throw —
+  // the TURN_FAILED latch, and any fault releasePass catches and parks.
   async releaseOne(record, { reissue = false } = {}) {
     const unitId = unitIdFor(this.declaration, record);
     const threadId = await this.threadFor(unitId);
     if (this.holdFaults.length > 0) return null;
+    const typing = startTyping({
+      adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
+    });
+    try {
+      return await this.releaseTurn(record, { unitId, threadId, reissue });
+    } finally {
+      typing.stop();
+    }
+  }
+
+  async releaseTurn(record, { unitId, threadId, reissue }) {
     const releaseId = releaseIdFor(record);
 
     // Written before the turn, always. A restart reads this and knows the model

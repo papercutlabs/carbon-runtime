@@ -92,3 +92,22 @@ export function send(context, record) {
     chunk_ids: chunks.map((chunk, i) => `${record.delivery.request_id}-chunk-${i}-${crypto.createHash('sha256').update(chunk).digest('hex').slice(0, 8)}`)
   };
 }
+
+// The eighth operation, optional: the signal that a turn is running. This
+// adapter has no channel to send it on, so it records what it was asked, which
+// is what makes the release loop's start and stop provable with no provider in
+// the test. The recorder and its reset are the same module-level-state-with-a-
+// reset pattern the two live channel files use.
+const typingCalls = [];
+
+export function typing(context, record, state) {
+  typingCalls.push({ conversation_id: record.conversation_id, state });
+}
+
+export function typingRecorded() {
+  return typingCalls.map((call) => ({ ...call }));
+}
+
+export function forgetTyping() {
+  typingCalls.length = 0;
+}

@@ -113,6 +113,35 @@ export const POLL_INTERVAL_FLOOR_MS = 30000;
 export async function stop(context) { }
 ```
 
+## The eighth operation, optional: typing
+
+```js
+// 8. Say that a turn is running for this record, and that it has stopped.
+//    `state` is `composing`, meaning a turn is being taken on this message now,
+//    or `paused`, meaning it is not. Nothing else is passed.
+//
+//    The runtime calls this with `composing` when the turn starts and again
+//    every few seconds while it runs, because on some channels the signal
+//    expires on its own; it calls it once with `paused` when the turn ends by
+//    any route the process survives — the answered one, a turn the model
+//    reported failed, a release parked because nothing reached the contact, and
+//    a fault raised during the turn. A process killed outright mid-turn sends no
+//    `paused` at all, and that is left to heal itself: Telegram's action expires
+//    in about five seconds, and a WhatsApp presence dies with the socket the
+//    dead process was holding.
+//
+//    It must return promptly. The runtime abandons a call that has not settled
+//    within two seconds, and it never waits on the stop. A throw or a rejection
+//    is logged and ignored, so this is never a place to raise a fault: a signal
+//    about a reply may not cost the reply.
+//
+//    When context.dry_run is true it touches no network.
+//
+//    An adapter whose channel has no such signal — a mailbox — exports none of
+//    this, and the runtime then does nothing at all for that channel.
+export async function typing(context, record, state) { }
+```
+
 ## The context
 
 The check, and the runtime, pass one object:
