@@ -184,54 +184,58 @@ async function settledBatch(entry, transport, context, { offset, timeout, albumQ
       timeout: requestTimeout,
       allowed_updates: ALLOWED_UPDATES
     }, { timeoutMs: (requestTimeout + 20) * 1000 });
-    const items = await cachedItems(entry, transport, context, updates);
+    const items = cachedItems(entry, updates);
     const remaining = albumWait(items, albumQuiet);
-    if (remaining === 0) return { updates, items };
+    if (remaining === 0) {
+      return { updates, items: await withAttachments(transport, context, items) };
+    }
     await sleep(Math.min(IDLE_MS, remaining));
     requestTimeout = 0;
   }
   return { updates: [], items: [] };
 }
 
-async function cachedItems(entry, transport, context, updates) {
+function cachedItems(entry, updates) {
   const items = [];
   for (const update of updates) {
     if (!entry.seen.has(update.update_id)) {
-      const [item] = await withAttachments(transport, context, [update]);
-      entry.seen.set(update.update_id, item);
+      const { message } = messageOf(update);
+      entry.seen.set(update.update_id, {
+        conversation: message?.chat?.id === undefined ? null : String(message.chat.id),
+        position: message?.message_id === undefined ? null : positionOf(message.message_id),
+        received_at: new Date().toISOString(),
+        update
+      });
     }
     items.push(entry.seen.get(update.update_id));
   }
   return items;
 }
 
-// Turn the server's updates into this adapter's items, fetching what is attached
-// to them. The download happens here and not in index.mjs, so that every rule in
+// Fetch attachments only after the update membership has settled. A getFile call
+// or response body can take longer than the album window; putting either inside
+// the window can expire it before the worker has made its next same-offset ask.
+// The download still happens here and not in index.mjs, so that every rule in
 // index.mjs stays testable against recorded updates with no network.
 //
 // An attachment bigger than the channel allows is not fetched at all: the record
 // says the download failed, names its size and digest, and is released anyway,
 // because the words of a message with a file on it are usually the part that
 // matters and a stalled disk is a worse outcome than a missing picture.
-async function withAttachments(transport, context, updates) {
+async function withAttachments(transport, context, items) {
   const limit = context.channel?.max_attachment_bytes ?? 0;
-  const items = [];
-  for (const update of updates) {
-    const { message } = messageOf(update);
-    const item = {
-      conversation: message?.chat?.id === undefined ? null : String(message.chat.id),
-      position: message?.message_id === undefined ? null : positionOf(message.message_id),
-      received_at: new Date().toISOString(),
-      update
-    };
+  const hydrated = [];
+  for (const item of items) {
+    const { message } = messageOf(item.update);
+    const complete = { ...item };
     const media = message === null ? null : mediaOf(message);
     if (media !== null && (media.bytes ?? 0) <= limit) {
       const fetched = await fetchMedia(transport, media);
-      if (fetched !== null) item.attachments = [fetched];
+      if (fetched !== null) complete.attachments = [fetched];
     }
-    items.push(item);
+    hydrated.push(complete);
   }
-  return items;
+  return hydrated;
 }
 
 async function fetchMedia(transport, media) {

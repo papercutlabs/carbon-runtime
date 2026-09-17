@@ -177,6 +177,57 @@ function albumServerOf({ failAt = null } = {}) {
   };
 }
 
+function timedAlbumServerOf({
+  tailAfterMs, firstGetFileDelayMs = 0, firstBodyDelayMs = 0, count = 6
+}) {
+  const updates = Array.from({ length: count }, (_, index) =>
+    photoUpdate(910001 + index, 201 + index, 'timed-album'));
+  const asked = [];
+  const fetched = new Map();
+  const media = [];
+  const started = Date.now();
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/getUpdates')) {
+      const params = JSON.parse(options.body);
+      const elapsed = Date.now() - started;
+      const arrived = elapsed < tailAfterMs ? updates.slice(0, 1) : updates;
+      const result = arrived.filter((one) => params.offset === undefined || one.update_id >= params.offset);
+      asked.push({ at_ms: elapsed, offset: params.offset ?? null, count: result.length });
+      if (result.length === 0) await sleep(10);
+      return { status: 200, json: async () => ({ ok: true, result }) };
+    }
+    if (url.includes('/getFile')) {
+      const { file_id } = JSON.parse(options.body);
+      const began = Date.now() - started;
+      if (file_id === 'file-201' && firstGetFileDelayMs > 0) await sleep(firstGetFileDelayMs);
+      media.push({ stage: 'getFile', file_id, began_ms: began, ended_ms: Date.now() - started });
+      fetched.set(file_id, (fetched.get(file_id) ?? 0) + 1);
+      return { status: 200, json: async () => ({ ok: true, result: { file_path: `files/${file_id}.jpg` } }) };
+    }
+    if (url.includes('/file/bot')) {
+      const file_id = /files\/(file-\d+)\.jpg/.exec(url)?.[1] ?? 'unknown';
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => {
+          const began = Date.now() - started;
+          if (file_id === 'file-201' && firstBodyDelayMs > 0) await sleep(firstBodyDelayMs);
+          media.push({ stage: 'body', file_id, began_ms: began, ended_ms: Date.now() - started });
+          return Uint8Array.from([1, 2, 3]).buffer;
+        }
+      };
+    }
+    throw new Error(`unexpected fake request ${url}`);
+  };
+  return {
+    asked,
+    fetched,
+    media,
+    restore: () => { globalThis.fetch = previous; }
+  };
+}
+
 async function waitForBatch(context, { acceptFault = false, attempts = 80 } = {}) {
   let items = [];
   let fault = null;
@@ -284,7 +335,80 @@ test('an album is settled across repeat asks at one offset and every photo is fe
   }
 });
 
-test('an album keeps first-sight timestamps and cached media across a failed repeat ask', async () => {
+test('album membership settles before a slow first photo fetch begins', async (t) => {
+  for (const [name, delay] of [
+    ['getFile response', { firstGetFileDelayMs: 150 }],
+    ['file response body', { firstBodyDelayMs: 150 }]
+  ]) {
+    await t.test(name, async () => {
+      forget();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-album-media-delay-'));
+      const context = {
+        store: Store.open(path.join(dir, 'store')),
+        adapter,
+        agent: 'agent-01',
+        account: 'example_agent_bot',
+        channel: {
+          bot_token: tokenFile(), long_poll_timeout_s: 0,
+          album_quiet_ms: 100, max_attachment_bytes: 1000
+        },
+        now: Date.now()
+      };
+      // The first answer has one photo. The other five become visible while the
+      // old implementation was fetching that photo, still inside the window.
+      const server = timedAlbumServerOf({ tailAfterMs: 20, ...delay });
+
+      try {
+        await arrivals(context);
+        const { items } = await waitForBatch(context);
+        assert.equal(items.length, 6, 'media work expired the membership window');
+        assert.ok(server.asked.length >= 3);
+        assert.deepEqual([...new Set(server.asked.slice(0, 3).map((one) => one.offset))], [null]);
+        const firstMediaAt = Math.min(...server.media.map((one) => one.began_ms));
+        assert.ok(server.asked.some((one) => one.count === 6 && one.at_ms < firstMediaAt),
+          'the full raw album was not observed before media fetching began');
+        assert.deepEqual([...server.fetched.values()], [1, 1, 1, 1, 1, 1]);
+      } finally {
+        server.restore();
+        forget();
+      }
+    });
+  }
+});
+
+test('an album tail first visible after the quiet window remains a later batch', async () => {
+  forget();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-late-album-tail-'));
+  const context = {
+    store: Store.open(path.join(dir, 'store')),
+    adapter,
+    agent: 'agent-01',
+    account: 'example_agent_bot',
+    channel: {
+      bot_token: tokenFile(), long_poll_timeout_s: 0,
+      album_quiet_ms: 100, max_attachment_bytes: 1000
+    },
+    now: Date.now()
+  };
+  const server = timedAlbumServerOf({ tailAfterMs: 1000 });
+
+  try {
+    await arrivals(context);
+    const { items: first } = await waitForBatch(context);
+    assert.deepEqual(first.map((one) => one.update.update_id), [910001]);
+    for (const item of first) adapter.consume({ ...context, items: first }, item);
+
+    const { items: second } = await waitForBatch(context);
+    assert.deepEqual(second.map((one) => one.update.update_id),
+      [910002, 910003, 910004, 910005, 910006]);
+    assert.deepEqual([...server.fetched.values()], [1, 1, 1, 1, 1, 1]);
+  } finally {
+    server.restore();
+    forget();
+  }
+});
+
+test('an album keeps first-sight timestamps and fetches each photo once across a failed repeat ask', async () => {
   forget();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-album-retry-'));
   const context = {
