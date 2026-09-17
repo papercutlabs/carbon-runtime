@@ -12,7 +12,7 @@ import {
   checkoutLine, followUpInput, taughtBlock, holdApplies, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES,
   NOTHING_TAUGHT, saidNothingTaught, teachCheckInput
 } from '../runtime/loop.mjs';
-import { EXIT } from '../runtime/faults.mjs';
+import { EXIT, RuntimeFault, fault } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
 import { serveTeachTool } from '../runtime/teach-tool.mjs';
 import { listTeachings, remember } from '../stream/teachings.mjs';
@@ -47,7 +47,7 @@ function declaration(overrides = {}) {
 // refusal being tested two tests further down.
 const REPLY_LISTED = () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }];
 
-function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED } = {}) {
+function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED, adapter = fixture } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
   const store = Store.open(dir);
   const harness = fakeHarness({ onTurn: onTurn ? onTurn(store) : (() => 'completed'), statuses });
@@ -56,7 +56,7 @@ function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED
     channel: decl.channels[0],
     store,
     storeDir: dir,
-    adapter: fixture,
+    adapter,
     harness,
     session: harness.session,
     agent: AGENT,
@@ -1300,4 +1300,134 @@ test('a customer or an ops conversation pays no teach check: one turn, and the r
   assert.deepEqual(result.delivered.map((d) => d.status), ['sent', 'sent']);
   assert.ok(store.rebuild().filter((r) => r.direction === 'outbound')
     .every((r) => r.delivery.status === 'sent' && r.disposition !== 'parked'));
+});
+
+// ---- the signal that a turn is running ---------------------------------------
+//
+// The indicator that says the agent is working is started by the loop and
+// stopped by it, and the stop is the part that matters: an indicator that never
+// stops tells a person a reply is coming when none is. So it is proved on all
+// four endings a release has, and then proved to cost nothing when the channel's
+// own call is broken.
+
+function typingAdapter(behaviour, recorded = []) {
+  return {
+    adapter: { ...fixture, typing: (context, record, state) => behaviour(recorded, state) },
+    recorded
+  };
+}
+
+test('an answered message shows the signal from before the turn until after the reply', async () => {
+  fixture.forgetTyping();
+  let atTurn = null;
+  const { loop, store } = makeLoop({
+    onTurn: (s) => (session, params) => {
+      atTurn = fixture.typingRecorded();
+      return answering(s)(session, params);
+    }
+  });
+
+  await loop.pass([item(1, 'a question')]);
+
+  const states = fixture.typingRecorded().map((call) => call.state);
+  assert.ok(states.length >= 2, `the signal was never recorded: ${JSON.stringify(states)}`);
+  assert.equal(states[0], 'composing');
+  assert.equal(states.at(-1), 'paused');
+  // Not an exact count: the refresh fires every four seconds, so a release
+  // slower than that legitimately records a second composing.
+  assert.ok(states.slice(0, -1).every((state) => state === 'composing'),
+    `a state other than composing before the stop: ${JSON.stringify(states)}`);
+  assert.deepEqual(atTurn.map((call) => call.state), ['composing'],
+    'the signal had not started when the harness was asked for the turn');
+  assert.equal(fixture.typingRecorded()[0].conversation_id, `${ACCOUNT}:c1`);
+  assert.ok(store.rebuild().some((r) => r.direction === 'outbound'),
+    'the reply the stop was recorded after does not exist');
+});
+
+test('a turn the model reports failed still stops the signal', async () => {
+  fixture.forgetTyping();
+  const { loop } = makeLoop({ onTurn: () => () => 'failed' });
+
+  await assert.rejects(() => loop.pass([item(1, 'a question')]),
+    (error) => error.faults[0].code === 'TURN_FAILED');
+
+  assert.equal(fixture.typingRecorded().at(-1).state, 'paused');
+});
+
+test('a release parked because nothing reached the contact still stops the signal', async () => {
+  fixture.forgetTyping();
+  const { loop, store } = makeLoop({ onTurn: said('I have already answered above.') });
+
+  const result = await loop.pass([item(1, 'a question')]);
+
+  assert.equal(result.released[0].reply, 'parked-no-reply');
+  assert.equal(store.rebuild().find((r) => r.direction === 'inbound').disposition, 'parked');
+  assert.equal(fixture.typingRecorded().at(-1).state, 'paused');
+});
+
+test('a fault raised during the turn still stops the signal', async () => {
+  fixture.forgetTyping();
+  const { loop } = makeLoop({
+    onTurn: () => () => {
+      throw new RuntimeFault(fault('TURN_BROKE', 'the turn',
+        'the harness raised while the turn was running', 'invented for this test'));
+    }
+  });
+
+  const result = await loop.pass([item(1, 'a question')]);
+
+  assert.deepEqual(result.parked, [`${ACCOUNT}:c1:1`]);
+  assert.equal(fixture.typingRecorded().at(-1).state, 'paused');
+});
+
+test('a channel whose signal throws every time still answers, and says so once in the log', async () => {
+  const { adapter } = typingAdapter(() => { throw new Error('the provider refused'); });
+  const lines = [];
+  const { loop, store } = makeLoop({ adapter, onTurn: (s) => answering(s) });
+  loop.log = (line) => lines.push(line);
+
+  const result = await loop.pass([item(1, 'a question')]);
+
+  assert.equal(result.released[0].reply, 'replied');
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
+  const outbound = store.rebuild().filter((r) => r.direction === 'outbound');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].delivery.status, 'sent');
+  const failed = lines.filter((l) => l.event === 'typing.failed');
+  assert.ok(failed.length > 0, `no typing.failed line in ${JSON.stringify(lines.map((l) => l.event))}`);
+  assert.equal(failed[0].channel, 'fixture');
+  assert.equal(failed[0].account, ACCOUNT);
+  assert.equal(failed[0].problem, 'the provider refused');
+});
+
+test('an adapter that has no such signal runs the loop unchanged and logs nothing about it', async () => {
+  const { typing, typingRecorded, forgetTyping, ...noTyping } = fixture;
+  const lines = [];
+  const { loop } = makeLoop({ adapter: noTyping, onTurn: (s) => answering(s) });
+  loop.log = (line) => lines.push(line);
+
+  const result = await loop.pass([item(1, 'a question')]);
+
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
+  assert.deepEqual(lines.filter((l) => String(l.event).startsWith('typing')), []);
+});
+
+test('a signal that lands after the turn has ended is followed by a stop', async () => {
+  let settle;
+  const pending = new Promise((resolve) => { settle = resolve; });
+  const { adapter, recorded } = typingAdapter((into, state) => {
+    into.push(state);
+    return state === 'composing' ? pending : undefined;
+  });
+  const { loop } = makeLoop({ adapter, onTurn: (s) => answering(s) });
+
+  const result = await loop.pass([item(1, 'a question')]);
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent'],
+    'the release waited on a typing call it should have abandoned');
+  assert.deepEqual(recorded, ['composing', 'paused']);
+
+  settle();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(recorded.at(-1), 'paused');
+  assert.deepEqual(recorded, ['composing', 'paused', 'paused']);
 });

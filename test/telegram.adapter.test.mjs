@@ -307,3 +307,40 @@ test('the server refusing is a failed send, and everything else is unknown', asy
   assert.equal(adapter.outcomeOf(refused, 2), 'unknown',
     'a refusal after some chunks went out is unknown, because part of the reply is in the chat');
 });
+
+// ---- the signal that a turn is running ---------------------------------------
+
+test('the signal is one sendChatAction on the chat, and nothing at all for a stop or an undeclared chat', async () => {
+  const previous = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return { status: 200, json: async () => ({ ok: true, result: true }) };
+  };
+
+  try {
+    const c = context({ dry_run: false, transport: { token: TOKEN } });
+    const record = (chat) => ({
+      conversation_id: `${c.account}:${chat}`,
+      conversation_kind: 'direct',
+      message_id: `${c.account}:${chat}:301`
+    });
+
+    await adapter.typing(c, record(CHAT), 'composing');
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].url, /\/sendChatAction$/);
+    assert.deepEqual(JSON.parse(calls[0].options.body), { chat_id: CHAT, action: 'typing' });
+
+    // The Bot API has no stop action, so the stop is a call this channel does
+    // not make.
+    await adapter.typing(c, record(CHAT), 'paused');
+    assert.equal(calls.length, 1);
+
+    // A chat the declaration does not name is captured and never answered, and
+    // it is never told the agent is typing either.
+    await adapter.typing(c, record('112233445'), 'composing');
+    assert.equal(calls.length, 1);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});

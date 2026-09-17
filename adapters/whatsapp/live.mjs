@@ -97,6 +97,14 @@ export async function arrivals(context) {
   return entry.items;
 }
 
+// This account's socket only if one is already open, and never an opening. The
+// name is deliberately unlike `socketFor` below, which does open one: a presence
+// update is not worth a connection, and the reply path is the one that owns
+// opening. A caller that got null here does nothing.
+export function openSocketFor(context) {
+  return channels.get(keyOf(context))?.socket ?? null;
+}
+
 // The socket a send goes out on, when the caller did not hand one over.
 export async function socketFor(context) {
   const entry = await connection(context);

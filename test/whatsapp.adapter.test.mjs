@@ -276,3 +276,24 @@ test('the participant of a group message keeps the linked-id rule', () => {
   assert.equal(canonicalParticipant({ participant: PHONE }), PHONE);
   assert.equal(canonicalParticipant({}), null);
 });
+
+// ---- the signal that a turn is running ---------------------------------------
+
+test('the signal is the presence update the library already has, and nothing when there is no connection', async () => {
+  const running = context({ dry_run: false });
+  const presence = [];
+  const socket = { sendPresenceUpdate: async (state, jid) => { presence.push({ state, jid }); } };
+  const record = { conversation_id: `${running.account}:${LID}` };
+
+  await adapter.typing({ ...running, socket }, record, 'composing');
+  await adapter.typing({ ...running, socket }, record, 'paused');
+  assert.deepEqual(presence, [
+    { state: 'composing', jid: LID },
+    { state: 'paused', jid: LID }
+  ]);
+
+  // No open connection, and a presence update never opens one: no call, and no
+  // throw, because a signal about a reply may never cost the reply.
+  await adapter.typing(running, record, 'composing');
+  assert.equal(presence.length, 2);
+});
