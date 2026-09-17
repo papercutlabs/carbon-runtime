@@ -22,7 +22,7 @@ import {
 } from './jid.mjs';
 import { albumOf, editOf, isHdChild, read, revokeOf } from './content.mjs';
 import { learnPairs } from './channel-state.mjs';
-import { arrivals, socketFor } from './live.mjs';
+import { arrivals, openSocketFor, socketFor } from './live.mjs';
 
 export const capabilities = ['inbound', 'outbound'];
 
@@ -365,6 +365,13 @@ export function splitBody(body, max = MAX_MESSAGE_CHARS) {
   return chunks;
 }
 
+// The chat this record belongs to, as the library wants it: the conversation id
+// is the account and the jid, so the jid is what is left once the account and its
+// separator come off.
+function chatJidOf(context, record) {
+  return record.conversation_id.slice(context.account.length + 1);
+}
+
 // The check calls send with dry_run and reads the result directly, so the dry
 // run answers synchronously. A live send cannot: it returns a promise, and the
 // runtime awaits it. Awaiting the synchronous answer is also correct, so one
@@ -393,7 +400,7 @@ async function sendLive(context, record, chunks) {
       'the adapter was asked to send with no connection to send on',
       'start the channel before the reply loop, or run the send with dry_run')]);
   }
-  const chat = record.conversation_id.slice(context.account.length + 1);
+  const chat = chatJidOf(context, record);
   const chunk_ids = [];
   for (const chunk of chunks) {
     let result;
@@ -416,4 +423,19 @@ export function outcomeOf(error, sentSoFar = 0) {
   // The connection was closed before anything went out; nothing was sent.
   if (code === 428 || code === 440) return 'failed';
   return 'unknown';
+}
+
+// ---- 8. the signal that a turn is running -------------------------------------
+
+// The presence update WhatsApp already has for this, passed straight through:
+// the library's own states are the two the runtime asks for. This is not typing
+// pacing and does not slow a send down; it says a turn is genuinely running.
+export async function typing(context, record, state) {
+  if (context.dry_run) return;
+  // The caller may hand a socket over, which is what a test does. Otherwise this
+  // is whatever connection the poll already opened: a presence update never
+  // opens one.
+  const socket = context.socket ?? openSocketFor(context);
+  if (!socket || typeof socket.sendPresenceUpdate !== 'function') return;
+  await socket.sendPresenceUpdate(state === 'composing' ? 'composing' : 'paused', chatJidOf(context, record));
 }

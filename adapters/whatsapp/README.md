@@ -192,6 +192,10 @@ consequence: a reply longer than the channel accepts is split at
 `max_message_chars` (4096 without a declaration), and **every chunk id is written
 back** to the outbound record, which case 8 proves. That is the piece that makes
 a contact's reply to any one chunk resolvable to the one reply that produced it.
+The presence update this adapter now sends while a turn is running is a different
+thing and is applied: it says work is genuinely happening and it slows no send
+down, which is the whole difference between it and pacing. It is the eighth
+operation in `stream/adapter.md`.
 
 **9. The operator's own messages are ingested as an operator role, and any such
 message blocks the agent, released after a day.**
