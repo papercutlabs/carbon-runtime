@@ -77,8 +77,8 @@ export const MANIFEST = {
 
 // The open release on a conversation, which is what a reply is a reply to: a
 // record released to the model and not yet completed. The link is written on the
-// outbound record as reply_to, and a restart reads it to tell a release that was
-// answered from one that was not.
+// outbound record as reply_to so a transport can hang its reply under the newest
+// message. A restart matches delivery.request_id against release.turn_id.
 export function openReleaseIn(store, conversation_id) {
   return store.recordsIn(conversation_id)
     .filter((r) => r.direction === 'inbound' && r.release && !r.release.completed_at)

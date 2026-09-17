@@ -50,7 +50,7 @@ import { StreamFault } from '../../stream/store.mjs';
 import { albumOf, bodyOf, conversationKind, mediaOf, messageOf, readable, senderOf, serviceKindOf } from './content.mjs';
 import { TelegramFault, call, readToken } from './api.mjs';
 import { nextOffset, offsetPositionOf, positionOf, updatesConversation } from './cursors.mjs';
-import { arrivals, stop, transportFor } from './live.mjs';
+import { ALBUM_QUIET_MS, arrivals, stop, transportFor } from './live.mjs';
 
 export const capabilities = ['inbound', 'outbound'];
 
@@ -81,6 +81,7 @@ export const DEFAULTS = {
   max_attachment_bytes: 20000000,
   mode: 'polling',
   long_poll_timeout_s: 25,
+  album_quiet_ms: ALBUM_QUIET_MS,
   hold: { release_after_ms: HOLD_MS }
 };
 
@@ -592,6 +593,6 @@ export async function typing(context, record, state) {
 // The long poll is a task that outlives a pass, so this channel has an ending and
 // most do not. Without it a runtime that has finished its work and returned would
 // not exit, because a pending call keeps the process alive.
-export { stop };
+export { ALBUM_QUIET_MS, stop };
 
 export { readToken };

@@ -44,7 +44,7 @@ function declaration(channel = {}) {
       { name: 'mailbox_netrc', path: '/nowhere/netrc', purpose: 'the mailbox credential' }
     ],
     tool_servers: [],
-    channels: [{ kind: 'fixture', account: ACCOUNT, release: 'immediate', poll_interval_ms: 1000, ...channel }],
+    channels: [{ kind: 'fixture', account: ACCOUNT, release: 'quiet', quiet_ms: 0, poll_interval_ms: 1000, ...channel }],
     unit_of_work: { kind: 'conversation', id_from: 'conversation_id', idle_close_ms: 1000 },
     limits: { max_turn_ms: 60000 }
   };
@@ -303,7 +303,7 @@ test('the declared count is the channel\'s, and the runtime\'s constant when it 
 test('the runtime refuses to start a channel declared below its adapter\'s floor', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-poll-run-'));
   const decl = declaration();
-  decl.channels = [{ kind: 'email', account: 'someone@example.test', release: 'immediate', poll_interval_ms: 1000, hold: {}, max_attachment_bytes: 1000 }];
+  decl.channels = [{ kind: 'email', account: 'someone@example.test', release: 'quiet', quiet_ms: 0, poll_interval_ms: 1000, hold: {}, max_attachment_bytes: 1000 }];
   await assert.rejects(() => run({
     declaration: decl,
     declarationPath: path.join(dir, 'carbon.agent.json'),
@@ -339,6 +339,51 @@ test('a channel naming a secret nobody declared is refused by name at start', ()
     (error) => error.faults.some((f) => f.code === 'CHANNEL_SECRET_UNDECLARED'));
 });
 
+test('immediate is refused at start with the quiet zero rewrite', () => {
+  const decl = declaration({ release: 'immediate' });
+  assert.throws(() => resolveChannel(decl, decl.channels[0]), (error) => {
+    const refusal = error.faults.find((f) => f.code === 'RELEASE_POLICY_UNKNOWN');
+    assert.ok(refusal, JSON.stringify(error.faults));
+    assert.equal(refusal.subject, `channels.fixture:${ACCOUNT}.release`);
+    assert.match(refusal.fix, /release: quiet and quiet_ms: 0/);
+    return true;
+  });
+});
+
+test('quiet without a non-negative integer quiet_ms is refused at start, while zero is accepted', () => {
+  for (const quiet_ms of [undefined, -1, 0.5, Number.NaN]) {
+    const decl = declaration({ quiet_ms });
+    assert.throws(() => resolveChannel(decl, decl.channels[0]),
+      (error) => error.faults.some((f) => f.code === 'RELEASE_QUIET_MS_ABSENT'
+        && f.subject === `channels.fixture:${ACCOUNT}.quiet_ms`));
+  }
+  const decl = declaration({ quiet_ms: 0 });
+  assert.equal(resolveChannel(decl, decl.channels[0]).quiet_ms, 0);
+});
+
+test('release-policy refusal happens before the runtime opens a thread', async () => {
+  for (const channel of [{ release: 'immediate' }, { release: 'quiet', quiet_ms: undefined }]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-release-start-'));
+    const decl = declaration(channel);
+    const harness = fakeHarness({ statuses: REPLY_LISTED });
+    await assert.rejects(() => run({
+      declaration: decl,
+      declarationPath: path.join(dir, 'carbon.agent.json'),
+      storeDir: dir,
+      codexHome: dir,
+      checkout: dir,
+      work: dir,
+      harnessRoot: dir,
+      binary: '/nowhere/codex',
+      harness,
+      adapters: { fixture },
+      passes: 1
+    }), (error) => error.faults.some((f) => f.code === (channel.release === 'immediate'
+      ? 'RELEASE_POLICY_UNKNOWN' : 'RELEASE_QUIET_MS_ABSENT')));
+    assert.deepEqual(harness.session.opens, undefined);
+  }
+});
+
 // ---- the email adapter, polled through the loop -----------------------------
 
 test('the loop polls the email adapter and captures what the mailbox held', async () => {
@@ -352,7 +397,8 @@ test('the loop polls the email adapter and captures what the mailbox held', asyn
   decl.channels = [{
     kind: 'email',
     account,
-    release: 'immediate',
+    release: 'quiet',
+    quiet_ms: 0,
     poll_interval_ms: 30000,
     hold: { on_operator_message: true, release_after_ms: 3600000 },
     max_attachment_bytes: 1000000,

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -33,7 +34,7 @@ function declaration(overrides = {}) {
     secrets: [],
     tool_servers: [],
     channels: [{
-      kind: 'fixture', account: ACCOUNT, release: 'immediate', poll_interval_ms: 1000,
+      kind: 'fixture', account: ACCOUNT, release: 'quiet', quiet_ms: 0, poll_interval_ms: 1000,
       conversations: [], default_conversation_kind: 'customer'
     }],
     unit_of_work: { kind: 'conversation', id_from: 'conversation_id', idle_close_ms: 1000 },
@@ -94,25 +95,50 @@ function answering(store, { text = 'the answer', requestId = null, times = 1 } =
   };
 }
 
-test('a pass captures, releases and delivers, in that order and in arrival order', async () => {
-  const { loop, store } = makeLoop({ onTurn: (s) => answering(s) });
+test('six records in one packet are one release, turn and delivery in arrival order', async () => {
+  const { loop, store, harness } = makeLoop({ onTurn: (s) => answering(s) });
+  const lines = [];
+  loop.log = (line) => lines.push(line);
+  const packet = Array.from({ length: 6 }, (_, index) => item(index + 1, `body-${index + 1}`));
 
-  const result = await loop.pass([item(1, 'first'), item(2, 'second')]);
+  const result = await loop.pass(packet);
 
-  assert.equal(result.captured.length, 2);
-  assert.deepEqual(result.released.map((r) => r.message_id), [
-    `${ACCOUNT}:c1:1`, `${ACCOUNT}:c1:2`
-  ]);
-  assert.equal(result.delivered.length, 2);
-  assert.ok(result.delivered.every((d) => d.status === 'sent'));
+  const messageIds = packet.map((_, index) => `${ACCOUNT}:c1:${index + 1}`);
+  assert.equal(result.captured.length, 6);
+  assert.equal(result.released.length, 1);
+  assert.deepEqual(result.released[0].message_ids, messageIds);
+  assert.equal(harness.session.turns.length, 1);
+  for (let index = 1; index <= 6; index++) {
+    assert.ok(harness.session.turns[0].input.indexOf(`body-${index}`)
+      < (index === 6 ? Infinity : harness.session.turns[0].input.indexOf(`body-${index + 1}`)));
+  }
+  assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
 
   const records = store.rebuild();
   const inbound = records.filter((r) => r.direction === 'inbound');
-  assert.equal(inbound.length, 2);
-  assert.ok(inbound.every((r) => r.release && r.release.completed_at), 'every release is completed');
+  assert.equal(inbound.length, 6);
+  assert.equal(new Set(inbound.map((r) => r.release.turn_id)).size, 1);
+  assert.ok(inbound.every((r) => r.release.completed_at), 'every record in the gather is completed');
   const outbound = records.filter((r) => r.direction === 'outbound');
-  assert.equal(outbound.length, 2);
-  assert.ok(outbound.every((r) => r.delivery.status === 'sent' && r.delivery.chunk_ids.length > 0));
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].delivery.status, 'sent');
+  assert.equal(outbound[0].delivery.request_id, inbound[0].release.turn_id);
+  assert.deepEqual(lines.find((line) => line.event === 'release').message_ids, messageIds);
+  assert.deepEqual(lines.find((line) => line.event === 'turn').message_ids, messageIds);
+});
+
+test('two records captured in one pass are one release, turn and delivery', async () => {
+  const { loop, store, harness } = makeLoop({ onTurn: (s) => answering(s) });
+  const at = '2026-09-10T10:00:00.000Z';
+
+  const result = await loop.pass([item(1, 'first', { at }), item(2, 'second', { at })]);
+
+  assert.equal(result.released.length, 1);
+  assert.deepEqual(result.released[0].message_ids, [`${ACCOUNT}:c1:1`, `${ACCOUNT}:c1:2`]);
+  assert.equal(harness.session.turns.length, 1);
+  assert.ok(harness.session.turns[0].input.indexOf('first') < harness.session.turns[0].input.indexOf('second'));
+  assert.deepEqual(result.delivered.map((one) => one.status), ['sent']);
+  assert.equal(store.rebuild().filter((r) => r.direction === 'outbound').length, 1);
 });
 
 test('the release is on the record before the turn is asked for', async () => {
@@ -134,17 +160,17 @@ test('the release is on the record before the turn is asked for', async () => {
   assert.equal(seen.release.completed_at, undefined, 'the release was completed before the turn finished');
 });
 
-test('a re-issued release produces one reply, because the request id is the fence', async () => {
+test('a gathered release interrupted mid-turn is re-issued once and produces one reply', async () => {
   // The first turn is killed after the release is written and before any reply.
   const { loop, store } = makeLoop({ onTurn: () => () => 'interrupted' });
-  loop.capture([item(1, 'first')]);
-  const record = store.rebuild()[0];
+  loop.capture([item(1, 'first'), item(2, 'second')]);
+  const records = store.rebuild();
   await loop.releasePass();
   assert.equal(store.rebuild().filter((r) => r.direction === 'outbound').length, 0);
 
   // The restart: the recovery says to re-issue, and this time the model answers.
   const recovered = loop.recover();
-  assert.deepEqual(recovered.reissue, [record.message_id]);
+  assert.deepEqual(recovered.reissue, [releaseIdFor(records)]);
 
   const second = fakeHarness({ onTurn: answering(store) });
   loop.harness = second;
@@ -156,8 +182,79 @@ test('a re-issued release produces one reply, because the request id is the fenc
   const outbound = store.rebuild().filter((r) => r.direction === 'outbound');
   assert.equal(outbound.length, 1, 'the re-issue produced a second reply');
   assert.equal(outbound[0].delivery.status, 'sent');
-  assert.equal(second.session.turns[0].clientUserMessageId, releaseIdFor(record));
-  assert.equal(outbound[0].reply_to, record.message_id);
+  assert.equal(second.session.turns.length, 1);
+  assert.equal(second.session.turns[0].clientUserMessageId, releaseIdFor(records));
+  assert.equal(outbound[0].reply_to, records[1].message_id);
+  assert.ok(store.rebuild().filter((r) => r.direction === 'inbound')
+    .every((r) => r.release.completed_at));
+});
+
+test('recovery completes every record of a gathered release whose reply was already sent', async () => {
+  const { loop, store } = makeLoop({
+    onTurn: (s) => {
+      const answer = answering(s);
+      return (session, params) => {
+        answer(session, params);
+        return 'interrupted';
+      };
+    }
+  });
+  loop.capture([item(1, 'first'), item(2, 'second')]);
+  await loop.releasePass();
+  const inbound = store.rebuild().filter((r) => r.direction === 'inbound');
+  const releaseId = releaseIdFor(inbound);
+  store.markSent(releaseId, ['sent-1']);
+
+  const recovered = loop.recover();
+
+  assert.deepEqual(recovered.reissue, []);
+  assert.deepEqual(recovered.done, inbound.map((r) => r.message_id));
+  assert.ok(store.rebuild().filter((r) => r.direction === 'inbound')
+    .every((r) => r.release.completed_at));
+});
+
+test('records from two conversations in one pass become two releases', async () => {
+  const { loop, store, harness } = makeLoop({
+    onTurn: (s) => {
+      const handle = replyHandler({ store: s, agent: AGENT });
+      return (session, params) => {
+        const conversation = params.input.match(/^conversation_id: (.+)$/m)?.[1];
+        handle({ conversation_id: conversation, request_id: params.clientUserMessageId, text: 'the answer' });
+        return 'completed';
+      };
+    }
+  });
+
+  const result = await loop.pass([
+    item(1, 'first conversation'),
+    item(2, 'second conversation', { conversation: 'c2' })
+  ]);
+
+  assert.equal(result.released.length, 2);
+  assert.equal(harness.session.turns.length, 2);
+  assert.equal(store.rebuild().filter((r) => r.direction === 'outbound').length, 2);
+});
+
+test('a record captured while a gathered turn runs waits for the next pass', async () => {
+  let active;
+  const { loop, harness } = makeLoop({
+    onTurn: (s) => {
+      const answer = answering(s);
+      return (session, params, turn) => {
+        if (turn === 1) active.capture([item(2, 'arrived during the turn')]);
+        return answer(session, params);
+      };
+    }
+  });
+  active = loop;
+
+  const first = await loop.pass([item(1, 'first')]);
+  assert.deepEqual(first.released[0].message_ids, [`${ACCOUNT}:c1:1`]);
+  assert.doesNotMatch(harness.session.turns[0].input, /arrived during the turn/);
+
+  const second = await loop.pass([]);
+  assert.deepEqual(second.released[0].message_ids, [`${ACCOUNT}:c1:2`]);
+  assert.match(harness.session.turns[1].input, /arrived during the turn/);
 });
 
 test('a second reply under a sent request id returns the chunk ids and sends nothing', async () => {
@@ -242,10 +339,11 @@ test('in an ops conversation the operator hold does not apply and the agent answ
 
   // Both released, the operator's own message among them: in a room the agent
   // works in, a staff message is not somebody taking the conversation over.
-  assert.deepEqual(result.released.map((r) => r.message_id), [`${ACCOUNT}:c1:1`, `${ACCOUNT}:c1:2`]);
+  assert.equal(result.released.length, 1);
+  assert.deepEqual(result.released[0].message_ids, [`${ACCOUNT}:c1:1`, `${ACCOUNT}:c1:2`]);
   assert.deepEqual(result.held, []);
-  assert.equal(harness.session.turns.length, 2);
-  assert.equal(store.rebuild().filter((r) => r.direction === 'outbound').length, 2);
+  assert.equal(harness.session.turns.length, 1);
+  assert.equal(store.rebuild().filter((r) => r.direction === 'outbound').length, 1);
 });
 
 test('in the management conversation a message from the person who is the operator elsewhere is released and answered', async () => {
@@ -399,10 +497,71 @@ test('a quiet channel waits for the quiet window, and a mention channel waits fo
   const quiet = { kind: 'fixture', account: ACCOUNT, release: 'quiet', quiet_ms: 60000 };
   assert.equal(releaseDecision(declaration(), quiet, store, record, { now: at }).release, false);
   assert.equal(releaseDecision(declaration(), quiet, store, record, { now: at + 60000 }).release, true);
+  assert.equal(releaseDecision(declaration(), { ...quiet, quiet_ms: 0 }, store,
+    { ...record, received_at: '2026-09-10T11:00:00.000Z' }, { now: at }).release, true);
 
   const mention = { kind: 'fixture', account: ACCOUNT, release: 'mention', mention: '@agent' };
   assert.equal(releaseDecision(declaration(), mention, store, record, { now: at }).release, false);
   assert.equal(releaseDecision(declaration(), mention, store, { ...record, body: 'hello @agent' }, { now: at }).release, true);
+});
+
+test('a quiet window waits for the newest record and then gathers the conversation', async () => {
+  const decl = declaration();
+  decl.channels[0].quiet_ms = 60000;
+  const { loop, harness } = makeLoop({ decl, onTurn: (s) => answering(s) });
+  let now = Date.parse('2026-09-10T10:00:45.000Z');
+  loop.now = () => now;
+
+  const waiting = await loop.pass([
+    item(1, 'first', { at: '2026-09-10T10:00:00.000Z' }),
+    item(2, 'second', { at: '2026-09-10T10:00:30.000Z' })
+  ]);
+  assert.deepEqual(waiting.released, []);
+  assert.equal(harness.session.turns.length, 0);
+
+  now = Date.parse('2026-09-10T10:01:30.000Z');
+  const released = await loop.pass([]);
+  assert.equal(released.released.length, 1);
+  assert.deepEqual(released.released[0].message_ids, [`${ACCOUNT}:c1:1`, `${ACCOUNT}:c1:2`]);
+  assert.equal(harness.session.turns.length, 1);
+});
+
+test('two mentioned records in one pass remain two turns', async () => {
+  const decl = declaration();
+  decl.channels[0] = { ...decl.channels[0], release: 'mention', mention: '@agent' };
+  delete decl.channels[0].quiet_ms;
+  const { loop, harness } = makeLoop({ decl, onTurn: (s) => answering(s) });
+
+  const result = await loop.pass([item(1, '@agent first'), item(2, '@agent second')]);
+
+  assert.equal(result.released.length, 2);
+  assert.ok(result.released.every((one) => one.message_ids.length === 1));
+  assert.equal(harness.session.turns.length, 2);
+});
+
+test('contact records sent during a hold gather on the pass after it expires', async () => {
+  const start = Date.parse('2026-09-10T10:00:00.000Z');
+  const { loop, harness } = makeLoop({ onTurn: (s) => answering(s) });
+  let now = start + 30000;
+  loop.now = () => now;
+  const operator = item(1, 'the operator is handling this', {
+    role: 'operator', sender: 'operator-1',
+    at: new Date(start).toISOString(),
+    hold: { reason: 'operator takeover', set_at: new Date(start).toISOString(), release_after_ms: 60000 }
+  });
+
+  const held = await loop.pass([
+    operator,
+    item(2, 'customer one', { at: new Date(start + 10000).toISOString() }),
+    item(3, 'customer two', { at: new Date(start + 20000).toISOString() })
+  ]);
+  assert.deepEqual(held.released, []);
+
+  now = start + 60000;
+  const released = await loop.pass([]);
+  assert.equal(released.released.length, 1);
+  assert.deepEqual(released.released[0].message_ids, [`${ACCOUNT}:c1:2`, `${ACCOUNT}:c1:3`]);
+  assert.equal(harness.session.turns.length, 1);
 });
 
 // ---- a record the runtime cannot release ---------------------------------
@@ -431,6 +590,18 @@ test('a record whose release faults is parked, and the channel keeps working', a
   assert.equal(parked.adapter_fields.park_faults[0].code, 'UNIT_ID_ABSENT');
   assert.match(parked.adapter_fields.park_reason, /UNIT_ID_ABSENT/);
   assert.ok(!parked.release, 'a record that never reached a turn carries no release');
+});
+
+test('two units in one conversation become two releases', async () => {
+  const { loop, harness } = makeLoop({ decl: CLIENT_RECORD(), onTurn: (s) => answering(s) });
+
+  const result = await loop.pass([
+    item(1, 'job one', { extra: { tracker: { master_job: { id: 'JOB-1' } } } }),
+    item(2, 'job two', { extra: { tracker: { master_job: { id: 'JOB-2' } } } })
+  ]);
+
+  assert.equal(result.released.length, 2);
+  assert.equal(harness.session.turns.length, 2);
 });
 
 test('a parked record is not tried again on the next pass', async () => {
@@ -507,36 +678,36 @@ test('a turn that delivers nothing is followed up once, and the follow-up reply 
   assert.equal(store.rebuild().find((r) => r.direction === 'inbound').disposition, 'captured');
 });
 
-test('a turn that answers NO_REPLY closes the release with that reason and delivers nothing', async () => {
+test('NO_REPLY closes every record of a gathered release with that reason', async () => {
   const { loop, store } = makeLoop({ onTurn: () => (session, params, n) => ({
     status: 'completed',
     agent_message: n === 1 ? 'Nothing to do here.' : '  NO_REPLY\n'
   }) });
 
-  const result = await loop.pass([item(1, 'an automated bounce')]);
+  const result = await loop.pass([item(1, 'an automated bounce'), item(2, 'its detail')]);
 
   assert.equal(result.released[0].reply, 'no-reply-declared');
   assert.deepEqual(result.delivered, []);
   assert.deepEqual(result.parked, []);
 
-  const record = store.rebuild().find((r) => r.direction === 'inbound');
-  assert.equal(record.disposition, 'captured');
-  assert.equal(record.adapter_fields.reply_outcome, 'no-reply-declared');
-  assert.ok(record.release.completed_at, 'the release stays open');
+  const records = store.rebuild().filter((r) => r.direction === 'inbound');
+  assert.ok(records.every((record) => record.disposition === 'captured'));
+  assert.ok(records.every((record) => record.adapter_fields.reply_outcome === 'no-reply-declared'));
+  assert.ok(records.every((record) => record.release.completed_at), 'the gathered release stays open');
 });
 
-test('a follow-up that neither replies nor says NO_REPLY parks the record with reason no-reply', async () => {
+test('a follow-up that neither replies nor says NO_REPLY parks every gathered record', async () => {
   const { loop, store } = makeLoop({ onTurn: said('I have already answered above.') });
 
-  const result = await loop.pass([item(1, 'a question')]);
+  const result = await loop.pass([item(1, 'a question'), item(2, 'more context')]);
 
   assert.equal(result.released[0].reply, 'parked-no-reply');
   assert.deepEqual(result.delivered, []);
 
-  const record = store.rebuild().find((r) => r.direction === 'inbound');
-  assert.equal(record.disposition, 'parked');
-  assert.equal(record.adapter_fields.park_reason, 'no-reply');
-  assert.equal(record.adapter_fields.park_faults[0].code, 'REPLY_ABSENT');
+  const records = store.rebuild().filter((r) => r.direction === 'inbound');
+  assert.ok(records.every((record) => record.disposition === 'parked'));
+  assert.ok(records.every((record) => record.adapter_fields.park_reason === 'no-reply'));
+  assert.ok(records.every((record) => record.adapter_fields.park_faults[0].code === 'REPLY_ABSENT'));
 });
 
 test('a turn that calls the reply tool is never followed up', async () => {
@@ -672,6 +843,66 @@ function withAttachment(store, meta, bytes) {
   const attachment = bytes === null ? meta : store.putAttachment(base, bytes, meta);
   return { ...base, attachments: [attachment] };
 }
+
+test('one record keeps the existing turn input byte for byte', () => {
+  const record = {
+    conversation_id: 'c-9', sender_id: 'someone', received_at: '2026-09-10T10:00:00.000Z',
+    message_id: 'c-9:m1', body: 'hello', attachments: []
+  };
+  const instruction = replyInstruction(record, 'release-1');
+  const expected = [
+    instruction,
+    '',
+    'A message arrived on conversation c-9.',
+    'from: someone',
+    'received_at: 2026-09-10T10:00:00.000Z',
+    'conversation_id: c-9',
+    'message_id: c-9:m1',
+    'request_id: release-1',
+    '',
+    'hello',
+    '',
+    instruction
+  ].join('\n');
+  assert.equal(turnInput(record, 'release-1'), expected);
+});
+
+test('a gathered turn frames each message and attachment inside one reply instruction', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
+  const store = Store.open(dir);
+  const first = withAttachment(store,
+    { mime: 'text/plain', filename: 'first.txt' }, Buffer.from('attached words\n'));
+  first.body = 'first body';
+  const records = [
+    first,
+    { ...first, message_id: `${ACCOUNT}:c1:m2`, sender_id: 'contact-2', sender_name: 'Second',
+      received_at: '2026-09-10T10:01:00.000Z', body: 'body with --- message 3 of 3 --- inside', attachments: [] },
+    { ...first, message_id: `${ACCOUNT}:c1:m3`, sender_id: 'contact-1', sender_name: 'Contact',
+      received_at: '2026-09-10T10:02:00.000Z', body: 'third body', attachments: [] }
+  ];
+  const input = turnInput(records, 'release-packet', { store });
+  const lines = input.split('\n');
+  const instruction = replyInstruction(first, 'release-packet');
+
+  assert.equal(lines[0], instruction);
+  assert.equal(lines.at(-1), instruction);
+  assert.equal(lines.filter((line) => line === instruction).length, 2);
+  assert.equal(lines.filter((line) => line.startsWith('conversation_id:')).length, 1);
+  assert.equal(lines.filter((line) => line.startsWith('request_id:')).length, 1);
+  assert.deepEqual(lines.filter((line) => /^--- message \d of 3 ---$/.test(line)), [
+    '--- message 1 of 3 ---', '--- message 2 of 3 ---', '--- message 3 of 3 ---'
+  ]);
+  records.forEach((record, index) => {
+    const digest = crypto.createHash('sha256').update(record.body, 'utf8').digest('hex');
+    const start = input.indexOf(`-----BEGIN MESSAGE ${digest}-----`);
+    const body = input.indexOf(record.body, start);
+    const end = input.indexOf(`-----END MESSAGE ${digest}-----`, body);
+    assert.ok(start < body && body < end, `message ${index + 1} is not inside its digest fence`);
+  });
+  const attachment = input.indexOf('first.txt');
+  assert.ok(input.indexOf('--- message 1 of 3 ---') < attachment);
+  assert.ok(attachment < input.indexOf('--- message 2 of 3 ---'));
+});
 
 test('a small text attachment travels in the turn input, under its own name and its path', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));

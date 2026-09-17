@@ -42,6 +42,19 @@ export function resolveChannel(declaration, channel) {
     resolved[key.slice(0, -'_ref'.length)] = path;
   }
 
+  const subject = `channels.${channel.kind}:${channel.account}`;
+  if (channel?.release !== 'quiet' && channel?.release !== 'mention') {
+    faults.push(fault('RELEASE_POLICY_UNKNOWN', `${subject}.release`,
+      `the channel declares ${JSON.stringify(channel?.release)}; a channel releases quiet or mention, and immediate is quiet with quiet_ms 0`,
+      'write release: quiet and quiet_ms: 0'));
+  }
+  if (channel?.release === 'quiet'
+    && (!Number.isFinite(channel.quiet_ms) || !Number.isInteger(channel.quiet_ms) || channel.quiet_ms < 0)) {
+    faults.push(fault('RELEASE_QUIET_MS_ABSENT', `${subject}.quiet_ms`,
+      'a quiet channel needs quiet_ms as a non-negative integer, and without it the runtime never releases',
+      'set quiet_ms; 0 releases at once'));
+  }
+
   if (faults.length > 0) throw new RuntimeFault(faults);
   const merged = { ...channel, ...transport, ...resolved };
   delete merged.transport;

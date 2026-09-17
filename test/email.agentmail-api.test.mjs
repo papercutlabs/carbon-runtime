@@ -48,7 +48,8 @@ function context() {
       poll_failures_before_hold: 2,
       max_attachment_bytes: 1000,
       max_part_bytes: 65536,
-      release: 'immediate',
+      release: 'quiet',
+      quiet_ms: 0,
       hold: { release_after_ms: 3600000 }
     },
     now: Date.parse('2026-09-16T07:00:00.000Z')

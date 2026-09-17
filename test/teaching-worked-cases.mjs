@@ -263,7 +263,8 @@ function declarationFor(storeDir) {
       kind: 'whatsapp',
       account: 'proof-account',
       poll_interval_ms: 15000,
-      release: 'immediate',
+      release: 'quiet',
+      quiet_ms: 0,
       hold: { on_operator_message: true, release_after_ms: 3600000 },
       conversations: [
         { id: MANAGEMENT, kind: 'management' },

@@ -64,7 +64,8 @@ export const DEFAULTS = {
   poll_interval_ms: POLL_INTERVAL_FLOOR_MS,
   max_attachment_bytes: 25000000,
   max_part_bytes: 65536,
-  release: 'immediate',
+  release: 'quiet',
+  quiet_ms: 0,
   hold: { release_after_ms: 3600000 },
   addresses: []
 };

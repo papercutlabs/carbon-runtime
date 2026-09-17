@@ -37,7 +37,7 @@ one record. The outbound record exists on disk, `pending`, before the SMTP call.
    any reply that names it.
 3. The agent's own sent mail is `role: agent`. A person's mail out of the same
    mailbox is `role: operator` and sets the hold.
-4. Release is `immediate` unless the declaration says otherwise; a hold outranks
+4. Release is `quiet` with `quiet_ms: 0` unless the declaration says otherwise; a hold outranks
    it.
 5. Polling runs at `poll_interval_ms`, and never faster than the floor of 30
    seconds. A declaration below the floor is refused, not quietly raised.
@@ -65,7 +65,8 @@ one record. The outbound record exists on disk, `pending`, before the SMTP call.
   "poll_interval_ms": 60000,
   "max_attachment_bytes": 25000000,
   "max_part_bytes": 65536,
-  "release": "immediate",
+  "release": "quiet",
+  "quiet_ms": 0,
   "hold": { "release_after_ms": 3600000 }
 }
 ```
