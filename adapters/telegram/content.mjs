@@ -108,10 +108,10 @@ const EXTENSION = {
 // whose later items exist only inside that record, and PA-147 is the gap that
 // makes: a set of pictures went in and the ones after the first came out
 // nowhere. One record per item cannot lose an item, and the group id on each is
-// what lets a reader, and the agent, see that the six belong together. The cost
-// is that the agent may see the first before the sixth has arrived, which is
-// what the channel's release policy is for: a channel that sends albums declares
-// `quiet` and the loop waits for the chat to settle.
+// what lets a reader, and the agent, see that the six belong together. The long
+// poll waits for `album_quiet_ms` after the newest album item before handing the
+// batch over. The release pass then gathers everything pending on the
+// conversation into one turn, including when `quiet_ms` is 0.
 export function albumOf(message) {
   const id = message?.media_group_id;
   return typeof id === 'string' && id.length > 0 ? id : null;

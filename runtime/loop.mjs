@@ -11,14 +11,16 @@
 //             owes: a reply written and never sent, a release opened and never
 //             answered, a send whose fate nobody knows.
 //   capture   list what is pending past the cursors, write it, move the cursors.
-//   release   decide what may go to the model, write the release on the record
-//             before the turn starts, run the turn, write the completion.
+//   release   gather every eligible record of a conversation into one turn,
+//             write the release on each before the turn starts, run the turn,
+//             write the completion.
 //   deliver   send the outbound records the reply tool wrote, write back every
 //             chunk id.
 //
 // Nothing here knows what a channel is. The adapter is the channel and the
 // declaration is the policy.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -87,9 +89,9 @@ export function releaseDecision(declaration, channel, store, record, { now }) {
   }
 
   const policy = channel.release;
-  if (policy === 'immediate') return { release: true, reason: 'immediate' };
   if (policy === 'quiet') {
     const quiet = channel.quiet_ms;
+    if (quiet === 0) return { release: true, reason: 'quiet' };
     const newest = store.recordsIn(record.conversation_id)
       .filter((r) => r.direction === 'inbound')
       .map((r) => Date.parse(r.received_at))
@@ -104,8 +106,8 @@ export function releaseDecision(declaration, channel, store, record, { now }) {
       : { release: false, reason: 'no-mention' };
   }
   throw new RuntimeFault(fault('RELEASE_POLICY_UNKNOWN', String(policy),
-    'a channel releases immediate, quiet or mention',
-    'correct the channel\'s release in the declaration'));
+    'a channel releases quiet or mention; immediate is quiet with quiet_ms 0',
+    'write release: quiet and quiet_ms: 0'));
 }
 
 // The release id: stable across a restart, because it is derived from the record
@@ -177,7 +179,8 @@ export function commandsIn(items) {
   return commands;
 }
 
-export function releaseIdFor(record) {
+export function releaseIdFor(recordOrRecords) {
+  const record = Array.isArray(recordOrRecords) ? recordOrRecords[0] : recordOrRecords;
   return `release-${record.message_id}-${record.revision ?? 0}`;
 }
 
@@ -304,8 +307,39 @@ export function taughtBlock(store, declaration) {
   ];
 }
 
-export function turnInput(record, releaseId, { store = null, checkout = null, declaration = null } = {}) {
+export function turnInput(recordOrRecords, releaseId, { store = null, checkout = null, declaration = null } = {}) {
+  const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
+  const record = records[0];
   const instruction = replyInstruction(record, releaseId);
+  if (records.length > 1) {
+    const lines = [
+      instruction,
+      ...(checkout ? [checkoutLine(checkout)] : []),
+      ...taughtBlock(store, declaration),
+      '',
+      `${records.length} messages arrived on conversation ${record.conversation_id}, oldest first. They are one packet; answer them together.`,
+      `conversation_id: ${record.conversation_id}`,
+      `request_id: ${releaseId}`
+    ];
+    records.forEach((one, index) => {
+      const body = one.body ?? '';
+      const digest = crypto.createHash('sha256').update(body, 'utf8').digest('hex');
+      lines.push(
+        '',
+        `--- message ${index + 1} of ${records.length} ---`,
+        `from: ${one.sender_name ?? one.sender_id}`,
+        `received_at: ${one.received_at}`,
+        `message_id: ${one.message_id}`,
+        '',
+        `-----BEGIN MESSAGE ${digest}-----`,
+        body,
+        `-----END MESSAGE ${digest}-----`,
+        ...attachmentLines(one, store)
+      );
+    });
+    lines.push('', instruction);
+    return lines.join('\n');
+  }
   return [
     instruction,
     ...(checkout ? [checkoutLine(checkout)] : []),
@@ -594,33 +628,42 @@ export class ReleaseLoop {
   // own files say a turn was interrupted; only the store says whether the client
   // got an answer.
   recover() {
-    const summary = { resend: [], reissue: [], unknown: [], done: [] };
-    for (const record of this.store.rebuild()) {
-      if (record.direction === 'outbound') {
-        if (record.delivery?.status === 'pending') summary.resend.push(record.delivery.request_id);
-        if (record.delivery?.status === 'unknown') summary.unknown.push(record.delivery.request_id);
-        continue;
-      }
-      if (!record.release || record.release.completed_at) continue;
-      const replies = this.store.recordsIn(record.conversation_id)
-        .filter((r) => r.direction === 'outbound' && r.reply_to === record.message_id);
-      if (replies.some((r) => r.delivery?.status === 'sent')) {
-        this.store.completeRelease(record, new Date(this.now()).toISOString());
-        summary.done.push(record.message_id);
-        continue;
-      }
-      if (replies.some((r) => r.delivery?.status === 'unknown')) {
-        summary.unknown.push(record.message_id);
-        continue;
-      }
-      if (replies.some((r) => r.delivery?.status === 'pending')) {
-        // The reply is written and the transport was never called. The deliver
-        // pass sends it; the release completes when the send lands.
-        summary.resend.push(record.message_id);
-        continue;
-      }
-      summary.reissue.push(record.message_id);
+    const all = this.store.rebuild();
+    const resend = new Set(all
+      .filter((r) => r.direction === 'outbound' && r.delivery?.status === 'pending')
+      .map((r) => r.delivery.request_id));
+    const unknown = new Set(all
+      .filter((r) => r.direction === 'outbound' && r.delivery?.status === 'unknown')
+      .map((r) => r.delivery.request_id));
+    const reissue = new Set();
+    const done = [];
+    const open = new Map();
+    for (const record of all) {
+      if (record.direction !== 'inbound' || !record.release || record.release.completed_at) continue;
+      const releaseId = record.release.turn_id;
+      if (!open.has(releaseId)) open.set(releaseId, []);
+      open.get(releaseId).push(record);
     }
+    for (const [releaseId, records] of open) {
+      const replies = all.filter((r) => r.direction === 'outbound'
+        && r.delivery?.request_id === releaseId);
+      if (replies.some((r) => r.delivery?.status === 'sent')) {
+        const completedAt = new Date(this.now()).toISOString();
+        for (const record of records) {
+          this.store.completeRelease(record, completedAt);
+          done.push(record.message_id);
+        }
+      } else if (replies.some((r) => r.delivery?.status === 'unknown')) {
+        unknown.add(releaseId);
+      } else if (replies.some((r) => r.delivery?.status === 'pending')) {
+        resend.add(releaseId);
+      } else {
+        reissue.add(releaseId);
+      }
+    }
+    const summary = {
+      resend: [...resend], reissue: [...reissue], unknown: [...unknown], done
+    };
     if (summary.resend.length + summary.reissue.length + summary.unknown.length > 0) {
       this.log({ event: 'recover', ...summary });
     }
@@ -677,22 +720,42 @@ export class ReleaseLoop {
     const held = [];
     const parked = [];
     const reissued = new Set(reissue);
+    const sequence = new Map(this.store.indexEntries().map((entry) => [
+      JSON.stringify([entry.conversation_id, entry.message_id, entry.revision ?? 0]), entry.seq
+    ]));
     const records = this.store.rebuild()
       .filter((r) => r.direction === 'inbound')
-      .sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
+      .sort((a, b) => String(a.received_at).localeCompare(String(b.received_at))
+        || (sequence.get(JSON.stringify([a.conversation_id, a.message_id, a.revision ?? 0])) ?? Infinity)
+          - (sequence.get(JSON.stringify([b.conversation_id, b.message_id, b.revision ?? 0])) ?? Infinity));
+
+    const groups = [];
+    const byKey = new Map();
+    const add = (key, record, options) => {
+      let group = byKey.get(key);
+      if (!group) {
+        group = { records: [], ...options };
+        byKey.set(key, group);
+        groups.push(group);
+      }
+      group.records.push(record);
+    };
 
     for (const record of records) {
-      const again = reissued.has(record.message_id);
-      if (!again) {
-        const decision = releaseDecision(this.declaration, this.channel, this.store, record, { now });
-        if (!decision.release) {
-          if (decision.reason === 'held' || decision.reason === 'not-yet-quiet') held.push(record.message_id);
-          continue;
-        }
+      const openRelease = record.release && !record.release.completed_at
+        ? record.release.turn_id : null;
+      if (openRelease !== null && reissued.has(openRelease)) {
+        add(`reissue:${openRelease}`, record, { reissue: true, releaseId: openRelease });
+        continue;
       }
-      let outcome;
+      const decision = releaseDecision(this.declaration, this.channel, this.store, record, { now });
+      if (!decision.release) {
+        if (decision.reason === 'held' || decision.reason === 'not-yet-quiet') held.push(record.message_id);
+        continue;
+      }
+      let unitId;
       try {
-        outcome = await this.releaseOne(record, { reissue: again });
+        unitId = unitIdFor(this.declaration, record);
       } catch (error) {
         if (endsTheProcess(error)) throw error;
         const faults = error.faults;
@@ -701,11 +764,31 @@ export class ReleaseLoop {
         parked.push(record.message_id);
         continue;
       }
+      const key = this.channel.release === 'mention'
+        ? `mention:${record.message_id}:${record.revision ?? 0}`
+        : `quiet:${JSON.stringify([record.conversation_id, unitId])}`;
+      add(key, record, { reissue: false, releaseId: null, unitId });
+    }
+
+    for (const group of groups) {
+      let outcome;
+      try {
+        outcome = await this.releaseOne(group.records, group);
+      } catch (error) {
+        if (endsTheProcess(error)) throw error;
+        const faults = error.faults;
+        for (const record of group.records) {
+          this.store.parkFailed(this.store.read(record.conversation_id, record.message_id, record.revision), faults);
+          parked.push(record.message_id);
+        }
+        this.log({ event: 'release.parked', message_ids: group.records.map((r) => r.message_id), faults });
+        continue;
+      }
       // The status of the tool servers can only be read once a thread is open,
       // so the first candidate of a run opens the thread and then finds out
       // whether it may go. A hold discovered there holds this record too.
       if (outcome === null) {
-        held.push(record.message_id);
+        held.push(...group.records.map((r) => r.message_id));
         continue;
       }
       released.push(outcome);
@@ -726,22 +809,27 @@ export class ReleaseLoop {
   // because no turn is being taken and no reply is coming. It is switched off in
   // the `finally`, which is what holds the stop on the two endings that throw —
   // the TURN_FAILED latch, and any fault releasePass catches and parks.
-  async releaseOne(record, { reissue = false } = {}) {
-    const unitId = unitIdFor(this.declaration, record);
+  async releaseOne(recordOrRecords, { reissue = false, releaseId = null, unitId = null } = {}) {
+    const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
+    const record = records[0];
+    unitId ??= unitIdFor(this.declaration, record);
     const threadId = await this.threadFor(unitId);
     if (this.holdFaults.length > 0) return null;
     const typing = startTyping({
       adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
     });
     try {
-      return await this.releaseTurn(record, { unitId, threadId, reissue });
+      return await this.releaseTurn(records, { unitId, threadId, reissue, releaseId });
     } finally {
       typing.stop();
     }
   }
 
-  async releaseTurn(record, { unitId, threadId, reissue }) {
-    const releaseId = releaseIdFor(record);
+  async releaseTurn(recordOrRecords, { unitId, threadId, reissue, releaseId = null }) {
+    const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
+    const record = records[0];
+    releaseId ??= releaseIdFor(records);
+    const messageIds = records.map((r) => r.message_id);
 
     // Written before the turn, always. A restart reads this and knows the model
     // was asked; the record's own turn_id is the release id, because that is the
@@ -749,23 +837,29 @@ export class ReleaseLoop {
     // is fenced on. The harness's turn id is written on the thread record, where
     // the transcript is.
     if (!reissue) {
-      this.store.release(record, {
-        released_at: new Date(this.now()).toISOString(),
-        thread_id: threadId,
-        turn_id: releaseId,
-        now: this.now(),
-        // The store refuses to release a held conversation, and a hold on a
-        // record in an ops or the management conversation is a hold that does
-        // not apply. The decision is made once, above, and this is it carried
-        // through to the write rather than made a second time there.
-        hold_applies: holdApplies(this.channel, record.conversation_id)
-      });
+      const releasedAt = new Date(this.now()).toISOString();
+      for (const one of records) {
+        this.store.release(one, {
+          released_at: releasedAt,
+          thread_id: threadId,
+          turn_id: releaseId,
+          now: this.now(),
+          // The store refuses to release a held conversation, and a hold on a
+          // record in an ops or the management conversation is a hold that does
+          // not apply. The decision is made once, above, and this is it carried
+          // through to the write rather than made a second time there.
+          hold_applies: holdApplies(this.channel, one.conversation_id)
+        });
+      }
     }
-    this.log({ event: 'release', message_id: record.message_id, release_id: releaseId, thread_id: threadId, reissue });
+    this.log({
+      event: 'release', message_ids: messageIds, message_id: record.message_id,
+      release_id: releaseId, thread_id: threadId, reissue
+    });
 
     const { result, completedAt } = await this.takeTurn({
       unitId, threadId, releaseId,
-      input: turnInput(record, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration }),
+      input: turnInput(records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration }),
       clientUserMessageId: releaseId
     });
 
@@ -774,8 +868,10 @@ export class ReleaseLoop {
     // the terminal-latch path; `interrupted` is the box going away and is left
     // open for the next start to re-issue.
     if (result.status === 'failed') {
-      this.store.setDisposition(this.store.read(record.conversation_id, record.message_id, record.revision), 'permanent-error');
-      this.store.completeRelease(record, completedAt);
+      for (const one of records) {
+        this.store.setDisposition(this.store.read(one.conversation_id, one.message_id, one.revision), 'permanent-error');
+        this.store.completeRelease(one, completedAt);
+      }
       throw latch(this.store, this.channel.account, this.channel.kind, fault('TURN_FAILED', record.message_id,
         `the model reported the turn failed: ${JSON.stringify(result.error ?? null)}`,
         'read the turn on the thread this record names, fix the cause, and run carbon install to clear the latch.'));
@@ -784,7 +880,7 @@ export class ReleaseLoop {
     // thread record lives in the store, which a check from outside the box cannot
     // read, and "what did that answer cost" is a question asked from outside.
     this.log({
-      event: 'turn', message_id: record.message_id, release_id: releaseId,
+      event: 'turn', message_ids: messageIds, message_id: record.message_id, release_id: releaseId,
       thread_id: threadId, turn_id: result.turn_id, status: result.status,
       token_usage: result.token_usage ?? null,
       tool_calls: toolCallsIn(result.items),
@@ -792,7 +888,10 @@ export class ReleaseLoop {
     });
 
     if (result.status !== 'completed') {
-      return { message_id: record.message_id, release_id: releaseId, status: result.status, turn_id: result.turn_id };
+      return {
+        message_ids: messageIds, message_id: record.message_id,
+        release_id: releaseId, status: result.status, turn_id: result.turn_id
+      };
     }
 
     // A completed turn is not an answered message. The one door out of a turn is
@@ -800,14 +899,14 @@ export class ReleaseLoop {
     // has delivered nothing at all. So the runtime asks once, on the same thread,
     // and then decides rather than hoping.
     const reply = await this.ensureReply(record, {
-      unitId, threadId, releaseId, result, completedAt
+      records, unitId, threadId, releaseId, result, completedAt
     });
     // And a spoken turn in the management conversation is not a recorded one. The
     // reply written there is held where it is until this is answered.
     const teach = await this.ensureTeachCheck(record, { unitId, threadId, releaseId });
-    this.store.completeRelease(record, completedAt);
+    for (const one of records) this.store.completeRelease(one, completedAt);
     return {
-      message_id: record.message_id, release_id: releaseId,
+      message_ids: messageIds, message_id: record.message_id, release_id: releaseId,
       status: result.status, turn_id: result.turn_id, reply: reply.outcome,
       teach_check: teach.outcome
     };
@@ -877,7 +976,7 @@ export class ReleaseLoop {
   }
 
   // The one follow-up, and the three ways it can end.
-  async ensureReply(record, { unitId, threadId, releaseId, result, completedAt }) {
+  async ensureReply(record, { records = [record], unitId, threadId, releaseId, result, completedAt }) {
     if (this.hasOutbound(record, releaseId)) return { outcome: 'replied' };
 
     this.log({
@@ -902,7 +1001,7 @@ export class ReleaseLoop {
     // Said so, plainly: no reply is due. That closes the release with the reason
     // on the record, and is not a failure of anything.
     if (saidNoReply(followUp.result.agent_message)) {
-      this.markReplyOutcome(record, 'no-reply-declared');
+      this.markReplyOutcome(records, 'no-reply-declared');
       this.log({ event: 'reply.none_due', message_id: record.message_id, release_id: releaseId });
       return { outcome: 'no-reply-declared' };
     }
@@ -912,10 +1011,12 @@ export class ReleaseLoop {
     const cause = fault('REPLY_ABSENT', record.message_id,
       'the turn completed and the follow-up completed, and neither wrote a reply nor answered NO_REPLY, so nothing reached the contact',
       `read the thread record's agent_message for this release; the model must call the reply tool or answer ${NO_REPLY}`);
-    this.store.parkFailed(
-      this.store.read(record.conversation_id, record.message_id, record.revision),
-      cause, { reason: 'no-reply' }
-    );
+    for (const one of records) {
+      this.store.parkFailed(
+        this.store.read(one.conversation_id, one.message_id, one.revision),
+        cause, { reason: 'no-reply' }
+      );
+    }
     this.log({
       event: 'reply.parked', message_id: record.message_id, release_id: releaseId,
       said: typeof followUp.result.agent_message === 'string'
@@ -995,9 +1096,12 @@ export class ReleaseLoop {
 
   // The reason a release closed with no message, written where the record is
   // rather than only in a log a restart rotates away.
-  markReplyOutcome(record, outcome) {
-    const on_disk = this.store.read(record.conversation_id, record.message_id, record.revision);
-    this.store.annotate(on_disk, { reply_outcome: outcome });
+  markReplyOutcome(recordOrRecords, outcome) {
+    const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
+    for (const record of records) {
+      const on_disk = this.store.read(record.conversation_id, record.message_id, record.revision);
+      this.store.annotate(on_disk, { reply_outcome: outcome });
+    }
   }
 
   // ---- deliver ------------------------------------------------------------
@@ -1033,12 +1137,13 @@ export class ReleaseLoop {
       this.log({ event: 'deliver', request_id: record.delivery.request_id, status: outcome.status });
       sent.push({ request_id: record.delivery.request_id, status: outcome.status });
 
-      if (outcome.status === 'sent' && record.reply_to) {
+      if (outcome.status === 'sent') {
+        const completedAt = new Date(this.now()).toISOString();
         const answered = this.store.recordsIn(record.conversation_id)
-          .find((r) => r.message_id === record.reply_to);
-        if (answered && answered.release && !answered.release.completed_at) {
-          this.store.completeRelease(answered, new Date(this.now()).toISOString());
-        }
+          .filter((r) => r.direction === 'inbound'
+            && r.release?.turn_id === record.delivery.request_id
+            && !r.release.completed_at);
+        for (const one of answered) this.store.completeRelease(one, completedAt);
       }
     }
     return sent;

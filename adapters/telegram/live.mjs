@@ -34,13 +34,17 @@
 
 import { fault } from '../../stream/faults.mjs';
 import { ALLOWED_UPDATES, DEFAULT_API_HOST, TelegramFault, call, download, readToken } from './api.mjs';
-import { mediaOf, messageOf } from './content.mjs';
+import { albumOf, mediaOf, messageOf } from './content.mjs';
 import { nextOffset, positionOf } from './cursors.mjs';
 
 // How long the worker waits before looking again at whether the loop has
 // consumed what it was handed. It is not a poll interval: nothing is asked of the
 // server here, it is one read of a cursor file.
 export const IDLE_MS = 250;
+
+// An album arrives as several updates over a second or two. The declaration
+// governs; this is the value used when it is absent.
+export const ALBUM_QUIET_MS = 2000;
 
 // How long the worker waits after a failed call before trying again, so a server
 // that is refusing everything is asked twice a second rather than as fast as the
@@ -88,7 +92,10 @@ function entryFor(context) {
   const key = keyOf(context);
   let entry = channels.get(key);
   if (!entry) {
-    entry = { items: [], highest: null, worker: null, stopped: false, fault: null, started_at: null };
+    entry = {
+      items: [], highest: null, worker: null, stopped: false, fault: null,
+      started_at: null, seen: new Map()
+    };
     channels.set(key, entry);
   }
   return entry;
@@ -117,6 +124,7 @@ export async function arrivals(context) {
 async function work(entry, context) {
   const { store, account, channel } = context;
   const timeout = Math.min(50, Math.max(0, channel?.long_poll_timeout_s ?? 25));
+  const albumQuiet = channel?.album_quiet_ms ?? ALBUM_QUIET_MS;
 
   while (!entry.stopped) {
     const offset = nextOffset(store, account);
@@ -128,15 +136,14 @@ async function work(entry, context) {
       continue;
     }
 
-    let updates;
+    dropConfirmed(entry, offset);
+
     try {
       const transport = transportFor(context);
-      updates = await call(transport, 'getUpdates', {
-        offset: offset ?? undefined,
-        timeout,
-        allowed_updates: ALLOWED_UPDATES
-      }, { timeoutMs: (timeout + 20) * 1000 });
-      entry.items = await withAttachments(transport, context, updates);
+      const { updates, items } = await settledBatch(entry, transport, context, {
+        offset, timeout, albumQuiet
+      });
+      entry.items = items;
       entry.highest = updates.length === 0
         ? entry.highest
         : Math.max(...updates.map((update) => update.update_id));
@@ -150,6 +157,52 @@ async function work(entry, context) {
       await sleep(RETRY_MS);
     }
   }
+}
+
+function dropConfirmed(entry, offset) {
+  if (offset === null) return;
+  for (const updateId of entry.seen.keys()) {
+    if (updateId < offset) entry.seen.delete(updateId);
+  }
+}
+
+function albumWait(items, albumQuiet) {
+  const youngest = items
+    .filter((item) => albumOf(messageOf(item.update).message) !== null)
+    .map((item) => Date.parse(item.received_at))
+    .filter((at) => !Number.isNaN(at))
+    .reduce((latest, at) => Math.max(latest, at), 0);
+  if (youngest === 0) return 0;
+  return Math.max(0, albumQuiet - (Date.now() - youngest));
+}
+
+async function settledBatch(entry, transport, context, { offset, timeout, albumQuiet }) {
+  let requestTimeout = timeout;
+  while (!entry.stopped) {
+    const updates = await call(transport, 'getUpdates', {
+      offset: offset ?? undefined,
+      timeout: requestTimeout,
+      allowed_updates: ALLOWED_UPDATES
+    }, { timeoutMs: (requestTimeout + 20) * 1000 });
+    const items = await cachedItems(entry, transport, context, updates);
+    const remaining = albumWait(items, albumQuiet);
+    if (remaining === 0) return { updates, items };
+    await sleep(Math.min(IDLE_MS, remaining));
+    requestTimeout = 0;
+  }
+  return { updates: [], items: [] };
+}
+
+async function cachedItems(entry, transport, context, updates) {
+  const items = [];
+  for (const update of updates) {
+    if (!entry.seen.has(update.update_id)) {
+      const [item] = await withAttachments(transport, context, [update]);
+      entry.seen.set(update.update_id, item);
+    }
+    items.push(entry.seen.get(update.update_id));
+  }
+  return items;
 }
 
 // Turn the server's updates into this adapter's items, fetching what is attached

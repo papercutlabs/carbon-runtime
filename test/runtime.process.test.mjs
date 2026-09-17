@@ -37,7 +37,7 @@ function declaration() {
     provider: { name: 'openai', auth: 'chatgpt' },
     secrets: [],
     tool_servers: [],
-    channels: [{ kind: 'fixture', account: ACCOUNT, release: 'immediate', poll_interval_ms: 10 }],
+    channels: [{ kind: 'fixture', account: ACCOUNT, release: 'quiet', quiet_ms: 0, poll_interval_ms: 10 }],
     unit_of_work: { kind: 'conversation', id_from: 'conversation_id', idle_close_ms: 1000 },
     limits: { max_turn_ms: 60000 }
   };

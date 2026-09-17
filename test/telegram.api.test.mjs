@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.mjs';
 import { botIdOf, call, readToken, scrub, TelegramFault } from '../adapters/telegram/api.mjs';
-import { arrivals, forget, IDLE_MS, transportFor } from '../adapters/telegram/live.mjs';
+import { ALBUM_QUIET_MS, arrivals, forget, IDLE_MS, transportFor } from '../adapters/telegram/live.mjs';
 import { nextOffset } from '../adapters/telegram/cursors.mjs';
 import * as adapter from '../adapters/telegram/index.mjs';
 
@@ -123,6 +123,75 @@ function update(update_id, message_id, text) {
   };
 }
 
+function photoUpdate(update_id, message_id, album = 'album-1') {
+  return {
+    update_id,
+    message: {
+      message_id,
+      media_group_id: album,
+      from: { id: 4455667, is_bot: false, first_name: 'Ada' },
+      chat: { id: 887766554, type: 'private', first_name: 'Ada' },
+      date: 1789034400,
+      photo: [{ file_id: `file-${message_id}`, file_unique_id: `unique-${message_id}`, file_size: 3 }]
+    }
+  };
+}
+
+function albumServerOf({ failAt = null } = {}) {
+  const updates = [photoUpdate(900001, 101), photoUpdate(900002, 102), photoUpdate(900003, 103)];
+  const asked = [];
+  const fetched = new Map();
+  const previous = globalThis.fetch;
+  let updateCalls = 0;
+  let thirdCallAt = null;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/getUpdates')) {
+      updateCalls += 1;
+      const params = JSON.parse(options.body);
+      asked.push({ offset: params.offset ?? null, timeout: params.timeout });
+      if (updateCalls === 3) thirdCallAt = Date.now();
+      if (updateCalls === failAt) throw new Error('the fake server dropped the repeat ask');
+      const arrived = updateCalls === 1 ? updates.slice(0, 2) : updates;
+      const result = arrived.filter((one) => params.offset === undefined || one.update_id >= params.offset);
+      if (result.length === 0) await sleep(10);
+      return {
+        status: 200,
+        json: async () => ({ ok: true, result })
+      };
+    }
+    if (url.includes('/getFile')) {
+      const { file_id } = JSON.parse(options.body);
+      fetched.set(file_id, (fetched.get(file_id) ?? 0) + 1);
+      return { status: 200, json: async () => ({ ok: true, result: { file_path: `files/${file_id}.jpg` } }) };
+    }
+    if (url.includes('/file/bot')) {
+      return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer };
+    }
+    throw new Error(`unexpected fake request ${url}`);
+  };
+  return {
+    asked,
+    fetched,
+    thirdCallAt: () => thirdCallAt,
+    restore: () => { globalThis.fetch = previous; }
+  };
+}
+
+async function waitForBatch(context, { acceptFault = false, attempts = 80 } = {}) {
+  let items = [];
+  let fault = null;
+  for (let i = 0; i < attempts && items.length === 0; i++) {
+    await sleep(IDLE_MS);
+    try {
+      items = await arrivals(context);
+    } catch (error) {
+      if (!acceptFault) throw error;
+      fault = error;
+    }
+  }
+  return { items, fault };
+}
+
 test('the long poll does not confirm an update until the record it wrote has been consumed', async () => {
   forget();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-poll-'));
@@ -172,6 +241,73 @@ test('the long poll does not confirm an update until the record it wrote has bee
     assert.equal(second[0].update.update_id, 900003);
     assert.ok(server.asked.includes(900003),
       `the second call did not confirm the first batch: ${server.asked.join(', ')}`);
+  } finally {
+    server.restore();
+    forget();
+  }
+});
+
+test('an album is settled across repeat asks at one offset and every photo is fetched once', async () => {
+  forget();
+  assert.equal(ALBUM_QUIET_MS, 2000);
+  assert.equal(adapter.DEFAULTS.album_quiet_ms, ALBUM_QUIET_MS);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-album-'));
+  const context = {
+    store: Store.open(path.join(dir, 'store')),
+    adapter,
+    agent: 'agent-01',
+    account: 'example_agent_bot',
+    channel: {
+      bot_token: tokenFile(), long_poll_timeout_s: 0,
+      album_quiet_ms: 100, max_attachment_bytes: 1000
+    },
+    now: Date.now()
+  };
+  const server = albumServerOf();
+
+  try {
+    await arrivals(context);
+    const { items } = await waitForBatch(context);
+    assert.equal(items.length, 3, 'the worker handed over a partial album');
+    assert.ok(server.asked.length >= 2);
+    assert.deepEqual([...new Set(server.asked.slice(0, 2).map((one) => one.offset))], [null]);
+    assert.equal(server.asked[1].timeout, 0);
+    assert.deepEqual([...server.fetched.values()], [1, 1, 1]);
+
+    for (const item of items) adapter.consume({ ...context, items }, item);
+    await sleep(IDLE_MS * 2);
+    assert.ok(server.asked.some((one) => one.offset === 900004),
+      `the next ask did not confirm the whole album: ${JSON.stringify(server.asked)}`);
+  } finally {
+    server.restore();
+    forget();
+  }
+});
+
+test('an album keeps first-sight timestamps and cached media across a failed repeat ask', async () => {
+  forget();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-album-retry-'));
+  const context = {
+    store: Store.open(path.join(dir, 'store')),
+    adapter,
+    agent: 'agent-01',
+    account: 'example_agent_bot',
+    channel: {
+      bot_token: tokenFile(), long_poll_timeout_s: 0,
+      album_quiet_ms: 100, max_attachment_bytes: 1000
+    },
+    now: Date.now()
+  };
+  const server = albumServerOf({ failAt: 2 });
+
+  try {
+    await arrivals(context);
+    const { items, fault } = await waitForBatch(context, { acceptFault: true });
+    assert.ok(fault instanceof TelegramFault, 'the failed repeat ask was not exposed as a channel fault');
+    assert.equal(items.length, 3);
+    assert.deepEqual([...server.fetched.values()], [1, 1, 1]);
+    assert.ok(Date.parse(items[0].received_at) < server.thirdCallAt(),
+      'the first photo was rebuilt with the retry time');
   } finally {
     server.restore();
     forget();

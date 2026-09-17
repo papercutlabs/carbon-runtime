@@ -106,9 +106,10 @@ is not there is pending however the positions fall.
    `media_group_id` and one picture, usually with the caption on the first. Every
    item gets its own record, carrying the group id. PA-147 is the gap the other
    shape makes: a set of pictures went in and everything after the first came out
-   nowhere. One record per item cannot lose an item. The cost is that the agent
-   may see the first before the sixth has arrived, which is what the channel's
-   release policy is for: a channel that receives albums declares `quiet`.
+   nowhere. One record per item cannot lose an item. The long poll waits for
+   `transport.album_quiet_ms` after the newest album item before handing the
+   batch over. The release pass gathers everything pending on the conversation
+   into one turn, so the agent sees the album together even at `quiet_ms: 0`.
 3. **A photograph arrives as a list of sizes of one picture.** The largest is
    kept. Keeping any other is keeping a thumbnail and calling it the attachment.
 4. **The words of a message with a file on it are in `caption`, not `text`.**
@@ -157,7 +158,8 @@ is not there is pending however the positions fall.
   "kind": "telegram",
   "account": "<the bot's username>",
   "poll_interval_ms": 15000,
-  "release": "immediate",
+  "release": "quiet",
+  "quiet_ms": 0,
   "hold": { "on_operator_message": true, "release_after_ms": 3600000 },
   "max_attachment_bytes": 20971520,
   "transport": {
@@ -165,7 +167,8 @@ is not there is pending however the positions fall.
     "allowed_chat_ids": [123456789],
     "operator_sender_ids": [987654321],
     "mode": "polling",
-    "long_poll_timeout_s": 25
+    "long_poll_timeout_s": 25,
+    "album_quiet_ms": 2000
   }
 }
 ```
