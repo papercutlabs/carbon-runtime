@@ -110,6 +110,25 @@ is not there is pending however the positions fall.
    `transport.album_quiet_ms` after the newest album item before handing the
    batch over. The release pass gathers everything pending on the conversation
    into one turn, so the agent sees the album together even at `quiet_ms: 0`.
+
+   The batch is everything the worker still remembers and the store has not
+   confirmed, in update-id order — never the latest answer on its own. One
+   `getUpdates` answer is what the server chose to say this time: it may carry
+   part of an album, repeat what the last answer carried, reorder it, or carry
+   nothing at all, and none of that says anything about an update the worker has
+   already seen. Reading the latest answer as the batch costs exactly this: six
+   photographs were seen, an answer named one of them, and the album became one
+   turn and then five. So the retained set decides all four things together —
+   how long to wait, which photographs to fetch, what is handed over, and how
+   far the offset may then move. An update leaves that set only when the store's own cursor has
+   passed it, and its first-sight time is the moment it was first seen, however
+   many answers repeat it.
+
+   What this does not solve is a member nobody has seen yet. A quiet window is
+   finite, so an album member that first becomes visible after the batch has been
+   handed over is a later batch, and an answer is capped at 100 updates, so a
+   backlog can hide an album's tail behind it. Both are visible as a second turn
+   and neither is a lost message.
 3. **A photograph arrives as a list of sizes of one picture.** The largest is
    kept. Keeping any other is keeping a thumbnail and calling it the attachment.
 4. **The words of a message with a file on it are in `caption`, not `text`.**

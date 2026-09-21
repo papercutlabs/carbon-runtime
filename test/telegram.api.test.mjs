@@ -16,19 +16,7 @@ import { botIdOf, call, readToken, scrub, TelegramFault } from '../adapters/tele
 import { ALBUM_QUIET_MS, arrivals, forget, IDLE_MS, transportFor } from '../adapters/telegram/live.mjs';
 import { nextOffset } from '../adapters/telegram/cursors.mjs';
 import * as adapter from '../adapters/telegram/index.mjs';
-
-const TOKEN = '7000001:AAH-this-is-not-a-real-token_0123456789';
-
-function tokenFile(body = TOKEN) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-token-'));
-  const file = path.join(dir, 'bot-token');
-  fs.writeFileSync(file, body, { mode: 0o600 });
-  return file;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { photoUpdate, sleep, TOKEN, tokenFile, update, waitForBatch } from './telegram-fixtures.mjs';
 
 // ---- the token ---------------------------------------------------------------
 
@@ -108,33 +96,6 @@ function serverOf(batches) {
     return { status: 200, json: async () => ({ ok: true, result: batch }) };
   };
   return { asked, restore: () => { globalThis.fetch = previous; } };
-}
-
-function update(update_id, message_id, text) {
-  return {
-    update_id,
-    message: {
-      message_id,
-      from: { id: 4455667, is_bot: false, first_name: 'Ada' },
-      chat: { id: 887766554, type: 'private', first_name: 'Ada' },
-      date: 1789034400,
-      text
-    }
-  };
-}
-
-function photoUpdate(update_id, message_id, album = 'album-1') {
-  return {
-    update_id,
-    message: {
-      message_id,
-      media_group_id: album,
-      from: { id: 4455667, is_bot: false, first_name: 'Ada' },
-      chat: { id: 887766554, type: 'private', first_name: 'Ada' },
-      date: 1789034400,
-      photo: [{ file_id: `file-${message_id}`, file_unique_id: `unique-${message_id}`, file_size: 3 }]
-    }
-  };
 }
 
 function albumServerOf({ failAt = null } = {}) {
@@ -226,21 +187,6 @@ function timedAlbumServerOf({
     media,
     restore: () => { globalThis.fetch = previous; }
   };
-}
-
-async function waitForBatch(context, { acceptFault = false, attempts = 80 } = {}) {
-  let items = [];
-  let fault = null;
-  for (let i = 0; i < attempts && items.length === 0; i++) {
-    await sleep(IDLE_MS);
-    try {
-      items = await arrivals(context);
-    } catch (error) {
-      if (!acceptFault) throw error;
-      fault = error;
-    }
-  }
-  return { items, fault };
 }
 
 test('the long poll does not confirm an update until the record it wrote has been consumed', async () => {
