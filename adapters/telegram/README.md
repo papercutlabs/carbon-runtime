@@ -116,11 +116,11 @@ is not there is pending however the positions fall.
    `getUpdates` answer is what the server chose to say this time: it may carry
    part of an album, repeat what the last answer carried, reorder it, or carry
    nothing at all, and none of that says anything about an update the worker has
-   already seen. PA-298 is what the other reading costs: six photographs were
-   seen, an answer named one of them, and the album became one turn and then
-   five. So the retained set decides all four things together — how long to wait,
-   which photographs to fetch, what is handed over, and how far the offset may
-   then move. An update leaves that set only when the store's own cursor has
+   already seen. Reading the latest answer as the batch costs exactly this: six
+   photographs were seen, an answer named one of them, and the album became one
+   turn and then five. So the retained set decides all four things together —
+   how long to wait, which photographs to fetch, what is handed over, and how
+   far the offset may then move. An update leaves that set only when the store's own cursor has
    passed it, and its first-sight time is the moment it was first seen, however
    many answers repeat it.
 

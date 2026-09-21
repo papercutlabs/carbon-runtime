@@ -4,10 +4,10 @@
 // The other Telegram tests prove what the long poll hands over, and the loop
 // tests prove what the loop does with items it is handed. Between the two there
 // is one join nobody was testing: the batch the real worker produces, captured
-// by the real adapter and released by the real loop. PA-298 is a failure that
-// lives exactly there — six photographs the worker remembered became one turn
-// and then another — so the proof has to run the join rather than rebuild six
-// records that skip it.
+// by the real adapter and released by the real loop. The retained-membership
+// failure lives exactly there — six photographs the worker remembered became
+// one turn and then another — so the proof has to run the join rather than
+// rebuild six records that skip it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

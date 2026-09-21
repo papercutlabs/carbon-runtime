@@ -39,9 +39,9 @@
 // answer is what the server chose to say this time, and it may carry part of an
 // album, repeat the last answer, reorder it or carry nothing, none of which says
 // anything about an update already seen. An answer that named one photograph of
-// six the worker was holding is how an album became one turn and then five
-// (PA-298), so the retained set is the single authority for the waiting, the
-// downloads, the handoff and the watermark that follows it.
+// six the worker was holding is how an album became one turn and then five, so
+// the retained set is the single authority for the waiting, the downloads, the
+// handoff and the watermark that follows it.
 
 import { fault } from '../../stream/faults.mjs';
 import { ALLOWED_UPDATES, DEFAULT_API_HOST, TelegramFault, call, download, readToken } from './api.mjs';

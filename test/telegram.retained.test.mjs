@@ -3,8 +3,8 @@
 //
 // An album arrives as several updates, and a `getUpdates` answer is only what
 // the server chose to say this time: it can carry part of the album, repeat the
-// last answer, reorder it or carry nothing at all. PA-298 is what happens when
-// the last answer is read as the batch — six photographs the worker was holding
+// last answer, reorder it or carry nothing at all. Reading the last answer as
+// the batch is what splits an album: six photographs the worker was holding
 // became one turn and then five. So these tests run the real worker against a
 // scripted server and assert the one rule that removes the whole class: the
 // batch is everything retained and unconfirmed, in update-id order.
