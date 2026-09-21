@@ -31,6 +31,17 @@
 // consumed in memory — buys a little latency and pays for it with every message
 // in flight when the process dies, which is exactly the trade this programme does
 // not make with a client's messages.
+//
+// ## What the batch is
+//
+// The batch is everything this worker still remembers and the store has not
+// confirmed, in update-id order. It is not the latest answer: one `getUpdates`
+// answer is what the server chose to say this time, and it may carry part of an
+// album, repeat the last answer, reorder it or carry nothing, none of which says
+// anything about an update already seen. An answer that named one photograph of
+// six the worker was holding is how an album became one turn and then five
+// (PA-298), so the retained set is the single authority for the waiting, the
+// downloads, the handoff and the watermark that follows it.
 
 import { fault } from '../../stream/faults.mjs';
 import { ALLOWED_UPDATES, DEFAULT_API_HOST, TelegramFault, call, download, readToken } from './api.mjs';
@@ -94,7 +105,7 @@ function entryFor(context) {
   if (!entry) {
     entry = {
       items: [], highest: null, worker: null, stopped: false, fault: null,
-      started_at: null, seen: new Map()
+      started_at: null, seen: new Map(), media: new Map()
     };
     channels.set(key, entry);
   }
@@ -140,13 +151,16 @@ async function work(entry, context) {
 
     try {
       const transport = transportFor(context);
-      const { updates, items } = await settledBatch(entry, transport, context, {
+      const { items } = await settledBatch(entry, transport, context, {
         offset, timeout, albumQuiet
       });
       entry.items = items;
-      entry.highest = updates.length === 0
+      // The handed set is the only authority for the watermark. Reading it off
+      // the last response instead would confirm updates this batch does not
+      // carry, which is exactly how a shrinking response loses an album.
+      entry.highest = items.length === 0
         ? entry.highest
-        : Math.max(...updates.map((update) => update.update_id));
+        : Math.max(...items.map((item) => item.update.update_id));
       entry.fault = null;
     } catch (error) {
       entry.fault = error instanceof TelegramFault
@@ -164,6 +178,21 @@ function dropConfirmed(entry, offset) {
   for (const updateId of entry.seen.keys()) {
     if (updateId < offset) entry.seen.delete(updateId);
   }
+  for (const updateId of entry.media.keys()) {
+    if (updateId < offset) entry.media.delete(updateId);
+  }
+}
+
+// Everything this worker still remembers and the store has not confirmed, in the
+// order the stream numbers it. This — not the latest response — is the batch: a
+// server answer that omits an update the worker has already seen says nothing
+// about that update, and an album whose members are spread over several answers
+// is only ever whole here.
+function retained(entry, offset) {
+  return [...entry.seen.keys()]
+    .filter((updateId) => offset === null || updateId >= offset)
+    .sort((left, right) => left - right)
+    .map((updateId) => entry.seen.get(updateId));
 }
 
 function albumWait(items, albumQuiet) {
@@ -184,32 +213,34 @@ async function settledBatch(entry, transport, context, { offset, timeout, albumQ
       timeout: requestTimeout,
       allowed_updates: ALLOWED_UPDATES
     }, { timeoutMs: (requestTimeout + 20) * 1000 });
-    const items = cachedItems(entry, updates);
+    remember(entry, updates);
+    const items = retained(entry, offset);
     const remaining = albumWait(items, albumQuiet);
     if (remaining === 0) {
-      return { updates, items: await withAttachments(transport, context, items) };
+      return { items: await withAttachments(entry, transport, context, items) };
     }
     await sleep(Math.min(IDLE_MS, remaining));
     requestTimeout = 0;
   }
-  return { updates: [], items: [] };
+  return { items: [] };
 }
 
-function cachedItems(entry, updates) {
-  const items = [];
+// Add what this response showed for the first time. An update already remembered
+// keeps the item and the moment it was first seen, however many answers repeat
+// it: the first sighting is what the album window is measured from, and a repeat
+// that reset it would hold an album open for as long as the server kept
+// repeating it.
+function remember(entry, updates) {
   for (const update of updates) {
-    if (!entry.seen.has(update.update_id)) {
-      const { message } = messageOf(update);
-      entry.seen.set(update.update_id, {
-        conversation: message?.chat?.id === undefined ? null : String(message.chat.id),
-        position: message?.message_id === undefined ? null : positionOf(message.message_id),
-        received_at: new Date().toISOString(),
-        update
-      });
-    }
-    items.push(entry.seen.get(update.update_id));
+    if (entry.seen.has(update.update_id)) continue;
+    const { message } = messageOf(update);
+    entry.seen.set(update.update_id, {
+      conversation: message?.chat?.id === undefined ? null : String(message.chat.id),
+      position: message?.message_id === undefined ? null : positionOf(message.message_id),
+      received_at: new Date().toISOString(),
+      update
+    });
   }
-  return items;
 }
 
 // Fetch attachments only after the update membership has settled. A getFile call
@@ -222,7 +253,7 @@ function cachedItems(entry, updates) {
 // says the download failed, names its size and digest, and is released anyway,
 // because the words of a message with a file on it are usually the part that
 // matters and a stalled disk is a worse outcome than a missing picture.
-async function withAttachments(transport, context, items) {
+async function withAttachments(entry, transport, context, items) {
   const limit = context.channel?.max_attachment_bytes ?? 0;
   const hydrated = [];
   for (const item of items) {
@@ -230,12 +261,23 @@ async function withAttachments(transport, context, items) {
     const complete = { ...item };
     const media = message === null ? null : mediaOf(message);
     if (media !== null && (media.bytes ?? 0) <= limit) {
-      const fetched = await fetchMedia(transport, media);
+      const fetched = await mediaFor(entry, transport, item.update.update_id, media);
       if (fetched !== null) complete.attachments = [fetched];
     }
     hydrated.push(complete);
   }
   return hydrated;
+}
+
+// What was fetched for an update this worker still remembers, fetched once. A
+// retained update can settle into more than one batch — a repeat ask, a failed
+// poll, a later member arriving — and the bytes are the expensive half of a
+// poll; they are dropped with the update itself when the store confirms it.
+async function mediaFor(entry, transport, updateId, media) {
+  if (entry.media.has(updateId)) return entry.media.get(updateId);
+  const fetched = await fetchMedia(transport, media);
+  entry.media.set(updateId, fetched);
+  return fetched;
 }
 
 async function fetchMedia(transport, media) {
