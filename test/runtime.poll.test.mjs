@@ -295,6 +295,42 @@ test('the email adapter carries a floor and the declaration must honour it', () 
   assert.equal(pollIntervalFor({ kind: 'email', account: ACCOUNT, poll_interval_ms: 30000 }, email).interval_ms, 30000);
 });
 
+test('the email floor is per inbound transport: AgentMail REST may poll every 5000 ms, IMAP keeps 30000', () => {
+  assert.deepEqual({ ...email.POLL_INTERVAL_FLOORS_BY_INBOUND }, { imap: 30000, 'agentmail-api': 5000 });
+
+  const api = (poll_interval_ms) => ({ kind: 'email', account: ACCOUNT, inbound: 'agentmail-api', poll_interval_ms });
+  assert.equal(email.pollIntervalFloorMs(api(5000)), 5000);
+  const accepted = pollIntervalFor(api(5000), email);
+  assert.equal(accepted.interval_ms, 5000);
+  assert.equal(accepted.fault, null);
+  assert.equal(email.pollIntervalMs(api(5000)), 5000);
+
+  const belowApi = pollIntervalFor(api(4999), email);
+  assert.equal(belowApi.interval_ms, null);
+  assert.equal(belowApi.fault.code, 'POLL_INTERVAL_BELOW_FLOOR');
+  assert.match(belowApi.fault.fix, /raise poll_interval_ms to 5000 or more/);
+  assert.throws(() => email.pollIntervalMs(api(4999)), (error) => error.faults?.[0]?.code === 'POLL_INTERVAL_BELOW_FLOOR');
+
+  for (const imap of [
+    { kind: 'email', account: ACCOUNT, poll_interval_ms: 5000 },
+    { kind: 'email', account: ACCOUNT, inbound: 'imap', poll_interval_ms: 29999 }
+  ]) {
+    const refused = pollIntervalFor(imap, email);
+    assert.equal(refused.fault.code, 'POLL_INTERVAL_BELOW_FLOOR');
+    assert.match(refused.fault.fix, /30000/);
+  }
+
+  // The declaration keeps the choice under transport; the resolved channel is
+  // what the runtime checks, so the floor must follow it through resolveChannel.
+  const resolved = resolveChannel({ secrets: [] }, {
+    kind: 'email', account: ACCOUNT, poll_interval_ms: 5000, transport: { inbound: 'agentmail-api' }
+  });
+  assert.equal(pollIntervalFor(resolved, email).interval_ms, 5000);
+
+  // An inbound transport nobody named a floor for gets the strictest one.
+  assert.equal(email.pollIntervalFloorMs({ inbound: 'something-new' }), 30000);
+});
+
 test('the declared count is the channel\'s, and the runtime\'s constant when it is silent', () => {
   assert.equal(failuresBeforeHold({}), POLL_FAILURES_BEFORE_HOLD);
   assert.equal(failuresBeforeHold({ poll_failures_before_hold: 7 }), 7);

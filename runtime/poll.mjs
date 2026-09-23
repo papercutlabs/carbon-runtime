@@ -46,7 +46,11 @@ export const POLL_FAILURES_BEFORE_HOLD = 3;
 // with no interval is a channel nobody decided about.
 export function pollIntervalFor(channel, adapter) {
   const declared = channel?.poll_interval_ms;
-  const floor = adapter?.POLL_INTERVAL_FLOOR_MS ?? 0;
+  // An adapter whose floor depends on the channel (email: per inbound transport)
+  // exports pollIntervalFloorMs(channel); the rest export one number.
+  const floor = typeof adapter?.pollIntervalFloorMs === 'function'
+    ? adapter.pollIntervalFloorMs(channel)
+    : (adapter?.POLL_INTERVAL_FLOOR_MS ?? 0);
   if (typeof declared !== 'number' || !Number.isFinite(declared) || declared <= 0) {
     return {
       interval_ms: null,

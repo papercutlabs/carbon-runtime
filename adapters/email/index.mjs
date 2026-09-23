@@ -54,6 +54,23 @@ export const POLL_INTERVAL_FLOOR_MS = 30000;
 export const STATUS_ATTEMPTS = 3;
 export const AGENTMAIL_API_INBOUND = 'agentmail-api';
 
+// The floor belongs to the inbound transport, because the thirty seconds above
+// is about IMAP logins. The AgentMail REST transport logs in to nothing: a poll
+// is one authenticated HTTPS list call with an `after` watermark, plus one fetch
+// per new message, so its floor is five seconds (PA-209). An inbound transport
+// this table does not name gets the IMAP floor, the strictest one we have.
+export const POLL_INTERVAL_FLOORS_BY_INBOUND = Object.freeze({
+  imap: 30000,
+  'agentmail-api': 5000
+});
+
+// The floor for this channel's inbound transport. The runtime calls it with the
+// resolved channel, where `inbound` sits on the channel itself; absent means IMAP.
+export function pollIntervalFloorMs(channel) {
+  const inbound = channel?.inbound ?? channel?.transport?.inbound ?? 'imap';
+  return POLL_INTERVAL_FLOORS_BY_INBOUND[inbound] ?? POLL_INTERVAL_FLOOR_MS;
+}
+
 export const DEFAULTS = {
   mailbox: 'INBOX',
   imap_port: 993,
@@ -89,15 +106,16 @@ export function channelOf(context) {
 // The floor, as a refusal. Returns the interval or throws.
 export function pollIntervalMs(channel) {
   const declared = channel.poll_interval_ms;
+  const floor = pollIntervalFloorMs(channel);
   if (typeof declared !== 'number' || !Number.isFinite(declared)) {
     throw new TransportFault([fault('POLL_INTERVAL_MISSING', 'poll_interval_ms',
       'the channel declares no poll interval and this adapter guesses none',
-      `declare poll_interval_ms, at or above the floor of ${POLL_INTERVAL_FLOOR_MS}`)]);
+      `declare poll_interval_ms, at or above the floor of ${floor}`)]);
   }
-  if (declared < POLL_INTERVAL_FLOOR_MS) {
+  if (declared < floor) {
     throw new TransportFault([fault('POLL_INTERVAL_BELOW_FLOOR', String(declared),
-      `polling a mailbox faster than every ${POLL_INTERVAL_FLOOR_MS} ms earns a rate limit that costs a day of the agent's work`,
-      `raise poll_interval_ms to ${POLL_INTERVAL_FLOOR_MS} or more`)]);
+      `polling a mailbox faster than every ${floor} ms earns a rate limit that costs a day of the agent's work`,
+      `raise poll_interval_ms to ${floor} or more`)]);
   }
   return declared;
 }

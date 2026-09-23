@@ -95,6 +95,12 @@ export function poll(context) { /* -> { items: [item] } */ }
 // A floor, when this channel's provider has one. The runtime refuses a
 // declaration below it at start, by name, and never quietly raises it.
 export const POLL_INTERVAL_FLOOR_MS = 30000;
+
+// Optional: a floor that depends on the channel, when one adapter reaches its
+// provider more than one way. The runtime calls it with the resolved channel and
+// prefers it to the constant. The email adapter uses it to give its AgentMail
+// REST inbound a floor of 5000 ms while IMAP keeps 30000.
+export function pollIntervalFloorMs(channel) { /* -> ms */ }
 ```
 
 ## The seventh operation, optional: stop
