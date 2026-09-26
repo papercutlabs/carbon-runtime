@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store, StreamFault } from '../stream/store.ts';
-import { ingest } from '../conformance/cases.mjs';
+import { ingest } from '../conformance/cases.ts';
 import * as adapter from '../adapters/email/index.ts';
 import { STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.ts';
 import type { EmailChannelInput, EmailRecord, ImapEmailContext, OutboundEmailRecord } from '../adapters/email/index.ts';
@@ -30,7 +30,7 @@ function recordedAs(changes: Record<string, string | Buffer> = {}): string {
   return dir;
 }
 
-function context(recorded = RECORDED, channel: EmailChannelInput & { inbound?: undefined } = {}): ImapEmailContext {
+function context(recorded = RECORDED, channel: EmailChannelInput & { inbound?: undefined } = {}): ImapEmailContext & { store: Store<EmailRecord>; adapter: typeof adapter } {
   process.env.CARBON_EMAIL_RECORDED = recorded;
   const store = Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-tx-')), 'store'));
   return {
@@ -62,10 +62,10 @@ function hasDelivery(record: EmailRecord): record is OutboundEmailRecord {
 
 // Capture the recorded probe, which is the inbound this conversation is
 // answered on, and return the reply the store fenced.
-function pending(running: ImapEmailContext, { request_id = 'req-1', text = 'an answer' }: {
+function pending(running: ReturnType<typeof context>, { request_id = 'req-1', text = 'an answer' }: {
   request_id?: string;
   text?: string;
-} = {}): { inbound: EmailRecord; written: { record: OutboundEmailRecord } } {
+} = {}) {
   const item = adapter.poll(running).items[0];
   const [inbound] = ingest(running, [item]);
   adapter.consume(running, item);

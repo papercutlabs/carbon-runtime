@@ -46,7 +46,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `adapters/whatsapp/` | the WhatsApp adapter: chat keys, the hold, the terminal latch, the transactional authentication state |
 | `adapters/telegram/` | the Telegram adapter: the Bot API over https with no library, the long poll whose offset is the watermark, the declared chats and the declared operator |
 | `import/` | the history imports: a zip reader with no dependency and the map from an export's rows to records, and the ledger import, which reads a client's own SQLite ledger through a mapping file that names its tables and columns, and the outbound import, which reads the places that system recorded what the agent itself sent |
-| `conformance/cases.mjs` | the twenty-four cases, by number and name |
+| `conformance/cases.ts` | the twenty-four cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |

@@ -9,11 +9,12 @@ const FIXTURE_ADAPTER = path.join(ROOT, 'adapters', 'fixture');
 const FIXTURES = path.join(FIXTURE_ADAPTER, 'fixtures');
 const BROKEN = path.join(ROOT, 'test', 'fixtures', 'broken-adapter');
 
-function check(args) {
+function check(args: string[]) {
   try {
     return { code: 0, out: execFileSync(process.execPath, [CHECK, ...args], { encoding: 'utf8' }) };
   } catch (error) {
-    return { code: error.status, out: (error.stdout ?? '') + (error.stderr ?? '') };
+    // execFileSync supplies these fields on command failure; absent fields retain the original fallback.
+    return { code: (error as { status?: number }).status, out: ((error as { stdout?: string }).stdout ?? '') + ((error as { stderr?: string }).stderr ?? '') };
   }
 }
 
@@ -51,8 +52,9 @@ test('every command carries its manual and refuses a guess', () => {
   assert.equal(missing.code, 1);
   assert.match(missing.out, /MISSING_ARGUMENT/);
   for (const line of missing.out.split('\n').filter(Boolean)) {
-    const fault = JSON.parse(line);
-    assert.deepEqual(Object.keys(fault).sort(), ['code', 'fix', 'problem', 'subject']);
+    const fault: unknown = JSON.parse(line);
+    // Object.keys examines the parsed value as it is, including its existing null failure.
+    assert.deepEqual(Object.keys(fault as object).sort(), ['code', 'fix', 'problem', 'subject']);
   }
 });
 
