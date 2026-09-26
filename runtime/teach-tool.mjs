@@ -8,7 +8,7 @@
 //   forget         stop following one the client has revoked
 //
 // None of them takes `taught_by`. The teacher is read from the capture the
-// `source_message_id` names, in stream/teachings.mjs, so the model cannot
+// `source_message_id` names, in stream/teachings.ts, so the model cannot
 // attribute an instruction to someone who did not send it.
 //
 // **The boundary test lives in the tool descriptions and nowhere else.** The
@@ -51,7 +51,7 @@ import { readManifest } from '../tools/lib/manifest.mjs';
 import { renderHelp } from '../tools/lib/help.mjs';
 import { ToolFault, fault as toolFault } from '../tools/lib/fault.mjs';
 import { Store, StreamFault } from '../stream/store.ts';
-import { remember, raiseChange, forget } from '../stream/teachings.mjs';
+import { remember, raiseChange, forget } from '../stream/teachings.ts';
 import { fault, report, RuntimeFault, EXIT } from './faults.mjs';
 import { managementConversationOf } from './channel.mjs';
 
@@ -108,7 +108,7 @@ function asToolFault(thrown) {
 // The room check, run before the store is touched, so a call from a work chat
 // leaves nothing behind at all. It is the conversation the call names that is
 // checked; a source_message_id from another conversation is not in this
-// conversation's captures and stream/teachings.mjs refuses it by name.
+// conversation's captures and stream/teachings.ts refuses it by name.
 function refuseOutsideManagement(management, { conversation_id }) {
   const faults = managementFaults(management, conversation_id);
   if (faults.length > 0) throw new ToolFault(faults);

@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { StreamFault } from '../stream/store.ts';
-import { forget, listTeachings, raiseChange, remember, writeTeaching } from '../stream/teachings.mjs';
+import { forget, listTeachings, raiseChange, remember, writeTeaching } from '../stream/teachings.ts';
 
 function sha256(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
