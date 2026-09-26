@@ -15,10 +15,15 @@ export const send = fixture.send;
 
 let seen = 0;
 
-export function payload(context, items) {
+export function payload(
+  context: Parameters<typeof fixture.payload>[0],
+  items: Parameters<typeof fixture.payload>[1]
+): ReturnType<typeof fixture.payload> {
   const built = fixture.payload(context, items);
   for (const entry of built.entries) {
-    entry.record.message_id = `${entry.record.message_id}-${++seen}`;
+    // FixtureRecord leaves message_id unknown until the store checks it; String
+    // keeps the original template coercion without inventing a typed guarantee.
+    entry.record.message_id = `${String(entry.record.message_id)}-${++seen}`;
   }
   return built;
 }
