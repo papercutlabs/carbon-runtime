@@ -21,7 +21,7 @@ export const REGISTRY = {
   fixture: 'adapters/fixture/index.ts',
   email: 'adapters/email/index.ts',
   whatsapp: 'adapters/whatsapp/index.ts',
-  telegram: 'adapters/telegram/index.mjs'
+  telegram: 'adapters/telegram/index.ts'
 };
 
 export function registeredKinds() {

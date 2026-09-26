@@ -1,3 +1,9 @@
+// Assertions on fixture-only fault shapes and nonempty test results preserve
+// the original failure assertions; they add no fallback for a missing result.
+// Fetch replacements implement only the response methods exercised below; the
+// installation assertions retain these deliberately partial synthetic responses.
+import type { ArrivedItem, Fields } from '../adapters/telegram/types.ts';
+import type { SyntheticUpdate } from './telegram-fixtures.ts';
 // The Bot API half: the token, what is said about a failure, and the one rule
 // that makes a long poll durable.
 //
@@ -12,11 +18,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
-import { botIdOf, call, readToken, scrub, TelegramFault } from '../adapters/telegram/api.mjs';
-import { ALBUM_QUIET_MS, arrivals, forget, IDLE_MS, transportFor } from '../adapters/telegram/live.mjs';
-import { nextOffset } from '../adapters/telegram/cursors.mjs';
-import * as adapter from '../adapters/telegram/index.mjs';
-import { photoUpdate, sleep, TOKEN, tokenFile, update, waitForBatch } from './telegram-fixtures.mjs';
+import { botIdOf, call, readToken, scrub, TelegramFault } from '../adapters/telegram/api.ts';
+import { ALBUM_QUIET_MS, arrivals, forget, IDLE_MS, transportFor } from '../adapters/telegram/live.ts';
+import { nextOffset } from '../adapters/telegram/cursors.ts';
+import * as adapter from '../adapters/telegram/index.ts';
+import { photoUpdate, sleep, TOKEN, tokenFile, update, waitForBatch } from './telegram-fixtures.ts';
 
 // ---- the token ---------------------------------------------------------------
 
@@ -28,22 +34,22 @@ test('a token is read from its file at the moment it is used, and trailing white
 
 test('a file that is not a token is refused by name, before the first call', () => {
   assert.throws(() => readToken(tokenFile('bot_token: "7000001:AAH"\n')),
-    (error) => error.faults[0].code === 'BOT_TOKEN_MALFORMED');
+    (error) => (error as TelegramFault).faults[0].code === 'BOT_TOKEN_MALFORMED');
   assert.throws(() => readToken('/no/such/token/file'),
-    (error) => error.faults[0].code === 'CHANNEL_TOKEN_UNREADABLE');
+    (error) => (error as TelegramFault).faults[0].code === 'CHANNEL_TOKEN_UNREADABLE');
   assert.throws(() => readToken(undefined),
-    (error) => error.faults[0].code === 'CHANNEL_TOKEN_PATH_ABSENT');
+    (error) => (error as TelegramFault).faults[0].code === 'CHANNEL_TOKEN_PATH_ABSENT');
 });
 
 test('the token never reaches a fault, whatever the server or the network said about it', async () => {
   const previous = globalThis.fetch;
-  globalThis.fetch = async (url) => { throw new Error(`connect ECONNREFUSED at ${url}`); };
+  globalThis.fetch = (async (url: string) => { throw new Error(`connect ECONNREFUSED at ${url}`); }) as typeof fetch;
   try {
     await assert.rejects(() => call({ token: TOKEN }, 'getMe'), (error) => {
-      const said = JSON.stringify(error.faults);
+      const said = JSON.stringify((error as TelegramFault).faults);
       assert.ok(!said.includes(TOKEN), 'the token is in the fault');
       assert.ok(said.includes('<bot token>'), 'the url was not scrubbed');
-      return error.faults[0].code === 'BOT_API_UNREACHABLE';
+      return (error as TelegramFault).faults[0].code === 'BOT_API_UNREACHABLE';
     });
   } finally {
     globalThis.fetch = previous;
@@ -54,15 +60,15 @@ test('the token never reaches a fault, whatever the server or the network said a
 
 test('a refusal carries the server\'s own code, so a revoked token is not read as a busy server', async () => {
   const previous = globalThis.fetch;
-  globalThis.fetch = async () => ({
+  globalThis.fetch = (async () => ({
     status: 401,
     json: async () => ({ ok: false, error_code: 401, description: 'Unauthorized' })
-  });
+  })) as unknown as typeof fetch;
   try {
     await assert.rejects(() => call({ token: TOKEN }, 'getMe'), (error) => {
       assert.ok(error instanceof TelegramFault);
       assert.equal(error.errorCode, 401);
-      assert.equal(error.faults[0].code, 'BOT_API_REFUSED');
+      assert.equal((error as TelegramFault).faults[0].code, 'BOT_API_REFUSED');
       return true;
     });
   } finally {
@@ -85,30 +91,30 @@ test('the transport is built from the channel, and the token is not a field on i
 // is no second delivery. So the worker must not ask for a higher offset until the
 // record is on disk and consumed. This runs the worker against a recording
 // server and reads back what it asked for.
-function serverOf(batches) {
-  const asked = [];
+function serverOf(batches: SyntheticUpdate[][]) {
+  const asked: (number | null)[] = [];
   let at = 0;
   const previous = globalThis.fetch;
-  globalThis.fetch = async (url, options) => {
-    const params = JSON.parse(options.body);
+  globalThis.fetch = (async (url: string, options: RequestInit) => {
+    const params = JSON.parse(options.body as string);
     asked.push(params.offset ?? null);
     const batch = at < batches.length ? batches[at++] : [];
     return { status: 200, json: async () => ({ ok: true, result: batch }) };
-  };
+  }) as unknown as typeof fetch;
   return { asked, restore: () => { globalThis.fetch = previous; } };
 }
 
-function albumServerOf({ failAt = null } = {}) {
+function albumServerOf({ failAt = null }: { failAt?: number | null } = {}) {
   const updates = [photoUpdate(900001, 101), photoUpdate(900002, 102), photoUpdate(900003, 103)];
-  const asked = [];
-  const fetched = new Map();
+  const asked: { offset: number | null; timeout: number }[] = [];
+  const fetched = new Map<string, number>();
   const previous = globalThis.fetch;
   let updateCalls = 0;
-  let thirdCallAt = null;
-  globalThis.fetch = async (url, options = {}) => {
+  let thirdCallAt: number | null = null;
+  globalThis.fetch = (async (url: string, options: RequestInit = {}) => {
     if (url.includes('/getUpdates')) {
       updateCalls += 1;
-      const params = JSON.parse(options.body);
+      const params = JSON.parse(options.body as string);
       asked.push({ offset: params.offset ?? null, timeout: params.timeout });
       if (updateCalls === 3) thirdCallAt = Date.now();
       if (updateCalls === failAt) throw new Error('the fake server dropped the repeat ask');
@@ -121,7 +127,7 @@ function albumServerOf({ failAt = null } = {}) {
       };
     }
     if (url.includes('/getFile')) {
-      const { file_id } = JSON.parse(options.body);
+      const { file_id } = JSON.parse(options.body as string);
       fetched.set(file_id, (fetched.get(file_id) ?? 0) + 1);
       return { status: 200, json: async () => ({ ok: true, result: { file_path: `files/${file_id}.jpg` } }) };
     }
@@ -129,7 +135,7 @@ function albumServerOf({ failAt = null } = {}) {
       return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer };
     }
     throw new Error(`unexpected fake request ${url}`);
-  };
+  }) as unknown as typeof fetch;
   return {
     asked,
     fetched,
@@ -140,17 +146,17 @@ function albumServerOf({ failAt = null } = {}) {
 
 function timedAlbumServerOf({
   tailAfterMs, firstGetFileDelayMs = 0, firstBodyDelayMs = 0, count = 6
-}) {
+}: { tailAfterMs: number; firstGetFileDelayMs?: number; firstBodyDelayMs?: number; count?: number }) {
   const updates = Array.from({ length: count }, (_, index) =>
     photoUpdate(910001 + index, 201 + index, 'timed-album'));
-  const asked = [];
-  const fetched = new Map();
-  const media = [];
+  const asked: { at_ms: number; offset: number | null; count: number }[] = [];
+  const fetched = new Map<string, number>();
+  const media: { stage: string; file_id: string; began_ms: number; ended_ms: number }[] = [];
   const started = Date.now();
   const previous = globalThis.fetch;
-  globalThis.fetch = async (url, options = {}) => {
+  globalThis.fetch = (async (url: string, options: RequestInit = {}) => {
     if (url.includes('/getUpdates')) {
-      const params = JSON.parse(options.body);
+      const params = JSON.parse(options.body as string);
       const elapsed = Date.now() - started;
       const arrived = elapsed < tailAfterMs ? updates.slice(0, 1) : updates;
       const result = arrived.filter((one) => params.offset === undefined || one.update_id >= params.offset);
@@ -159,7 +165,7 @@ function timedAlbumServerOf({
       return { status: 200, json: async () => ({ ok: true, result }) };
     }
     if (url.includes('/getFile')) {
-      const { file_id } = JSON.parse(options.body);
+      const { file_id } = JSON.parse(options.body as string);
       const began = Date.now() - started;
       if (file_id === 'file-201' && firstGetFileDelayMs > 0) await sleep(firstGetFileDelayMs);
       media.push({ stage: 'getFile', file_id, began_ms: began, ended_ms: Date.now() - started });
@@ -180,7 +186,7 @@ function timedAlbumServerOf({
       };
     }
     throw new Error(`unexpected fake request ${url}`);
-  };
+  }) as unknown as typeof fetch;
   return {
     asked,
     fetched,
@@ -209,7 +215,7 @@ test('the long poll does not confirm an update until the record it wrote has bee
     // The first pass starts the worker; the first batch reaches the buffer a
     // moment later, the way it does on a box.
     await arrivals(context);
-    let items = [];
+    let items: ArrivedItem[] = [];
     for (let i = 0; i < 40 && items.length === 0; i++) {
       await sleep(IDLE_MS);
       items = await arrivals(context);
@@ -229,13 +235,13 @@ test('the long poll does not confirm an update until the record it wrote has bee
     for (const item of items) adapter.consume({ ...context, items }, item);
     assert.equal(nextOffset(context.store, context.account), 900003);
 
-    let second = [];
+    let second: ArrivedItem[] = [];
     for (let i = 0; i < 40 && second.length === 0; i++) {
       await sleep(IDLE_MS);
       second = await arrivals(context);
     }
     assert.equal(second.length, 1);
-    assert.equal(second[0].update.update_id, 900003);
+    assert.equal((second[0].update as Fields).update_id, 900003);
     assert.ok(server.asked.includes(900003),
       `the second call did not confirm the first batch: ${server.asked.join(', ')}`);
   } finally {
@@ -285,7 +291,7 @@ test('album membership settles before a slow first photo fetch begins', async (t
   for (const [name, delay] of [
     ['getFile response', { firstGetFileDelayMs: 150 }],
     ['file response body', { firstBodyDelayMs: 150 }]
-  ]) {
+  ] as const) {
     await t.test(name, async () => {
       forget();
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-album-media-delay-'));
@@ -341,11 +347,11 @@ test('an album tail first visible after the quiet window remains a later batch',
   try {
     await arrivals(context);
     const { items: first } = await waitForBatch(context);
-    assert.deepEqual(first.map((one) => one.update.update_id), [910001]);
+    assert.deepEqual(first.map((one) => (one.update as Fields).update_id), [910001]);
     for (const item of first) adapter.consume({ ...context, items: first }, item);
 
     const { items: second } = await waitForBatch(context);
-    assert.deepEqual(second.map((one) => one.update.update_id),
+    assert.deepEqual(second.map((one) => (one.update as Fields).update_id),
       [910002, 910003, 910004, 910005, 910006]);
     assert.deepEqual([...server.fetched.values()], [1, 1, 1, 1, 1, 1]);
   } finally {
@@ -376,7 +382,7 @@ test('an album keeps first-sight timestamps and fetches each photo once across a
     assert.ok(fault instanceof TelegramFault, 'the failed repeat ask was not exposed as a channel fault');
     assert.equal(items.length, 3);
     assert.deepEqual([...server.fetched.values()], [1, 1, 1]);
-    assert.ok(Date.parse(items[0].received_at) < server.thirdCallAt(),
+    assert.ok(Date.parse(items[0].received_at) < server.thirdCallAt()!,
       'the first photo was rebuilt with the retry time');
   } finally {
     server.restore();
@@ -398,7 +404,7 @@ test('a poll that cannot reach the server is a fault the runtime can hold on, no
   globalThis.fetch = async () => { throw new Error('getaddrinfo ENOTFOUND'); };
   try {
     await arrivals(context);
-    let thrown = null;
+    let thrown: unknown = null;
     for (let i = 0; i < 40 && thrown === null; i++) {
       await sleep(IDLE_MS);
       try { await arrivals(context); } catch (error) { thrown = error; }
@@ -408,5 +414,38 @@ test('a poll that cannot reach the server is a fault the runtime can hold on, no
   } finally {
     globalThis.fetch = previous;
     forget();
+  }
+});
+
+test('a malformed thrown poll message remains unvalidated on the Telegram fault', async () => {
+  forget();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-malformed-fault-'));
+  const context = {
+    store: Store.open(path.join(dir, 'store')),
+    agent: 'agent-01',
+    account: 'example_agent_bot',
+    channel: { bot_token: tokenFile(), long_poll_timeout_s: 0 }
+  };
+  const problem = { provider_detail: 17 };
+  const previous = globalThis.fetch;
+  // The malformed response fails while the poll iterates it. No network is used.
+  globalThis.fetch = (async () => ({
+    status: 200,
+    json: async () => ({ ok: true, result: {
+      [Symbol.iterator]() { throw { message: problem }; }
+    } })
+  })) as unknown as typeof fetch;
+  try {
+    await arrivals(context);
+    await sleep(IDLE_MS);
+    await assert.rejects(() => arrivals(context), (error: unknown) => {
+      assert.ok(error instanceof TelegramFault);
+      assert.equal(error.faults[0].code, 'BOT_API_POLL_FAILED');
+      assert.equal(error.faults[0].problem, problem);
+      return true;
+    });
+  } finally {
+    forget();
+    globalThis.fetch = previous;
   }
 });

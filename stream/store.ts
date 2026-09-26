@@ -126,10 +126,10 @@ function merges(source: unknown): boolean {
 
 let tempCounter = 0;
 
-export class StreamFault extends Error {
-  declare readonly faults: Fault[];
+export class StreamFault<TProblem = string> extends Error {
+  declare readonly faults: Fault<TProblem>[];
 
-  constructor(faults: Fault[]) {
+  constructor(faults: Fault<TProblem>[]) {
     super(faults.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('\n'));
     this.name = 'StreamFault';
     this.faults = faults;

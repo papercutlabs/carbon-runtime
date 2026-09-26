@@ -1,9 +1,12 @@
+import type { Fields, Media } from './types.ts';
+// Property assertions only permit JavaScript property access; values stay unknown.
+// The repeated reads and optional chaining intentionally match provider behavior.
 // What is inside one update, and nothing about where it came from.
 //
 // An update is an envelope with exactly one of a handful of message fields on
 // it, and the message inside it is the same shape whichever field carried it.
 // This file answers four questions about one update and does no input or output
-// of its own, which is what keeps every rule in index.mjs testable against
+// of its own, which is what keeps every rule in index.ts testable against
 // recorded updates with no network in the test:
 //
 //   which message is this, and is it a correction of one already seen
@@ -13,22 +16,22 @@
 //
 // The types that are read are the four the adapter asks the server for: a
 // message and a channel post, each in its plain and its edited form. Anything
-// else the server sends is a kind this file returns null for, and index.mjs
+// else the server sends is a kind this file returns null for, and index.ts
 // parks it where it landed rather than dropping it.
 
 // The envelope field this update arrived on, and the message under it. `edited`
 // says the message is a correction of one the store may already hold.
-export function messageOf(update) {
-  if (update?.message) return { message: update.message, edited: false, channel_post: false };
-  if (update?.edited_message) return { message: update.edited_message, edited: true, channel_post: false };
-  if (update?.channel_post) return { message: update.channel_post, edited: false, channel_post: true };
-  if (update?.edited_channel_post) return { message: update.edited_channel_post, edited: true, channel_post: true };
+export function messageOf(update: unknown) {
+  if ((update as Fields | null | undefined)?.message) return { message: (update as Fields).message, edited: false, channel_post: false };
+  if ((update as Fields | null | undefined)?.edited_message) return { message: (update as Fields).edited_message, edited: true, channel_post: false };
+  if ((update as Fields | null | undefined)?.channel_post) return { message: (update as Fields).channel_post, edited: false, channel_post: true };
+  if ((update as Fields | null | undefined)?.edited_channel_post) return { message: (update as Fields).edited_channel_post, edited: true, channel_post: true };
   return { message: null, edited: false, channel_post: false, unknown: unknownKindOf(update) };
 }
 
 // What the server sent that this adapter has no reading for, named so the parked
 // record says which it was rather than "something".
-function unknownKindOf(update) {
+function unknownKindOf(update: unknown) {
   const names = Object.keys(update ?? {}).filter((name) => name !== 'update_id');
   return names.length > 0 ? names.join(', ') : 'an update with nothing on it';
 }
@@ -37,16 +40,17 @@ function unknownKindOf(update) {
 // chat is direct and the other three are a group, because what the distinction
 // decides downstream is whether the sender and the conversation are the same
 // person.
-export function conversationKind(chat) {
-  return chat?.type === 'private' ? 'direct' : 'group';
+export function conversationKind(chat: unknown) {
+  return (chat as Fields | null | undefined)?.type === 'private' ? 'direct' : 'group';
 }
 
 // What the sender wrote. Telegram puts a plain message's words in `text` and a
 // message with media in `caption`, which is the same thing said about a
 // different payload, so both are the body.
-export function bodyOf(message) {
-  if (typeof message?.text === 'string') return message.text;
-  if (typeof message?.caption === 'string') return message.caption;
+// Each string assertion follows the existing typeof check on that field.
+export function bodyOf(message: unknown) {
+  if (typeof (message as Fields | null | undefined)?.text === 'string') return (message as Fields).text as string;
+  if (typeof (message as Fields | null | undefined)?.caption === 'string') return (message as Fields).caption as string;
   return '';
 }
 
@@ -56,9 +60,12 @@ export function bodyOf(message) {
 // A photo is the odd one: it arrives as a list of sizes of the same picture, and
 // the last is the largest, which is the one worth keeping. Keeping any other
 // would be keeping a thumbnail and calling it the attachment.
-export function mediaOf(message) {
-  if (Array.isArray(message?.photo) && message.photo.length > 0) {
-    const largest = message.photo.reduce((a, b) => ((b.file_size ?? 0) >= (a.file_size ?? 0) ? b : a));
+export function mediaOf(message: unknown): Media | null {
+  if (Array.isArray((message as Fields | null | undefined)?.photo) && ((message as Fields).photo as unknown[]).length > 0) {
+    // Array.isArray proves the container only. Field values remain unknown;
+    // numeric views permit the original coercive comparison without converting
+    // the retained size or promising that it is numeric.
+    const largest = ((message as Fields).photo as Fields[]).reduce((a, b) => (((b.file_size ?? 0) as number) >= ((a.file_size ?? 0) as number) ? b : a));
     return {
       file_id: largest.file_id,
       bytes: largest.file_size ?? 0,
@@ -68,7 +75,7 @@ export function mediaOf(message) {
     };
   }
   for (const kind of ['document', 'video', 'audio', 'voice', 'video_note', 'animation', 'sticker']) {
-    const media = message?.[kind];
+    const media = (message as Fields | null | undefined)?.[kind] as Fields | null | undefined;
     if (!media || typeof media.file_id !== 'string') continue;
     return {
       file_id: media.file_id,
@@ -84,7 +91,7 @@ export function mediaOf(message) {
 // What a file of this kind is, when the server says nothing. A voice note is
 // always ogg and a sticker is always webp; the rest are only guessable, so they
 // are the bytes and nothing more.
-const DEFAULT_MIME = {
+const DEFAULT_MIME: Record<string, string> = {
   document: 'application/octet-stream',
   video: 'video/mp4',
   audio: 'audio/mpeg',
@@ -94,7 +101,7 @@ const DEFAULT_MIME = {
   sticker: 'image/webp'
 };
 
-const EXTENSION = {
+const EXTENSION: Record<string, string> = {
   video: '.mp4', audio: '.mp3', voice: '.ogg', video_note: '.mp4', animation: '.mp4', sticker: '.webp'
 };
 
@@ -112,8 +119,8 @@ const EXTENSION = {
 // poll waits for `album_quiet_ms` after the newest album item before handing the
 // batch over. The release pass then gathers everything pending on the
 // conversation into one turn, including when `quiet_ms` is 0.
-export function albumOf(message) {
-  const id = message?.media_group_id;
+export function albumOf(message: unknown) {
+  const id = (message as Fields | null | undefined)?.media_group_id;
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
@@ -121,11 +128,11 @@ export function albumOf(message) {
 // with neither words nor media is a service message — somebody joined, the title
 // changed, a pinned message — and it is parked, not dropped: it is a thing that
 // happened in the client's chat and the store keeps what arrived.
-export function readable(message) {
+export function readable(message: unknown) {
   return bodyOf(message).length > 0 || mediaOf(message) !== null;
 }
 
-export function serviceKindOf(message) {
+export function serviceKindOf(message: unknown) {
   const names = Object.keys(message ?? {})
     .filter((name) => !['message_id', 'from', 'chat', 'date', 'edit_date', 'message_thread_id'].includes(name));
   return names.length > 0 ? names.join(', ') : 'a message with neither words nor media';
@@ -133,8 +140,8 @@ export function serviceKindOf(message) {
 
 // Who sent it. A channel post has no `from` at all, because a channel speaks as
 // itself; its sender is the chat.
-export function senderOf(message) {
-  const from = message?.from;
+export function senderOf(message: unknown) {
+  const from = (message as Fields | null | undefined)?.from as Fields | null | undefined;
   if (from && from.id !== undefined) {
     return {
       id: String(from.id),
@@ -142,7 +149,7 @@ export function senderOf(message) {
       is_bot: from.is_bot === true
     };
   }
-  const chat = message?.chat;
+  const chat = (message as Fields | null | undefined)?.chat as Fields | null | undefined;
   return {
     id: chat?.id === undefined ? 'unknown' : String(chat.id),
     name: chat?.title ?? undefined,

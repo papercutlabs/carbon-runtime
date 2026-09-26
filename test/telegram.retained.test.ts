@@ -1,3 +1,5 @@
+// Assertions on fixture-only fault shapes and nonempty test results preserve
+// the original failure assertions; they add no fallback for a missing result.
 // What the long poll hands over when the server's answers do not agree with one
 // another.
 //
@@ -12,13 +14,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TelegramFault } from '../adapters/telegram/api.mjs';
-import { arrivals, forget, IDLE_MS, stop } from '../adapters/telegram/live.mjs';
-import { nextOffset } from '../adapters/telegram/cursors.mjs';
-import * as adapter from '../adapters/telegram/index.mjs';
+import { TelegramFault } from '../adapters/telegram/api.ts';
+import { arrivals, forget, IDLE_MS, stop } from '../adapters/telegram/live.ts';
+import { nextOffset } from '../adapters/telegram/cursors.ts';
+import * as adapter from '../adapters/telegram/index.ts';
 import {
   captureBatch, idsOf, liveContext, photoUpdate, scriptedServerOf, sleep, update, waitForBatch
-} from './telegram-fixtures.mjs';
+} from './telegram-fixtures.ts';
 
 test('a response that omits photos the worker has already seen still hands over the whole album', async () => {
   forget();
@@ -37,7 +39,7 @@ test('a response that omits photos the worker has already seen still hands over 
       'the handed batch is not the whole album in update-id order');
     assert.ok(server.asked.every((one) => one.ids.length < 6),
       `one answer carried the whole album: ${JSON.stringify(server.asked)}`);
-    assert.equal(server.asked.at(-1).ids.length, 0,
+    assert.equal(server.asked.at(-1)!.ids.length, 0,
       'the batch did not settle on an answer that named none of it');
     assert.deepEqual([...new Set(server.asked.map((one) => one.offset))], [null],
       'an offset moved while nothing had been consumed');
@@ -105,7 +107,7 @@ test('a failed repeat ask loses no retained photo and fetches nothing before the
     }
     assert.deepEqual([...new Set(server.asked.map((one) => one.offset))], [null],
       'an offset moved while the poll was failing');
-    const settledAt = server.asked.at(-1).at;
+    const settledAt = server.asked.at(-1)!.at;
     assert.ok(server.media.length > 0);
     assert.ok(Math.min(...server.media.map((one) => one.at)) >= settledAt,
       'media was fetched before the membership settled');

@@ -1,3 +1,10 @@
+// Assertions on fixture-only fault shapes and nonempty test results preserve
+// the original failure assertions; they add no fallback for a missing result.
+// Fetch replacements implement only the response methods exercised below; the
+// installation assertions retain these deliberately partial synthetic responses.
+import type { Item, Context, Reply } from '../adapters/telegram/types.ts';
+import type { Attachment } from '../stream/store.ts';
+import type { TelegramFault } from '../adapters/telegram/api.ts';
 // What this channel does that the twenty-four cases do not name.
 //
 // The conformance check proves the adapter writes the one record shape. These
@@ -16,9 +23,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
-import * as adapter from '../adapters/telegram/index.mjs';
+import * as adapter from '../adapters/telegram/index.ts';
 import { ingest } from '../conformance/cases.mjs';
-import { mediaOf, senderOf } from '../adapters/telegram/content.mjs';
+import { mediaOf, senderOf } from '../adapters/telegram/content.ts';
 
 const FIXTURES = path.join(import.meta.dirname, '..', 'adapters', 'telegram', 'fixtures');
 
@@ -26,11 +33,15 @@ const CHAT = '887766554';
 const GROUP = '-1001234567890';
 const TOKEN = '7000001:AAH-this-is-not-a-real-token_0123456789';
 
-function fixture(name) {
+// These checked-in JSON fixtures are owned test data, not provider responses.
+function fixture(name: 'context.json'): Pick<Context, 'agent' | 'account'>;
+function fixture(name: 'channel.json'): Context['channel'];
+function fixture(name: string): (Item & { update: { message: unknown } })[];
+function fixture(name: string): unknown {
   return JSON.parse(fs.readFileSync(path.join(FIXTURES, name), 'utf8'));
 }
 
-function context(overrides = {}) {
+function context(overrides: Partial<Context> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-'));
   const { agent, account } = fixture('context.json');
   return {
@@ -127,9 +138,9 @@ test('every item of an album is its own record, and each carries the group id', 
 test('the largest size of a photograph is the one kept, and a thumbnail is not the attachment', () => {
   const [, photo] = fixture('attachment.json');
   const media = mediaOf(photo.update.message);
-  assert.equal(media.file_id, 'AgACth0002');
-  assert.equal(media.bytes, 184320);
-  assert.equal(media.mime, 'image/jpeg');
+  assert.equal(media!.file_id, 'AgACth0002');
+  assert.equal(media!.bytes, 184320);
+  assert.equal(media!.mime, 'image/jpeg');
 });
 
 test('a caption is the body of a message that carries a file', () => {
@@ -170,7 +181,7 @@ test('a chat the declaration does not name is captured and never answered', () =
     ...stranger.record,
     conversation_id: `${c.account}:123123123`,
     delivery: { request_id: 'req-stranger', status: 'pending' }
-  }), (error) => error.faults[0].code === 'CHAT_NOT_DECLARED');
+  }), (error) => (error as TelegramFault).faults[0].code === 'CHAT_NOT_DECLARED');
 });
 
 test('the word any answers whoever writes, and a list answers only the chats it names', () => {
@@ -208,7 +219,7 @@ test('a reply in a group hangs under the message it answers, and a private one d
     conversation_kind: 'group',
     reply_to: '117'
   };
-  assert.equal(adapter.replyTarget(c, record).platform_message_id, '117');
+  assert.equal(adapter.replyTarget(c, record)!.platform_message_id, '117');
   assert.equal(adapter.chatIdOf(c, record), GROUP);
 });
 
@@ -216,7 +227,7 @@ test('the newest captured message is what a reply answers when the model named n
   const c = context();
   ingest(c, fixture('inbound.json'));
   const target = adapter.replyTarget(c, { conversation_id: `${c.account}:${CHAT}` });
-  assert.equal(target.platform_message_id, '102');
+  assert.equal(target!.platform_message_id, '102');
 });
 
 test('an item is matched to the delivery it belongs to by its id, and by its text', () => {
@@ -234,15 +245,15 @@ test('an item is matched to the delivery it belongs to by its id, and by its tex
 
 test('a reply document carries its record name, PDF suffix, type and bytes', async () => {
   const previous = globalThis.fetch;
-  const calls = [];
+  const calls: { url: string; options: RequestInit }[] = [];
   let nextMessageId = 201;
-  globalThis.fetch = async (url, options) => {
+  globalThis.fetch = (async (url: string, options: RequestInit) => {
     calls.push({ url, options });
     return {
       status: 200,
       json: async () => ({ ok: true, result: { message_id: nextMessageId++ } })
     };
-  };
+  }) as unknown as typeof fetch;
 
   try {
     const cases = [
@@ -254,7 +265,7 @@ test('a reply document carries its record name, PDF suffix, type and bytes', asy
 
     for (const [index, expected] of cases.entries()) {
       const c = context({ dry_run: false, transport: { token: TOKEN } });
-      const record = {
+      const record: Reply & { message_id: string } = {
         conversation_id: `${c.account}:${CHAT}`,
         conversation_kind: 'direct',
         message_id: `${c.account}:${CHAT}:reply-${index}`,
@@ -264,7 +275,7 @@ test('a reply document carries its record name, PDF suffix, type and bytes', asy
       const bytes = expected.filename === 'notes.txt'
         ? Buffer.from('plain notes')
         : Buffer.from('%PDF-1.4\n% invented fixture\n');
-      const attachment = c.store.putAttachment(record, bytes, {
+      const attachment: Omit<Attachment, 'mime'> & { mime?: string } = c.store.putAttachment(record, bytes, {
         mime: expected.mime,
         filename: expected.filename
       });
@@ -283,7 +294,7 @@ test('a reply document carries its record name, PDF suffix, type and bytes', asy
       assert.match(documentCall.url, /\/sendDocument$/);
       assert.ok(documentCall.options.body instanceof FormData);
       assert.equal(documentCall.options.body.get('chat_id'), CHAT);
-      const part = documentCall.options.body.get('document');
+      const part = documentCall.options.body.get('document') as File;
       assert.equal(part.name, expected.digestName ? `${attachment.sha256}.pdf` : expected.name);
       assert.equal(part.type, expected.type);
       assert.deepEqual(Buffer.from(await part.arrayBuffer()), bytes);
@@ -299,7 +310,7 @@ test('a reply document carries its record name, PDF suffix, type and bytes', asy
 // ---- what a failed send means --------------------------------------------------
 
 test('the server refusing is a failed send, and everything else is unknown', async () => {
-  const { TelegramFault } = await import('../adapters/telegram/api.mjs');
+  const { TelegramFault } = await import('../adapters/telegram/api.ts');
   const refused = new TelegramFault([{ code: 'BOT_API_REFUSED', subject: 'sendMessage', problem: '', fix: '' }]);
   const unreachable = new TelegramFault([{ code: 'BOT_API_UNREACHABLE', subject: 'sendMessage', problem: '', fix: '' }]);
   assert.equal(adapter.outcomeOf(refused, 0), 'failed');
@@ -312,15 +323,15 @@ test('the server refusing is a failed send, and everything else is unknown', asy
 
 test('the signal is one sendChatAction on the chat, and nothing at all for a stop or an undeclared chat', async () => {
   const previous = globalThis.fetch;
-  const calls = [];
-  globalThis.fetch = async (url, options) => {
+  const calls: { url: string; options: RequestInit }[] = [];
+  globalThis.fetch = (async (url: string, options: RequestInit) => {
     calls.push({ url, options });
     return { status: 200, json: async () => ({ ok: true, result: true }) };
-  };
+  }) as unknown as typeof fetch;
 
   try {
     const c = context({ dry_run: false, transport: { token: TOKEN } });
-    const record = (chat) => ({
+    const record = (chat: string) => ({
       conversation_id: `${c.account}:${chat}`,
       conversation_kind: 'direct',
       message_id: `${c.account}:${chat}:301`
@@ -329,7 +340,7 @@ test('the signal is one sendChatAction on the chat, and nothing at all for a sto
     await adapter.typing(c, record(CHAT), 'composing');
     assert.equal(calls.length, 1);
     assert.match(calls[0].url, /\/sendChatAction$/);
-    assert.deepEqual(JSON.parse(calls[0].options.body), { chat_id: CHAT, action: 'typing' });
+    assert.deepEqual(JSON.parse(calls[0].options.body as string), { chat_id: CHAT, action: 'typing' });
 
     // The Bot API has no stop action, so the stop is a call this channel does
     // not make.

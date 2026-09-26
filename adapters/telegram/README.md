@@ -12,13 +12,13 @@ node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/tel
 
 | file | what it is | what it may not do |
 |---|---|---|
-| `index.mjs` | the adapter contract: the five operations, the rules | open a connection, read a file, hold state between passes |
-| `content.mjs` | what is inside one update: the message, the words, the media, the album | anything with an input or an output |
-| `cursors.mjs` | the two positions this channel counts in | anything else |
-| `api.mjs` | the Bot API calls | hold a rule, or let the token reach a log or a fault |
-| `live.mjs` | the long poll, the buffer, and the offset discipline | decide what a record says |
+| `index.ts` | the adapter contract: the five operations, the rules | open a connection, read a file, hold state between passes |
+| `content.ts` | what is inside one update: the message, the words, the media, the album | anything with an input or an output |
+| `cursors.ts` | the two positions this channel counts in | anything else |
+| `api.ts` | the Bot API calls | hold a rule, or let the token reach a log or a fault |
+| `live.ts` | the long poll, the buffer, and the offset discipline | decide what a record says |
 
-The split is what makes the rules testable: every rule in `index.mjs` is proved
+The split is what makes the rules testable: every rule in `index.ts` is proved
 against recorded updates, and no test here reaches a network or reads a token.
 
 ## There is no library, and that is the reason
@@ -26,7 +26,7 @@ against recorded updates, and no test here reaches a network or reads a token.
 The Bot API is JSON over HTTPS with no handshake, no session and no streaming. A
 call is one POST to `https://api.telegram.org/bot<token>/<method>` and an answer
 is `{ok: true, result}` or `{ok: false, error_code, description}`. Node 22 has
-`fetch`, so `api.mjs` is under two hundred lines including its comments, and a
+`fetch`, so `api.ts` is under two hundred lines including its comments, and a
 client library would be a dependency and a version to pin in exchange for
 nothing this adapter needs. This repository has exactly one dependency, for a
 channel that genuinely has no other way in; this channel is not that.
@@ -36,7 +36,7 @@ channel that genuinely has no other way in; this channel is not that.
 The declaration names a secret; it never holds one. `transport.bot_token_ref` is
 the name of a declared secret, the declaration gives that secret's absolute path,
 the box owner places the file through `carbon-apply secret place` at mode 0600
-owned by the account that reads it, and `api.mjs` reads it at the moment it is
+owned by the account that reads it, and `api.ts` reads it at the moment it is
 used. It is not kept on the channel, not put in this process's environment, and
 not written anywhere.
 
@@ -65,7 +65,7 @@ behind the release loop and will not ask for a higher offset until the loop has
 consumed what it was handed. A restart in the middle loses nothing: the offset on
 disk is the last thing captured, and the server still holds everything after it.
 
-`test/telegram.api.test.mjs` proves this against a recording server: the worker
+`test/telegram.api.test.ts` proves this against a recording server: the worker
 is watched asking, and it asks for the higher offset only after `consume` has
 run.
 
