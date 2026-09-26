@@ -8,7 +8,7 @@
 // policy inherits whatever the last turn set, which is exactly the failure the
 // explicit-arguments rule exists to prevent.
 
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 import { HarnessFault } from './session.mjs';
 
 // The workspace-write policy the plan names: the work directory writable, the

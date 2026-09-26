@@ -2,10 +2,18 @@
 // and reported together, never one at a time, so one run of a command tells the
 // caller everything that is wrong.
 
-export function fault(code, subject, problem, fix) {
+export function fault<Code, Subject, Problem, Fix>(
+  code: Code,
+  subject: Subject,
+  problem: Problem,
+  fix: Fix
+): { code: Code; subject: Subject; problem: Problem; fix: Fix } {
   return { code, subject, problem, fix };
 }
 
-export function report(faults, out = process.stdout) {
+export function report(
+  faults: Iterable<unknown>,
+  out: { write(chunk: string): unknown } = process.stdout
+): void {
   for (const f of faults) out.write(JSON.stringify(f) + '\n');
 }
