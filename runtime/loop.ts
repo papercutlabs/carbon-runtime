@@ -489,7 +489,7 @@ export class ReleaseLoop<S = Session> {
   declare teach: TeachHandle | null;
   declare log: Log;
   declare now: () => number;
-  declare threads: Map<string, string>;
+  declare threads: Map<string, unknown>;
   declare toolStatusRead: boolean;
   declare toolStatusStale: boolean;
   declare holdFaults: Fault[];
@@ -553,11 +553,11 @@ export class ReleaseLoop<S = Session> {
   // a fresh thread: a thread that has never taken a turn has no rollout on disk
   // and cannot be resumed, so resuming it is an error where starting again is
   // free.
-  async threadFor(unitId: string): Promise<string> {
+  async threadFor(unitId: string): Promise<unknown> {
     if (this.threads.has(unitId)) // has above establishes this cached thread.
     return this.threads.get(unitId)!;
     // Thread state is not schema-validated. These local operation fields preserve its old use.
-    const existing = this.store.readThread(unitId) as { thread_id?: string; completed_turns: number } | null;
+    const existing = this.store.readThread(unitId) as { thread_id?: unknown; completed_turns: number } | null;
     const opening = {
       cwd: this.work,
       model: this.declaration.model,
@@ -567,7 +567,7 @@ export class ReleaseLoop<S = Session> {
     };
     let threadId;
     if (existing && existing.thread_id && existing.completed_turns > 0) {
-      await this.harness.resumeThread(this.session, { ...opening, threadId: existing.thread_id });
+      await this.harness.resumeThread(this.session, { ...opening, threadId: existing.thread_id as string }); // Only the harness operation assumes an id; persisted values remain unknown.
       threadId = existing.thread_id;
       this.log({ event: 'thread.resumed', unit_id: unitId, thread_id: threadId });
     } else {
@@ -586,8 +586,8 @@ export class ReleaseLoop<S = Session> {
   // Read after the thread is open, never before: on the pinned binary every
   // server reads runtimeStatus null until the list is read with the id of a
   // thread this connection has loaded, and null means "not known", not "down".
-  async readToolServerStatus(threadId: string) {
-    const statuses = await this.harness.listToolServerStatus(this.session, { threadId });
+  async readToolServerStatus(threadId: unknown) {
+    const statuses = await this.harness.listToolServerStatus(this.session, { threadId: threadId as string }); // Pass the raw stored id unchanged to the harness.
     if (!this.toolStatusRead) {
       this.refuseUndeclaredServers(statuses);
       this.toolStatusRead = true;
@@ -887,7 +887,7 @@ export class ReleaseLoop<S = Session> {
       adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
     });
     try {
-      return await this.releaseTurn(records, { unitId, threadId, reissue, releaseId });
+      return await this.releaseTurn(records, { unitId, threadId: threadId as string, reissue, releaseId }); // Operation-local id contract; threadFor itself returns unknown.
     } finally {
       typing.stop();
     }
