@@ -12,8 +12,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store, StreamFault } from '../stream/store.mjs';
 import { ingest } from '../conformance/cases.mjs';
-import * as adapter from '../adapters/email/index.mjs';
-import { STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.mjs';
+import * as adapter from '../adapters/email/index.ts';
+import { STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.ts';
+import type { EmailChannelInput, EmailRecord, ImapEmailContext, OutboundEmailRecord } from '../adapters/email/index.ts';
 
 const HERE = import.meta.dirname;
 const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
@@ -22,14 +23,14 @@ const ACCOUNT = 'agent-01@example.test';
 
 process.env.CARBON_EMAIL_CURL = SHIM;
 
-function recordedAs(changes = {}) {
+function recordedAs(changes: Record<string, string | Buffer> = {}): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-recorded-'));
   for (const name of fs.readdirSync(RECORDED)) fs.copyFileSync(path.join(RECORDED, name), path.join(dir, name));
   for (const [name, content] of Object.entries(changes)) fs.writeFileSync(path.join(dir, name), content);
   return dir;
 }
 
-function context(recorded = RECORDED, channel = {}) {
+function context(recorded = RECORDED, channel: EmailChannelInput & { inbound?: undefined } = {}): ImapEmailContext {
   process.env.CARBON_EMAIL_RECORDED = recorded;
   const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-tx-')), 'store'));
   return {
@@ -55,39 +56,48 @@ function context(recorded = RECORDED, channel = {}) {
   };
 }
 
+function hasDelivery(record: EmailRecord): record is OutboundEmailRecord {
+  return record.delivery !== undefined;
+}
+
 // Capture the recorded probe, which is the inbound this conversation is
 // answered on, and return the reply the store fenced.
-function pending(running, { request_id = 'req-1', text = 'an answer' } = {}) {
+function pending(running: ImapEmailContext, { request_id = 'req-1', text = 'an answer' }: {
+  request_id?: string;
+  text?: string;
+} = {}): { inbound: EmailRecord; written: { record: OutboundEmailRecord } } {
   const item = adapter.poll(running).items[0];
   const [inbound] = ingest(running, [item]);
   adapter.consume(running, item);
   const conversation_id = inbound.record.conversation_id;
+  const written = running.store.reply({
+    schema: 'carbon.message.v1',
+    agent: 'agent-01',
+    source: 'email',
+    account: ACCOUNT,
+    conversation_id,
+    conversation_kind: 'thread',
+    message_id: `${conversation_id}:${request_id}`,
+    platform_message_id: request_id,
+    revision: 0,
+    direction: 'outbound',
+    role: 'agent',
+    sender_id: ACCOUNT,
+    received_at: new Date().toISOString(),
+    body: text,
+    attachments: [],
+    historical: false,
+    disposition: 'captured',
+    delivery: {
+      request_id,
+      status: 'pending',
+      text_sha256: crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+    }
+  });
+  if (!('record' in written)) throw new Error('the expected reply was not written');
   return {
     inbound: inbound.record,
-    written: running.store.reply({
-      schema: 'carbon.message.v1',
-      agent: 'agent-01',
-      source: 'email',
-      account: ACCOUNT,
-      conversation_id,
-      conversation_kind: 'thread',
-      message_id: `${conversation_id}:${request_id}`,
-      platform_message_id: request_id,
-      revision: 0,
-      direction: 'outbound',
-      role: 'agent',
-      sender_id: ACCOUNT,
-      received_at: new Date().toISOString(),
-      body: text,
-      attachments: [],
-      historical: false,
-      disposition: 'captured',
-      delivery: {
-        request_id,
-        status: 'pending',
-        text_sha256: crypto.createHash('sha256').update(text, 'utf8').digest('hex')
-      }
-    })
+    written
   };
 }
 
@@ -156,6 +166,7 @@ test('the outbound record is on disk as pending before the transport is called',
   const running = context();
   const { written } = pending(running);
   const onDisk = running.store.read(written.record.conversation_id, written.record.message_id, 0);
+  assert.ok(hasDelivery(onDisk));
   assert.equal(onDisk.delivery.status, 'pending');
   assert.equal(onDisk.delivery.chunk_ids, undefined);
 
@@ -163,6 +174,7 @@ test('the outbound record is on disk as pending before the transport is called',
   assert.equal(sent.status, 'sent');
   assert.equal(sent.chunk_ids.length, 1);
   const settled = running.store.markSent('req-1', sent.chunk_ids);
+  assert.ok(settled.delivery);
   assert.deepEqual(settled.delivery.chunk_ids, sent.chunk_ids);
 });
 
@@ -197,6 +209,7 @@ test('a send that never reached the server is failed, which is a different thing
   const sent = adapter.send(running, written.record);
   assert.equal(sent.status, 'failed');
   const settled = running.store.markFailed('req-1');
+  assert.ok(settled.delivery);
   assert.equal(settled.delivery.status, 'failed');
 });
 

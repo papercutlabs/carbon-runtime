@@ -42,12 +42,12 @@ jobs:
       - name: test files are present
         run: |
           node -e '
-            const tests = require("node:fs").readdirSync("test").filter((name) => name.endsWith(".test.mjs"));
+            const tests = require("node:fs").readdirSync("test").filter((name) => name.endsWith(".test.mjs") || name.endsWith(".test.ts"));
             if (tests.length === 0) throw new Error("the node --test glob found no test modules");
           '
 
       - name: node --test
-        run: node --test "test/*.test.mjs"
+        run: npm test
 
       # Is this still the shape it says it is. Every rule carries its own reason;
       # `node tools/shape-check.mjs --help` prints them. Four rules need both

@@ -27,8 +27,20 @@
 
 import crypto from 'node:crypto';
 
+export type EmailHeader = { name: string; raw: string; value: string };
+export type ParsedParameters = { value: string; params: Record<string, string> };
+export type MimeAttachment =
+  | { bytes: Buffer; mime: string; sha256?: string; filename?: string; download_failed?: never; file?: never }
+  | { file: string; mime: string; bytes: number; sha256: string; download_failed: true; filename?: string };
+export type MimeMessage = {
+  headers: EmailHeader[];
+  body: string;
+  bodyKind: 'none' | 'text/plain' | 'text/html';
+  attachments: MimeAttachment[];
+};
+
 export class MimeUnreadable extends Error {
-  constructor(message) {
+  constructor(message: string) {
     super(message);
     this.name = 'MimeUnreadable';
   }
@@ -38,14 +50,14 @@ const KNOWN_ENCODINGS = new Set(['7bit', '8bit', 'binary', 'base64', 'quoted-pri
 
 // ---- headers --------------------------------------------------------------
 
-export function splitHeaders(lines) {
+export function splitHeaders(lines: string[]) {
   const at = lines.findIndex((line) => line === '' || line === '\r');
   if (at === -1) return { headerLines: lines.slice(), bodyLines: [] };
   return { headerLines: lines.slice(0, at), bodyLines: lines.slice(at + 1) };
 }
 
 // Unfold: a line beginning with a space or a tab continues the line before it.
-export function unfold(headerLines) {
+export function unfold(headerLines: string[]) {
   const unfolded = [];
   for (const line of headerLines) {
     const text = line.replace(/\r$/, '');
@@ -55,7 +67,7 @@ export function unfold(headerLines) {
   return unfolded;
 }
 
-export function parseHeaders(headerLines) {
+export function parseHeaders(headerLines: string[]) {
   const headers = [];
   for (const line of unfold(headerLines)) {
     const colon = line.indexOf(':');
@@ -67,17 +79,17 @@ export function parseHeaders(headerLines) {
   return headers;
 }
 
-export function header(headers, name) {
+export function header(headers: EmailHeader[], name: string) {
   const found = headers.find((h) => h.name === name.toLowerCase());
   return found ? found.value : undefined;
 }
 
-export function headerRaw(headers, name) {
+export function headerRaw(headers: EmailHeader[], name: string) {
   const found = headers.find((h) => h.name === name.toLowerCase());
   return found ? found.raw : undefined;
 }
 
-export function headersAll(headers, name) {
+export function headersAll(headers: EmailHeader[], name: string) {
   return headers.filter((h) => h.name === name.toLowerCase()).map((h) => h.value);
 }
 
@@ -85,7 +97,7 @@ export function headersAll(headers, name) {
 
 const ENCODED_WORD = /=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g;
 
-export function decodeWords(value) {
+export function decodeWords(value: string) {
   if (!value.includes('=?')) return value;
   // Whitespace that separates two encoded words is not part of the text.
   const joined = value.replace(/(\?=)\s+(=\?)/g, '$1$2');
@@ -103,7 +115,7 @@ export function decodeWords(value) {
 
 // ---- content transfer encodings -------------------------------------------
 
-export function decodeQuotedPrintable(text, single = false) {
+export function decodeQuotedPrintable(text: string, single = false) {
   const source = single ? text : text.replace(/=\r?\n/g, '');
   const bytes = [];
   for (let i = 0; i < source.length; i++) {
@@ -117,7 +129,7 @@ export function decodeQuotedPrintable(text, single = false) {
   return Buffer.from(bytes);
 }
 
-export function decodeText(bytes, charset = 'utf-8') {
+export function decodeText(bytes: Buffer, charset = 'utf-8') {
   const name = (charset || 'utf-8').toLowerCase().replace(/^"|"$/g, '');
   try {
     return new TextDecoder(name).decode(bytes);
@@ -126,7 +138,7 @@ export function decodeText(bytes, charset = 'utf-8') {
   }
 }
 
-function decodeBody(bodyLines, encoding, name) {
+function decodeBody(bodyLines: string[], encoding: string | undefined, name: string) {
   const kind = (encoding ?? '').toLowerCase().trim();
   if (!KNOWN_ENCODINGS.has(kind)) {
     throw new MimeUnreadable(`the part ${name} declares the content transfer encoding "${encoding}", which this reader does not decode`);
@@ -141,7 +153,7 @@ function decodeBody(bodyLines, encoding, name) {
 // decodes the wire as latin1 so no byte is lost before the charset is known. A
 // caller that hands it real Unicode instead, as a fixture written in a JSON
 // file does, is honoured by encoding as UTF-8.
-function toBytes(text) {
+function toBytes(text: string) {
   for (let i = 0; i < text.length; i++) {
     if (text.charCodeAt(i) > 0xff) return Buffer.from(text, 'utf8');
   }
@@ -154,7 +166,7 @@ function toBytes(text) {
 export function parseParameters(raw = '') {
   const parts = splitOnSemicolons(raw);
   const value = (parts.shift() ?? '').trim().toLowerCase();
-  const params = {};
+  const params: Record<string, string> = {};
   for (const part of parts) {
     const equals = part.indexOf('=');
     if (equals === -1) continue;
@@ -169,7 +181,7 @@ export function parseParameters(raw = '') {
   return { value, params };
 }
 
-function splitOnSemicolons(raw) {
+function splitOnSemicolons(raw: string) {
   const parts = [];
   let current = '';
   let quoted = false;
@@ -184,7 +196,7 @@ function splitOnSemicolons(raw) {
 
 // ---- html ------------------------------------------------------------------
 
-const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#160': ' ' };
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#160': ' ' };
 
 // Each removal runs until the string stops changing, not once. A single pass
 // can leave behind what its own removal spliced together — "<scr<script>ipt>"
@@ -192,8 +204,8 @@ const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', 
 // record and is never rendered as HTML anywhere, a stripper that leaves half a
 // tag standing is a stripper that lies about what it did. Every pass strictly
 // shortens the string, so the loop ends.
-function untilStable(text, pattern, replacement) {
-  let before;
+function untilStable(text: string, pattern: RegExp, replacement: string) {
+  let before: string;
   do {
     before = text;
     text = text.replace(pattern, replacement);
@@ -201,7 +213,7 @@ function untilStable(text, pattern, replacement) {
   return text;
 }
 
-export function stripHtml(html) {
+export function stripHtml(html: string) {
   let text = untilStable(html, /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
   text = untilStable(text, /<!--[\s\S]*?-->/g, '');
   text = untilStable(text, /<\/(p|div|tr|h[1-6]|li)\s*>/gi, '\n');
@@ -220,9 +232,9 @@ export function stripHtml(html) {
 
 // ---- the walk --------------------------------------------------------------
 
-function splitMultipart(bodyLines, boundary) {
+function splitMultipart(bodyLines: string[], boundary: string) {
   const parts = [];
-  let current = null;
+  let current: string[] | null = null;
   for (const line of bodyLines) {
     const text = line.replace(/\r$/, '');
     if (text === `--${boundary}`) { current = []; parts.push(current); continue; }
@@ -232,13 +244,15 @@ function splitMultipart(bodyLines, boundary) {
   return parts;
 }
 
-function isAttachment(disposition, contentType, params) {
+function isAttachment(disposition: ParsedParameters, contentType: string, params: Record<string, string>) {
   if (disposition.value === 'attachment') return true;
   if (disposition.params.filename !== undefined || params.name !== undefined) return true;
   return !contentType.startsWith('text/') && !contentType.startsWith('multipart/');
 }
 
-function walk(lines, collected, options, depth = 0) {
+type CollectedParts = { text: string[]; html: string[]; attachments: MimeAttachment[] };
+
+function walk(lines: string[], collected: CollectedParts, options: { maxAttachmentBytes: number }, depth = 0) {
   if (depth > 12) throw new MimeUnreadable('the message nests parts deeper than this reader walks');
   const { headerLines, bodyLines } = splitHeaders(lines);
   const headers = parseHeaders(headerLines);
@@ -288,17 +302,17 @@ function walk(lines, collected, options, depth = 0) {
 // Read one message. Returns the headers, the body this adapter will carry, and
 // the attachments. `maxAttachmentBytes` is the caller's cap and is required:
 // nothing here guesses a limit.
-export function readMessage(lines, { maxAttachmentBytes }) {
+export function readMessage(lines: string[], { maxAttachmentBytes }: { maxAttachmentBytes?: number }) {
   if (typeof maxAttachmentBytes !== 'number') {
     throw new MimeUnreadable('readMessage needs maxAttachmentBytes; the reader guesses no cap');
   }
   const { headerLines } = splitHeaders(lines);
   const headers = parseHeaders(headerLines);
-  const collected = { text: [], html: [], attachments: [] };
+  const collected: CollectedParts = { text: [], html: [], attachments: [] };
   walk(lines, collected, { maxAttachmentBytes });
 
   let body = '';
-  let bodyKind = 'none';
+  let bodyKind: MimeMessage['bodyKind'] = 'none';
   if (collected.text.length > 0) { body = collected.text[0].trim(); bodyKind = 'text/plain'; }
   else if (collected.html.length > 0) { body = stripHtml(collected.html[0]); bodyKind = 'text/html'; }
 

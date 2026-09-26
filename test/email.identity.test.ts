@@ -7,12 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store, StreamFault } from '../stream/store.mjs';
 import { ingest } from '../conformance/cases.mjs';
-import * as adapter from '../adapters/email/index.mjs';
-import { TransportFault } from '../adapters/email/curl.mjs';
+import * as adapter from '../adapters/email/index.ts';
+import { TransportFault } from '../adapters/email/curl.ts';
+import type { EmailChannelInput, EmailContext, EmailItem, EmailRecord, OutboundEmailRecord } from '../adapters/email/index.ts';
 
 const ACCOUNT = 'agent-01@example.test';
 
-function context(overrides = {}) {
+function context(overrides: { channel?: EmailChannelInput } = {}): EmailContext {
   const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-id-')), 'store'));
   return {
     store, adapter,
@@ -38,7 +39,19 @@ function context(overrides = {}) {
 }
 
 let uid = 0;
-function item({ id, subject = 'August invoice', from = 'Ada Vance <ada@example.test>', to = ACCOUNT, references, inReplyTo, supersedes, origin, body = 'a body' }) {
+type ItemInput = {
+  id: string;
+  subject?: string;
+  from?: string;
+  to?: string;
+  references?: string[];
+  inReplyTo?: string;
+  supersedes?: string;
+  origin?: string;
+  body?: string;
+};
+
+function item({ id, subject = 'August invoice', from = 'Ada Vance <ada@example.test>', to = ACCOUNT, references, inReplyTo, supersedes, origin, body = 'a body' }: ItemInput): EmailItem {
   uid += 1;
   const lines = [`Delivered-To: ${to}`, `From: ${from}`, `To: ${to}`, `Subject: ${subject}`, `Message-ID: <${id}>`];
   if (references) lines.push(`References: ${references.map((r) => `<${r}>`).join(' ')}`);
@@ -113,6 +126,7 @@ test('an inbound to an address this agent does not declare is captured and never
     reply_to: 'stray@example.test'
   };
   const written = running.store.reply(reply);
+  if (!('record' in written)) throw new Error('the expected reply was not written');
   assert.throws(() => adapter.send(running, written.record), (error) => {
     assert.ok(error instanceof TransportFault);
     assert.equal(error.faults[0].code, 'INBOUND_TO_UNDECLARED_ADDRESS');
@@ -157,7 +171,7 @@ test('a message this adapter builds says who sent it, and guesses nothing', () =
   assert.throws(() => adapter.buildMessage({
     from: ACCOUNT, to: ['ada@example.test'], subject: 'x', messageId: 'y@example.test',
     date: new Date(0), body: 'z'
-  }), (error) => error.faults[0].code === 'SEND_ORIGIN_MISSING');
+  }), (error: unknown) => error instanceof TransportFault && error.faults[0].code === 'SEND_ORIGIN_MISSING');
 });
 
 test('a supersede is a revision of what it corrects, and never an overwrite', () => {
@@ -174,7 +188,7 @@ test('a supersede is a revision of what it corrects, and never an overwrite', ()
   assert.equal(running.store.rebuild().length, 2);
 });
 
-function replyShape(inbound) {
+function replyShape(inbound: Pick<EmailRecord, 'conversation_id' | 'account'>): OutboundEmailRecord {
   return {
     schema: 'carbon.message.v1',
     agent: 'agent-01',

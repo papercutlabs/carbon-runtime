@@ -9,12 +9,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SMTP_SECURITY, sendMessage } from '../adapters/email/curl.mjs';
-import { DEFAULTS } from '../adapters/email/index.mjs';
+import { SMTP_SECURITY, TransportFault, sendMessage } from '../adapters/email/curl.ts';
+import { DEFAULTS } from '../adapters/email/index.ts';
 
 const SHIM = path.join(import.meta.dirname, 'fixtures', 'curl-shim', 'curl-args');
 
-function sentWith(overrides) {
+function sentWith(overrides: { port?: number; security?: string } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-smtp-'));
   const file = path.join(dir, 'message.eml');
   fs.writeFileSync(file, 'Subject: x\r\n\r\nbody\r\n');
@@ -48,7 +48,7 @@ test('starttls is plain smtp on the declared port, and the upgrade is required',
 
 test('a channel that names neither is refused, and no message is handed to curl', () => {
   assert.throws(() => sentWith({ port: 587, security: 'plain' }),
-    (error) => error.faults.some((f) => f.code === 'SMTP_SECURITY_UNKNOWN'));
+    (error: unknown) => error instanceof TransportFault && error.faults.some((f) => f.code === 'SMTP_SECURITY_UNKNOWN'));
   assert.deepEqual(SMTP_SECURITY, ['implicit', 'starttls']);
 });
 

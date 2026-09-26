@@ -3,7 +3,7 @@
 // tests reach no network.
 //
 // The adapter speaks to a mail server only through curl, and only through the
-// argument shapes in adapters/email/curl.mjs. So a test points
+// argument shapes in adapters/email/curl.ts. So a test points
 // CARBON_EMAIL_CURL at this file and CARBON_EMAIL_RECORDED at a directory of
 // responses recorded from a real server, and the adapter runs unchanged.
 //

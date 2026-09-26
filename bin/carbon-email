@@ -14,8 +14,8 @@ import path from 'node:path';
 import { fault, report } from '../stream/faults.mjs';
 import { Store, StreamFault } from '../stream/store.mjs';
 import { ingest } from '../conformance/cases.mjs';
-import * as adapter from '../adapters/email/index.mjs';
-import { TransportFault, listMailboxes, sendMessage } from '../adapters/email/curl.mjs';
+import * as adapter from '../adapters/email/index.ts';
+import { TransportFault, listMailboxes, sendMessage } from '../adapters/email/curl.ts';
 
 const HELP = `carbon-email — reach a real mailbox with the email adapter, once, by hand
 

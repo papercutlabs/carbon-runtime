@@ -440,10 +440,10 @@ function walk(root, relative = '') {
   return tracked.filter((rel) => rel.startsWith(prefix)).sort();
 }
 
-// What counts as source: JavaScript modules, and the command lines under bin/,
-// which have no extension and are the part of the system a person runs by hand.
+// What counts as source: JavaScript and erasable TypeScript modules, and the
+// command lines under bin/, which have no extension and are run by hand.
 function isSource(rel) {
-  if (rel.endsWith('.mjs')) return true;
+  if (rel.endsWith('.mjs') || rel.endsWith('.ts')) return true;
   return rel.startsWith('bin/') && !rel.includes('.');
 }
 
@@ -1066,7 +1066,7 @@ export function subcommandsIn(modules) {
 }
 
 function untestedSubcommands(root, modules, out, notes) {
-  const testFiles = walk(root, 'test').filter((rel) => rel.endsWith('.mjs'));
+  const testFiles = walk(root, 'test').filter((rel) => rel.endsWith('.mjs') || rel.endsWith('.ts'));
   if (testFiles.length === 0) {
     out.push(fault('SHAPE_UNTESTED_SUBCOMMAND', 'test/',
       'the test-module walk found no files, so no command can be matched to a test',
@@ -1090,7 +1090,7 @@ function untestedSubcommands(root, modules, out, notes) {
   notes.push(`SHAPE_UNTESTED_SUBCOMMAND: ${counted} subcommands read off bin/`);
 }
 
-const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.mjs', 'tools/lib/fault.mjs', 'runtime/faults.mjs', 'adapters/email/curl.mjs']);
+const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.mjs', 'tools/lib/fault.mjs', 'runtime/faults.mjs', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
 
 function errorPaths(modules, out) {
   for (const module of modules.values()) {

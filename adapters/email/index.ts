@@ -26,8 +26,8 @@
 //    arrives from that address, is told apart by the send stamp and by the
 //    delivery record that names its Message-ID.
 //
-// The transport is curl, in ./curl.mjs; the MIME reading is ours, in
-// ./mime.mjs. The credential is a netrc file the box owner placed, whose path
+// The transport is curl, in ./curl.ts; the MIME reading is ours, in
+// ./mime.ts. The credential is a netrc file the box owner placed, whose path
 // the declaration names and which nothing here opens.
 
 import crypto from 'node:crypto';
@@ -35,9 +35,174 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fault } from '../../stream/faults.mjs';
-import { MimeUnreadable, decodeWords, header, headerRaw, headersAll, readMessage } from './mime.mjs';
-import { TransportFault, fetchMessage, listMailboxes, restoreUnseen, searchUids, sendMessage, status, unseenUids } from './curl.mjs';
-import { pollAgentMail } from './agentmail-api.mjs';
+import { MimeUnreadable, decodeWords, header, headerRaw, headersAll, readMessage } from './mime.ts';
+import { TransportFault, fetchMessage, listMailboxes, restoreUnseen, searchUids, sendMessage, status, unseenUids } from './curl.ts';
+import { pollAgentMail } from './agentmail-api.ts';
+import type { EmailHeader, MimeAttachment, MimeMessage } from './mime.ts';
+
+export type EmailChannelInput = {
+  [name: string]: unknown;
+  mailbox?: string;
+  imap_host?: string;
+  imap_port?: number;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_security?: string;
+  netrc?: string;
+  poll_interval_ms?: number;
+  max_attachment_bytes?: number;
+  max_part_bytes?: number;
+  release?: string;
+  quiet_ms?: number;
+  hold?: { release_after_ms?: number };
+  addresses?: string[];
+  inbound?: string;
+  api_host?: string;
+  inbox_id?: string;
+  agentmail_list_limit?: number;
+};
+type EmailChannelDefaults = {
+  mailbox: string;
+  imap_port: number;
+  smtp_port: number;
+  smtp_security: string;
+  poll_interval_ms: number;
+  max_attachment_bytes: number;
+  max_part_bytes: number;
+  release: string;
+  quiet_ms: number;
+  hold: { release_after_ms: number };
+  addresses: string[];
+};
+export type EmailChannel = EmailChannelDefaults & EmailChannelInput & {
+  netrc: string;
+  imap_host: string;
+  smtp_host: string;
+};
+export type EmailAttachment = MimeAttachment;
+export type EmailItem = {
+  mailbox?: string;
+  mailbox_position?: string;
+  uidvalidity?: number;
+  uid?: number;
+  position: string;
+  rfc822: string[];
+  agentmail_attachments?: EmailAttachment[];
+  agentmail_message_id?: string;
+  conversation?: string | null;
+  wrong_type?: Record<string, unknown>;
+};
+export type EmailRecord = {
+  [key: string]: unknown;
+  schema: string;
+  agent: string;
+  source: string;
+  account: string;
+  conversation_id: string;
+  conversation_kind: string;
+  message_id: string;
+  platform_message_id: string;
+  revision: number;
+  direction: 'inbound' | 'outbound';
+  role: 'contact' | 'operator' | 'agent';
+  sender_id: string;
+  sender_name?: string;
+  received_at: string;
+  sent_at?: string;
+  body: string;
+  attachments: unknown[];
+  historical: boolean;
+  disposition: 'captured' | 'policy-drop' | 'parked';
+  hold?: { reason: string; set_at: string; release_after_ms?: number };
+  reply_to?: string;
+  raw?: string;
+  adapter_fields?: Record<string, string | string[]>;
+  delivery?: { request_id: string; status: string; chunk_ids?: string[]; [key: string]: unknown };
+};
+export type OutboundEmailRecord = EmailRecord & {
+  delivery: { request_id: string; status: string; chunk_ids?: string[]; [key: string]: unknown };
+};
+type StoreReplyOutcome =
+  | { fenced: string; chunk_ids: string[]; message_id: string }
+  | { fenced: null; record: OutboundEmailRecord; file: string; chunk_ids?: never; message_id?: never };
+export type EmailStore = {
+  recordsIn(conversationId: string): EmailRecord[];
+  cursors(conversationId: string): { message: string | null; revision: string | null };
+  advanceCursor(conversationId: string, kind: string, position: string): void;
+  under(relativePath: string): string;
+  reply(record: EmailRecord): StoreReplyOutcome;
+  read(conversationId: string, messageId: string, revision: number): EmailRecord;
+  markSent(requestId: string, chunkIds: string[]): EmailRecord;
+  markUnknown(requestId: string): EmailRecord;
+  markFailed(requestId: string): EmailRecord;
+  isHeld(conversationId: string, at: number): boolean;
+  rebuild(): EmailRecord[];
+  dir: string;
+};
+export type EmailContext = {
+  store: EmailStore;
+  agent: string;
+  account: string;
+  channel?: EmailChannelInput;
+  fixtures?: Record<string, EmailChannelInput | undefined>;
+  items?: EmailItem[];
+  dry_run?: boolean;
+  now?: number;
+  recipients?: string[];
+  adapter?: unknown;
+};
+export type ImapEmailContext = EmailContext & {
+  channel: EmailChannelInput & { inbound?: undefined };
+};
+export type AgentMailEmailContext = EmailContext & {
+  channel: EmailChannelInput & { inbound: typeof AGENTMAIL_API_INBOUND };
+};
+type ParkedRead = {
+  parked: true;
+  reason: string;
+  conversation_id: string;
+  message_id: string;
+  platform_message_id: string;
+  revision: number;
+  cursorKind: 'message';
+  headers: EmailHeader[];
+};
+type ReadableRead = {
+  parked: false;
+  headers: EmailHeader[];
+  message: MimeMessage;
+  conversation_id: string;
+  message_id: string;
+  platform_message_id: string;
+  root: string;
+  revision: number;
+  cursorKind: 'message' | 'revision';
+  supersedes?: string;
+};
+type ReadResult = ParkedRead | ReadableRead;
+type Cursor = { kind: 'message' | 'revision'; position: string };
+type EmailEntry = { record: EmailRecord; raw: string; cursor: Cursor; attachments: EmailAttachment[] };
+type ParkedEntry = { record: EmailRecord; raw: string; cursor: Cursor; reason: string };
+type ImapPollResult = {
+  items: EmailItem[];
+  uidvalidity: number;
+  rescanned: boolean;
+  from_uid: number;
+  faults: { code: string; subject: string; problem: string; fix: string }[];
+};
+type AgentMailPollResult = { items: EmailItem[]; after: string | null; count: number };
+type ReplyTargetRecord = EmailRecord & { raw: string };
+type BuildMessageInput = {
+  from: string;
+  to: string[];
+  subject: string;
+  messageId: string;
+  inReplyTo?: string;
+  references?: string[];
+  date: Date;
+  body: string;
+  origin?: string;
+};
 
 export const capabilities = ['inbound', 'outbound'];
 
@@ -54,7 +219,7 @@ export const POLL_INTERVAL_FLOOR_MS = 30000;
 export const STATUS_ATTEMPTS = 3;
 export const AGENTMAIL_API_INBOUND = 'agentmail-api';
 
-export const DEFAULTS = {
+export const DEFAULTS: EmailChannelDefaults = {
   mailbox: 'INBOX',
   imap_port: 993,
   smtp_port: 465,
@@ -78,17 +243,18 @@ const SENT_STAMP = 'x-carbon-origin';
 // The conformance check passes no declaration at all, so an adapter's own
 // fixtures directory may carry channel.json and the check's fixture loading
 // hands it here. Nothing else reads it.
-export function channelOf(context) {
+export function channelOf(context: EmailContext) {
   const declared = context.channel ?? context.fixtures?.['channel.json'] ?? {};
+  // The email declaration requires these fields for live transport; default-only tests use dry-run paths.
   return {
     ...DEFAULTS,
     ...declared,
     hold: { ...DEFAULTS.hold, ...(declared.hold ?? {}) }
-  };
+  } as EmailChannel;
 }
 
 // The floor, as a refusal. Returns the interval or throws.
-export function pollIntervalMs(channel) {
+export function pollIntervalMs(channel: Pick<EmailChannelInput, 'poll_interval_ms'>) {
   const declared = channel.poll_interval_ms;
   if (typeof declared !== 'number' || !Number.isFinite(declared)) {
     throw new TransportFault([fault('POLL_INTERVAL_MISSING', 'poll_interval_ms',
@@ -103,7 +269,7 @@ export function pollIntervalMs(channel) {
   return declared;
 }
 
-export function declaredAddresses(context, channel) {
+export function declaredAddresses(context: EmailContext, channel: EmailChannel) {
   return [context.account, ...(channel.addresses ?? [])]
     .filter(Boolean)
     .map((address) => address.toLowerCase());
@@ -111,17 +277,17 @@ export function declaredAddresses(context, channel) {
 
 // ---- identifiers -----------------------------------------------------------
 
-const pad = (value) => String(value).padStart(10, '0');
+const pad = (value: number): string => String(value).padStart(10, '0');
 
-export function positionOf(uidvalidity, uid) {
+export function positionOf(uidvalidity: number, uid: number) {
   return `${pad(uidvalidity)}:${pad(uid)}`;
 }
 
-export function watermarkConversation(account, mailbox) {
+export function watermarkConversation(account: string, mailbox: string) {
   return `${account}:mailbox:${mailbox}`;
 }
 
-export function pollWatermarkConversation(context, mailbox) {
+export function pollWatermarkConversation(context: EmailContext, mailbox: string) {
   const base = watermarkConversation(context.account, mailbox);
   return channelOf(context).inbound === AGENTMAIL_API_INBOUND ? `${base}:agentmail-api` : base;
 }
@@ -148,7 +314,7 @@ export function displayName(value = '') {
 }
 
 // The conversation is the root of the References chain, and never the subject.
-export function threadRoot(headers, ownId) {
+export function threadRoot(headers: EmailHeader[], ownId: string) {
   const references = idsIn(headerRaw(headers, 'references') ?? '');
   if (references.length > 0) return references[0];
   const parent = idsIn(headerRaw(headers, 'in-reply-to') ?? '');
@@ -162,10 +328,10 @@ export function threadRoot(headers, ownId) {
 //   { mailbox, uidvalidity, uid, position, rfc822: [line, ...] }
 // This never throws: a message it cannot read comes back as parked, because a
 // payload nothing can parse is kept where it landed, not dropped.
-export function readItem(context, item) {
+export function readItem(context: EmailContext, item: EmailItem) {
   const channel = channelOf(context);
   const account = context.account;
-  const unreadable = (reason, headers = []) => {
+  const unreadable = (reason: string, headers: EmailHeader[] = []): ParkedRead => {
     const ownId = idsIn(headerRaw(headers, 'message-id') ?? '')[0];
     const root = headers.length > 0 && ownId ? threadRoot(headers, ownId) : null;
     const conversation_id = root === null ? `${account}:unreadable` : `${account}:${root}`;
@@ -179,7 +345,7 @@ export function readItem(context, item) {
     };
   };
 
-  let headers = [];
+  let headers: EmailHeader[] = [];
   try {
     const message = readMessage(item.rfc822, { maxAttachmentBytes: channel.max_attachment_bytes });
     if (Array.isArray(item.agentmail_attachments)) message.attachments = item.agentmail_attachments;
@@ -197,7 +363,7 @@ export function readItem(context, item) {
     // something this store never saw is an ordinary message.
     let subject_id = ownId;
     let revision = 0;
-    let cursorKind = 'message';
+    let cursorKind: 'message' | 'revision' = 'message';
     if (supersedes !== undefined) {
       const existing = existingRevisions(context, conversation_id, `${conversation_id}:${supersedes}`);
       if (existing.length > 0) {
@@ -207,7 +373,7 @@ export function readItem(context, item) {
       }
     }
 
-    return {
+    const readable: ReadableRead = {
       parked: false,
       headers,
       message,
@@ -219,13 +385,14 @@ export function readItem(context, item) {
       cursorKind,
       supersedes
     };
+    return readable;
   } catch (error) {
     if (error instanceof MimeUnreadable) return unreadable(error.message, headers);
     throw error;
   }
 }
 
-function existingRevisions(context, conversation_id, message_id) {
+function existingRevisions(context: EmailContext, conversation_id: string, message_id: string) {
   try {
     return context.store.recordsIn(conversation_id)
       .filter((record) => record.message_id === message_id)
@@ -235,9 +402,9 @@ function existingRevisions(context, conversation_id, message_id) {
   }
 }
 
-function ownSentIds(context, conversation_id) {
+function ownSentIds(context: EmailContext, conversation_id: string) {
   try {
-    const ids = new Set();
+    const ids = new Set<string>();
     for (const record of context.store.recordsIn(conversation_id)) {
       for (const chunk of record.delivery?.chunk_ids ?? []) ids.add(chunk);
     }
@@ -250,7 +417,7 @@ function ownSentIds(context, conversation_id) {
 // ---- the five operations ---------------------------------------------------
 
 // 1. list what is pending past the cursors
-export function listPending(context) {
+export function listPending(context: EmailContext) {
   return (context.items ?? []).filter((item) => {
     const read = readItem(context, item);
     let at = null;
@@ -266,7 +433,7 @@ export function listPending(context) {
 // 2. consume one item, after the runtime accepted it. This is the only place a
 //    cursor moves, and it moves two: the conversation's, and the mailbox
 //    watermark that says how far the poller has read.
-export function consume(context, item) {
+export function consume(context: EmailContext, item: EmailItem) {
   const read = readItem(context, item);
   context.store.advanceCursor(read.conversation_id, read.cursorKind, item.position);
   context.store.advanceCursor(
@@ -275,7 +442,7 @@ export function consume(context, item) {
 }
 
 // 3. turn a batch into the payload the store writes
-export function payload(context, items) {
+export function payload(context: EmailContext, items: EmailItem[]) {
   const channel = channelOf(context);
   const declared = declaredAddresses(context, channel);
   const entries = [];
@@ -311,7 +478,7 @@ export function payload(context, items) {
     const ourOwn = fromUs && (stamped || ownSentIds(context, read.conversation_id).has(read.platform_message_id));
     const role = ourOwn ? 'agent' : (fromUs ? 'operator' : 'contact');
 
-    const record = {
+    const record: EmailRecord = {
       schema: 'carbon.message.v1',
       agent: context.agent,
       source: 'email',
@@ -364,7 +531,7 @@ export function payload(context, items) {
 }
 
 // The smallest record that still names the conversation and the message.
-function smallestRecord(context, read, item) {
+function smallestRecord(context: EmailContext, read: ParkedRead, item: EmailItem) {
   return {
     schema: 'carbon.message.v1',
     agent: context.agent,
@@ -389,26 +556,27 @@ function smallestRecord(context, read, item) {
 // A header this schema does not name is carried, never dropped and never
 // interpreted: the channel's own X- headers, minus the stamp this adapter puts
 // on its own sent mail, which is ours and not the channel's.
-export function adapterFields(headers) {
-  const fields = {};
+export function adapterFields(headers: EmailHeader[]) {
+  const fields: Record<string, string | string[]> = {};
   for (const entry of headers) {
     if (!entry.name.startsWith('x-')) continue;
     if (entry.name.startsWith('x-carbon-')) continue;
-    if (fields[entry.name] === undefined) fields[entry.name] = entry.value;
-    else if (Array.isArray(fields[entry.name])) fields[entry.name].push(entry.value);
-    else fields[entry.name] = [fields[entry.name], entry.value];
+    const existing = fields[entry.name];
+    if (existing === undefined) fields[entry.name] = entry.value;
+    else if (Array.isArray(existing)) existing.push(entry.value);
+    else fields[entry.name] = [existing, entry.value];
   }
   return Object.keys(fields).length === 0 ? undefined : fields;
 }
 
 // 4. say whether an item is the one a delivery record names
-export function matchesDelivery(context, item, delivery) {
+export function matchesDelivery(context: EmailContext, item: EmailItem, delivery: { chunk_ids?: string[] }) {
   const read = readItem(context, item);
   return (delivery.chunk_ids ?? []).includes(read.platform_message_id);
 }
 
 // 5. send
-export function send(context, record) {
+export function send(context: EmailContext, record: OutboundEmailRecord) {
   const channel = channelOf(context);
   const target = replyTarget(context, record);
   if (target.disposition === 'policy-drop') {
@@ -428,7 +596,7 @@ export function send(context, record) {
   const domain = context.account.split('@')[1] ?? 'localhost';
   const parts = splitBody(record.body, channel.max_part_bytes);
   const chunk_ids = [];
-  let outcome = 'sent';
+  let outcome: 'sent' | 'unknown' | 'failed' = 'sent';
 
   for (let index = 0; index < parts.length; index++) {
     const messageId = `carbon.${record.delivery.request_id}.${index + 1}.${crypto.randomBytes(6).toString('hex')}@${domain}`;
@@ -475,7 +643,7 @@ export function send(context, record) {
 
 // ---- the reply's shape -----------------------------------------------------
 
-export function replyTarget(context, record) {
+export function replyTarget(context: EmailContext, record: EmailRecord) {
   const inbound = context.store.recordsIn(record.conversation_id)
     .filter((held) => held.direction === 'inbound');
   if (inbound.length === 0) {
@@ -487,15 +655,17 @@ export function replyTarget(context, record) {
     const named = inbound.find((held) => held.platform_message_id === record.reply_to);
     if (named !== undefined) return named;
   }
-  return inbound.sort((a, b) => String(a.sent_at ?? a.received_at).localeCompare(String(b.sent_at ?? b.received_at))).at(-1);
+  const ordered = inbound.sort((a, b) => String(a.sent_at ?? a.received_at).localeCompare(String(b.sent_at ?? b.received_at)));
+  return ordered[ordered.length - 1];
 }
 
 // The record carries what the contract names and no more, so the subject and
 // the address to answer to are read back from the raw payload the capture kept
 // beside it. That file is the message as it arrived, which is exactly the thing
 // a reply must agree with.
-export function inboundHeaders(context, target) {
+export function inboundHeaders(context: EmailContext, target: EmailRecord) {
   try {
+    if (target.raw === undefined) return [];
     const raw = fs.readFileSync(context.store.under(target.raw), 'latin1').split('\n');
     return readMessage(raw, { maxAttachmentBytes: 0 }).headers;
   } catch {
@@ -503,17 +673,17 @@ export function inboundHeaders(context, target) {
   }
 }
 
-function replyRecipients(target, headers) {
+function replyRecipients(target: EmailRecord, headers: EmailHeader[]) {
   const replyTo = addressesIn(headerRaw(headers, 'reply-to') ?? '');
   if (replyTo.length > 0) return replyTo;
   return target.sender_id === 'unknown' ? [] : [target.sender_id];
 }
 
-function subjectOf(headers) {
+function subjectOf(headers: EmailHeader[]) {
   return header(headers, 'subject') ?? 'Re:';
 }
 
-function partSubject(subject, index, total) {
+function partSubject(subject: string, index: number, total: number) {
   const base = /^re:/i.test(subject) ? subject : `Re: ${subject}`;
   return total === 1 ? base : `${base} (part ${index + 1} of ${total})`;
 }
@@ -521,7 +691,7 @@ function partSubject(subject, index, total) {
 // In-Reply-To is the message being answered; References is the chain, root
 // first, with that message last. Both come from the inbound, never from a
 // subject line.
-export function referencesFor(target) {
+export function referencesFor(target: EmailRecord) {
   const root = target.conversation_id.slice(target.account.length + 1);
   const chain = [root];
   if (target.platform_message_id !== root) chain.push(target.platform_message_id);
@@ -531,7 +701,7 @@ export function referencesFor(target) {
 // A reply longer than the channel's part size goes as a numbered series, split
 // at a line boundary where there is one, and each part is a message of its own
 // with its own Message-ID. The Message-IDs are the chunk ids the store keeps.
-export function splitBody(body, maxPartBytes) {
+export function splitBody(body: string | undefined, maxPartBytes: number) {
   const text = body ?? '';
   if (Buffer.byteLength(text, 'utf8') <= maxPartBytes) return [text];
   const parts = [];
@@ -557,7 +727,7 @@ export function splitBody(body, maxPartBytes) {
   return parts;
 }
 
-export function encodeHeaderWord(value) {
+export function encodeHeaderWord(value: string) {
   // eslint-disable-next-line no-control-regex
   if (/^[\x20-\x7e]*$/.test(value)) return value;
   return `=?utf-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
@@ -567,7 +737,7 @@ export function encodeHeaderWord(value) {
 // because it is the thing that tells the agent's own sent mail from a person's
 // mail out of the same mailbox when either comes back. A send by the agent is
 // 'agent'. Anything else a command sends is not.
-export function buildMessage({ from, to, subject, messageId, inReplyTo, references, date, body, origin }) {
+export function buildMessage({ from, to, subject, messageId, inReplyTo, references, date, body, origin }: BuildMessageInput) {
   if (typeof origin !== 'string' || origin.length === 0) {
     throw new TransportFault([fault('SEND_ORIGIN_MISSING', messageId,
       'a message this adapter builds says who sent it, and nothing here guesses',
@@ -592,7 +762,7 @@ export function buildMessage({ from, to, subject, messageId, inReplyTo, referenc
   return [...lines, '', ...encoded, ''].join('\r\n');
 }
 
-function writeTemp(text) {
+function writeTemp(text: string) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-'));
   const file = path.join(dir, 'message.eml');
   fs.writeFileSync(file, text, { mode: 0o600 });
@@ -608,7 +778,7 @@ function writeTemp(text) {
 // STATUS is the small first request that establishes the poll cycle. A timeout
 // there is the transient missing-greeting case; every other fault and every
 // later IMAP operation keeps its ordinary one-attempt behavior.
-function initialStatus(where) {
+function initialStatus(where: { netrc: string; host: string; port: number; mailbox: string }) {
   let lastError;
   for (let attempt = 1; attempt <= STATUS_ATTEMPTS; attempt++) {
     try {
@@ -623,11 +793,17 @@ function initialStatus(where) {
   throw lastError;
 }
 
-export function poll(context) {
+export function poll(context: AgentMailEmailContext): Promise<AgentMailPollResult>;
+export function poll(context: ImapEmailContext): ImapPollResult;
+export function poll(context: EmailContext): ImapPollResult | Promise<AgentMailPollResult>;
+export function poll(context: EmailContext) {
   const channel = channelOf(context);
   const mailbox = channel.mailbox;
   const held = context.store.cursors(pollWatermarkConversation(context, mailbox)).message;
-  if (channel.inbound === AGENTMAIL_API_INBOUND) return pollAgentMail({ ...context, channel }, { held });
+  if (channel.inbound === AGENTMAIL_API_INBOUND) {
+    const agentMailResult: Promise<AgentMailPollResult> = pollAgentMail({ ...context, channel }, { held });
+    return agentMailResult;
+  }
   const where = { netrc: channel.netrc, host: channel.imap_host, port: channel.imap_port, mailbox };
   const live = initialStatus(where);
 
@@ -649,8 +825,8 @@ export function poll(context) {
   const uids = searchUids({ ...where, fromUid });
   // Read the unread set before reading anything, so the flag can go back: a
   // fetch marks a message read, and this mailbox may be one a person also reads.
-  const unseen = new Set(uids.length === 0 ? [] : unseenUids(where));
-  const items = uids.map((uid) => ({
+  const unseen = new Set<number>(uids.length === 0 ? [] : unseenUids(where));
+  const items: EmailItem[] = uids.map((uid) => ({
     mailbox,
     uidvalidity: live.uidvalidity,
     uid,
@@ -663,7 +839,8 @@ export function poll(context) {
     item.conversation = read.parked ? null : read.root;
   }
   const faults = restoreUnseen({ ...where, uids: uids.filter((uid) => unseen.has(uid)) });
-  return { items, uidvalidity: live.uidvalidity, rescanned, from_uid: fromUid, faults };
+  const result: ImapPollResult = { items, uidvalidity: live.uidvalidity, rescanned, from_uid: fromUid, faults };
+  return result;
 }
 
 export { listMailboxes };

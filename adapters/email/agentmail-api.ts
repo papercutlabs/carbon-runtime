@@ -6,20 +6,66 @@
 
 import fs from 'node:fs';
 import { fault } from '../../stream/faults.mjs';
-import { TransportFault } from './curl.mjs';
+import { TransportFault } from './curl.ts';
+
+type EmailFault = { code: string; subject: string; problem: string; fix: string };
+type TransportDetails = { status?: number };
+type AgentMailChannel = {
+  netrc?: string;
+  imap_host?: string;
+  api_host?: string;
+  inbox_id?: string;
+  agentmail_list_limit?: number;
+  mailbox?: string;
+};
+type AgentMailContext = { channel: AgentMailChannel };
+type AgentMailTransport = { apiKey: string; apiHost: string };
+type MessagePreview = { message_id: string; timestamp?: string };
+type MessageListPage = { messages?: MessagePreview[]; next_page_token?: unknown };
+type ProviderAttachment = { attachment_id: string; content_type?: string; filename?: string };
+type ProviderMessage = {
+  message_id: string;
+  timestamp: string;
+  thread_id?: string | null;
+  text?: string | null;
+  extracted_text?: string | null;
+  html?: string | null;
+  extracted_html?: string | null;
+  preview?: string | null;
+  from?: string;
+  to?: string | string[];
+  cc?: string | string[];
+  reply_to?: string | string[];
+  subject?: string;
+  in_reply_to?: string | null;
+  references?: string[];
+  headers?: Record<string, unknown>;
+  attachments?: ProviderAttachment[];
+};
+type AttachmentMetadata = { download_url?: unknown; content_type?: string; filename?: string };
+type AgentMailItem = {
+  mailbox: string;
+  position: string;
+  mailbox_position: string;
+  conversation: string | null;
+  rfc822: string[];
+  agentmail_attachments: { bytes: Buffer; mime: string; filename?: string }[];
+  agentmail_message_id: string;
+};
+type AgentMailPollResult = { items: AgentMailItem[]; after: string | null; count: number };
 
 const DEFAULT_API_HOST = 'api.agentmail.to';
 const DEFAULT_LIST_LIMIT = 100;
 const CALL_TIMEOUT_MS = 60000;
 
 export class AgentMailFault extends TransportFault {
-  constructor(faults, transport = {}) {
+  constructor(faults: EmailFault[], transport: TransportDetails = {}) {
     super(faults, transport);
     this.name = 'AgentMailFault';
   }
 }
 
-function readNetrc(file) {
+function readNetrc(file: string | undefined) {
   if (typeof file !== 'string' || file.length === 0) {
     throw new AgentMailFault([fault('AGENTMAIL_NETRC_PATH_ABSENT', 'transport.netrc_ref',
       'this AgentMail API transport names no declared netrc secret',
@@ -27,21 +73,30 @@ function readNetrc(file) {
   }
   try {
     return fs.readFileSync(file, 'utf8');
-  } catch (error) {
+  } catch (error: unknown) {
+    const details = errorDetails(error);
     throw new AgentMailFault([fault('AGENTMAIL_NETRC_UNREADABLE', file,
-      error?.code === 'ENOENT' ? 'there is no file at this path' : `this account cannot read the file: ${error?.code ?? error?.message}`,
+      details.code === 'ENOENT' ? 'there is no file at this path' : `this account cannot read the file: ${details.code ?? details.message}`,
       'place the mailbox netrc through the existing secret grant, mode 0600, owned by the runtime account')]);
   }
 }
 
-function quotedToken(text, start, file) {
+function errorDetails(error: unknown) {
+  if (typeof error !== 'object' || error === null) return {};
+  return {
+    ...('code' in error ? { code: error.code } : {}),
+    ...('message' in error ? { message: error.message } : {})
+  };
+}
+
+function quotedToken(text: string, start: number, file: string | undefined) {
   let value = '';
   for (let i = start + 1; i < text.length; i++) {
     const char = text[i];
     if (char === '"') return { value, next: i + 1 };
     if (char !== '\\') { value += char; continue; }
     const escaped = text[++i];
-    const replacements = { '"': '"', '\\': '\\', n: '\n', r: '\r', t: '\t' };
+    const replacements: Record<string, string> = { '"': '"', '\\': '\\', n: '\n', r: '\r', t: '\t' };
     if (escaped === undefined || replacements[escaped] === undefined) {
       throw new AgentMailFault([fault('AGENTMAIL_NETRC_MALFORMED', file,
         `the quoted netrc value carries an unsupported escape ${JSON.stringify(escaped ?? 'end of file')}`,
@@ -54,7 +109,7 @@ function quotedToken(text, start, file) {
     'close the quoted value before the end of the file')]);
 }
 
-function netrcTokens(text, file) {
+function netrcTokens(text: string, file: string | undefined) {
   const tokens = [];
   let at = 0;
   while (at < text.length) {
@@ -79,7 +134,7 @@ function netrcTokens(text, file) {
   return tokens;
 }
 
-function passwordIn(tokens, start, machine) {
+function passwordIn(tokens: string[], start: number, machine: string) {
   for (let i = start; i < tokens.length; i++) {
     if (tokens[i] === 'machine' || tokens[i] === 'default' || tokens[i] === 'macdef') break;
     if (tokens[i] !== 'password') continue;
@@ -91,7 +146,7 @@ function passwordIn(tokens, start, machine) {
     `add the password to the machine ${machine} entry in mailbox_netrc`)]);
 }
 
-export function readNetrcPassword(file, machine) {
+export function readNetrcPassword(file: string | undefined, machine: string | undefined) {
   if (typeof machine !== 'string' || machine.length === 0) {
     throw new AgentMailFault([fault('AGENTMAIL_NETRC_MACHINE_UNSTATED', 'transport.imap_host',
       'the AgentMail REST transport needs the IMAP machine name whose password is its API key',
@@ -110,14 +165,14 @@ export function readNetrcPassword(file, machine) {
   return passwordIn(tokens, at, machine);
 }
 
-function transportOf(channel) {
+function transportOf(channel: AgentMailChannel) {
   return {
     apiKey: readNetrcPassword(channel.netrc, channel.imap_host),
     apiHost: channel.api_host ?? DEFAULT_API_HOST
   };
 }
 
-async function responseFor(transport, pathname, search = null) {
+async function responseFor(transport: AgentMailTransport, pathname: string, search: URLSearchParams | null = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
   const url = new URL(`https://${transport.apiHost}${pathname}`);
@@ -127,16 +182,16 @@ async function responseFor(transport, pathname, search = null) {
       headers: { authorization: `Bearer ${transport.apiKey}` },
       signal: controller.signal
     });
-  } catch (error) {
+  } catch (error: unknown) {
     throw new AgentMailFault([fault('AGENTMAIL_API_UNREACHABLE', pathname,
-      error?.message ?? String(error),
+      errorDetails(error).message ?? String(error),
       `check that ${transport.apiHost} is reachable from this box and declared in outbound_hosts`)]);
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function jsonFor(transport, pathname, search = null) {
+async function jsonFor(transport: AgentMailTransport, pathname: string, search: URLSearchParams | null = null) {
   const response = await responseFor(transport, pathname, search);
   if (!response.ok) {
     throw new AgentMailFault([fault('AGENTMAIL_API_REFUSED', pathname,
@@ -148,22 +203,26 @@ async function jsonFor(transport, pathname, search = null) {
   }
   try {
     return await response.json();
-  } catch (error) {
+  } catch (error: unknown) {
     throw new AgentMailFault([fault('AGENTMAIL_API_RESPONSE_UNREADABLE', pathname,
-      error?.message ?? String(error),
+      errorDetails(error).message ?? String(error),
       'the whole poll cycle failed because the API response was not JSON')]);
   }
 }
 
-async function listMessages(transport, inboxId, { after = null, limit = DEFAULT_LIST_LIMIT } = {}) {
+async function listMessages(transport: AgentMailTransport, inboxId: string, { after = null, limit = DEFAULT_LIST_LIMIT }: {
+  after?: string | null;
+  limit?: number;
+} = {}) {
   const messages = [];
   let pageToken = null;
   do {
     const query = new URLSearchParams({ ascending: 'true', limit: String(limit) });
     if (after !== null) query.set('after', after);
     if (pageToken !== null) query.set('page_token', pageToken);
+    // The list endpoint carries a page; its existing array check handles the malformed-list case.
     const page = await jsonFor(transport,
-      `/v0/inboxes/${encodeURIComponent(inboxId)}/messages`, query);
+      `/v0/inboxes/${encodeURIComponent(inboxId)}/messages`, query) as MessageListPage;
     if (!Array.isArray(page?.messages)) {
       throw new AgentMailFault([fault('AGENTMAIL_MESSAGE_LIST_UNREADABLE', inboxId,
         'the list response carries no messages array',
@@ -177,15 +236,16 @@ async function listMessages(transport, inboxId, { after = null, limit = DEFAULT_
   return messages;
 }
 
-function getMessage(transport, inboxId, messageId) {
+function getMessage(transport: AgentMailTransport, inboxId: string, messageId: string) {
   return jsonFor(transport,
     `/v0/inboxes/${encodeURIComponent(inboxId)}/messages/${encodeURIComponent(messageId)}`);
 }
 
-async function getAttachment(transport, inboxId, messageId, attachment) {
+async function getAttachment(transport: AgentMailTransport, inboxId: string, messageId: string, attachment: ProviderAttachment) {
   const pathname = `/v0/inboxes/${encodeURIComponent(inboxId)}/messages/${encodeURIComponent(messageId)}` +
     `/attachments/${encodeURIComponent(attachment.attachment_id)}`;
-  const metadata = await jsonFor(transport, pathname);
+  // The attachment endpoint is read as metadata; the existing download_url check handles malformed responses.
+  const metadata = await jsonFor(transport, pathname) as AttachmentMetadata;
   if (typeof metadata?.download_url !== 'string') {
     throw new AgentMailFault([fault('AGENTMAIL_ATTACHMENT_METADATA_UNREADABLE', attachment.attachment_id,
       'the attachment metadata carries no download_url',
@@ -207,17 +267,17 @@ async function getAttachment(transport, inboxId, messageId, attachment) {
       mime: attachment.content_type ?? metadata.content_type ?? 'application/octet-stream',
       ...(attachment.filename ?? metadata.filename ? { filename: attachment.filename ?? metadata.filename } : {})
     };
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof AgentMailFault) throw error;
     throw new AgentMailFault([fault('AGENTMAIL_ATTACHMENT_DOWNLOAD_FAILED', attachment.attachment_id,
-      error?.message ?? String(error),
+      errorDetails(error).message ?? String(error),
       'the whole poll cycle failed before capture; read the network error and restore access to the returned attachment URL')]);
   } finally {
     clearTimeout(timer);
   }
 }
 
-function headerLines(message) {
+function headerLines(message: ProviderMessage) {
   const headers = [];
   const present = new Set();
   const skip = new Set(['content-type', 'content-transfer-encoding', 'content-disposition', 'mime-version']);
@@ -229,12 +289,12 @@ function headerLines(message) {
       headers.push(`${name}: ${String(value).replace(/[\r\n]+/g, ' ')}`);
     }
   }
-  const add = (name, value) => {
+  const add = (name: string, value: string | undefined) => {
     if (value === undefined || value === null || value === '' || present.has(name.toLowerCase())) return;
     headers.push(`${name}: ${value}`);
     present.add(name.toLowerCase());
   };
-  const id = (value) => {
+  const id = (value: string | null | undefined): string | undefined => {
     const text = String(value ?? '').trim();
     if (text === '') return undefined;
     return text.startsWith('<') ? text : `<${text}>`;
@@ -251,7 +311,7 @@ function headerLines(message) {
   return headers;
 }
 
-function itemFor(message, attachments, mailbox = 'INBOX') {
+function itemFor(message: ProviderMessage, attachments: { bytes: Buffer; mime: string; filename?: string }[], mailbox = 'INBOX') {
   const timestamp = new Date(message.timestamp).toISOString();
   const text = message.text ?? message.extracted_text;
   const html = text === undefined || text === null ? (message.html ?? message.extracted_html) : null;
@@ -276,7 +336,7 @@ function itemFor(message, attachments, mailbox = 'INBOX') {
   };
 }
 
-export async function pollAgentMail(context, { held = null } = {}) {
+export async function pollAgentMail(context: AgentMailContext, { held = null }: { held?: string | null } = {}) {
   const channel = context.channel;
   const inboxId = channel.inbox_id;
   if (typeof inboxId !== 'string' || inboxId.length === 0) {
@@ -292,9 +352,10 @@ export async function pollAgentMail(context, { held = null } = {}) {
   }
   const transport = transportOf(channel);
   const previews = await listMessages(transport, inboxId, { after: held, limit });
-  const items = [];
+  const items: AgentMailItem[] = [];
   for (const preview of previews) {
-    const message = await getMessage(transport, inboxId, preview.message_id);
+    // The message endpoint returns the provider's full message shape used by the existing item builder.
+    const message = await getMessage(transport, inboxId, preview.message_id) as ProviderMessage;
     const attachments = [];
     for (const attachment of message.attachments ?? []) {
       attachments.push(await getAttachment(transport, inboxId, message.message_id, attachment));

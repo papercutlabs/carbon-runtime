@@ -1002,7 +1002,7 @@ test('the turn the loop runs carries the attachment, not only the body', async (
 });
 
 // PA-180: an attachment past the adapter's cap carries `bytes` as its size, an
-// integer, not a Buffer — the shape adapters/email/mime.mjs writes for one that
+// integer, not a Buffer — the shape adapters/email/mime.ts writes for one that
 // crossed max_attachment_bytes. Capture must not mistake that integer for bytes
 // to write; the record parks nothing, ends nothing, and still releases.
 test('an oversize attachment parks nothing, ends nothing, and the message still releases', async () => {
