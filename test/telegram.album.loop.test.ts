@@ -1,3 +1,9 @@
+// Assertions on fixture-only fault shapes and nonempty test results preserve
+// the original failure assertions; they add no fallback for a missing result.
+import type { Respond } from './telegram-fixtures.ts';
+import type { MessageRecord, Attachment } from '../stream/store.ts';
+// Fetch replacements implement only the response methods exercised below; the
+// installation assertions retain these deliberately partial synthetic responses.
 // The whole path an album takes, with nothing between the worker and the turn
 // faked except the server and the model.
 //
@@ -20,9 +26,9 @@ import { ReleaseLoop } from '../runtime/loop.mjs';
 import { resolveChannel } from '../runtime/channel.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
 import { fakeHarness } from './fake-harness.mjs';
-import { forget, IDLE_MS } from '../adapters/telegram/live.mjs';
-import * as telegram from '../adapters/telegram/index.mjs';
-import { photoUpdate, sleep, tokenFile } from './telegram-fixtures.mjs';
+import { forget, IDLE_MS } from '../adapters/telegram/live.ts';
+import * as telegram from '../adapters/telegram/index.ts';
+import { photoUpdate, sleep, tokenFile } from './telegram-fixtures.ts';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'example_agent_bot';
@@ -32,15 +38,15 @@ const OTHER_CHAT = 998877665;
 // The Bot API this loop talks to: answers to getUpdates are scripted per call,
 // every photograph has bytes of its own so one attachment cannot be mistaken for
 // another, and a reply is accepted and counted.
-function botServerOf({ respond }) {
-  const asked = [];
-  const sent = [];
+function botServerOf({ respond }: { respond: Respond }) {
+  const asked: { call: number; offset: number | null; ids: number[] }[] = [];
+  const sent: { chat_id: string; text: string }[] = [];
   const previous = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async (url, options = {}) => {
+  globalThis.fetch = (async (url: string, options: RequestInit = {}) => {
     if (url.includes('/getUpdates')) {
       calls += 1;
-      const params = JSON.parse(options.body);
+      const params = JSON.parse(options.body as string);
       const offset = params.offset ?? null;
       const produced = respond({ call: calls, offset }) ?? [];
       const result = produced.filter((one) => offset === null || one.update_id >= offset);
@@ -49,7 +55,7 @@ function botServerOf({ respond }) {
       return { status: 200, json: async () => ({ ok: true, result }) };
     }
     if (url.includes('/getFile')) {
-      const { file_id } = JSON.parse(options.body);
+      const { file_id } = JSON.parse(options.body as string);
       return { status: 200, json: async () => ({ ok: true, result: { file_path: `files/${file_id}.jpg` } }) };
     }
     if (url.includes('/file/bot')) {
@@ -60,7 +66,7 @@ function botServerOf({ respond }) {
       return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(bytes).buffer };
     }
     if (url.includes('/sendMessage')) {
-      const params = JSON.parse(options.body);
+      const params = JSON.parse(options.body as string);
       sent.push(params);
       return {
         status: 200,
@@ -68,11 +74,11 @@ function botServerOf({ respond }) {
       };
     }
     throw new Error(`unexpected fake request ${url}`);
-  };
+  }) as unknown as typeof fetch;
   return { asked, sent, restore: () => { globalThis.fetch = previous; } };
 }
 
-function declarationOf(bot_token) {
+function declarationOf(bot_token: string) {
   return {
     schema: 'carbon.agent-declaration.v1',
     agent: { id: AGENT, client: 'ExampleCorp' },
@@ -108,9 +114,9 @@ const REPLY_LISTED = () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }
 // The model answers the conversation the turn names, through the real reply
 // tool, because a turn that answers nothing is a turn the runtime follows up on
 // and that is not what is being tested here.
-function answering(store) {
+function answering(store: Store) {
   const handle = replyHandler({ store, agent: AGENT });
-  return (session, params) => {
+  return (session: unknown, params: { input: string; clientUserMessageId: string }) => {
     const conversation = /conversation_id: (\S+)/.exec(params.input)?.[1];
     handle({ conversation_id: conversation, request_id: params.clientUserMessageId, text: 'the answer' });
     return 'completed';
@@ -119,10 +125,14 @@ function answering(store) {
 
 function makeLoop() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-telegram-album-loop-'));
-  const store = Store.open(dir);
+  const store = Store.open<MessageRecord<Attachment>>(dir);
   const declaration = declarationOf(tokenFile());
-  const harness = fakeHarness({ onTurn: answering(store), statuses: REPLY_LISTED });
-  const lines = [];
+  // The unconverted helper infers zero-argument defaults, but its source calls
+  // onTurn(session, params, n) and returns the listed statuses unchanged.
+  const harness = (fakeHarness as unknown as (options: {
+    onTurn: ReturnType<typeof answering>; statuses: typeof REPLY_LISTED;
+  }) => ReturnType<typeof fakeHarness>)({ onTurn: answering(store), statuses: REPLY_LISTED });
+  const lines: { event: string }[] = [];
   const loop = new ReleaseLoop({
     declaration,
     channel: resolveChannel(declaration, declaration.channels[0]),
@@ -134,14 +144,16 @@ function makeLoop() {
     agent: AGENT,
     checkout: path.join(dir, 'repo'),
     work: dir,
-    log: (line) => lines.push(line)
+    // ReleaseLoop's JavaScript default infers no argument; the implementation
+    // supplies log events. Preserve that callback unchanged at this boundary.
+    log: ((line: { event: string }) => lines.push(line)) as unknown as () => void
   });
   return { loop, store, harness, lines };
 }
 
 // Passes until the channel has handed something over, the way the runtime's own
 // interval does, and then one more caller-controlled pass.
-async function passUntilCaptured(loop, attempts = 40) {
+async function passUntilCaptured(loop: ReleaseLoop, attempts = 40) {
   let result = null;
   for (let i = 0; i < attempts; i++) {
     result = await loop.pass();
@@ -162,10 +174,11 @@ test('six photographs the worker retained across shrinking answers are one relea
   const server = botServerOf({ respond: ({ call }) => script[call - 1] ?? [] });
 
   try {
-    const result = await passUntilCaptured(loop);
+    // The default forty attempts always run a pass; null only describes zero attempts.
+    const result = (await passUntilCaptured(loop))!;
 
     assert.equal(result.captured.length, 6, 'the album did not reach the loop whole');
-    assert.equal(new Set(result.captured.map((one) => one.message_id)).size, 6,
+    assert.equal(new Set(result.captured.map((one: MessageRecord) => one.message_id)).size, 6,
       'six photographs did not become six records');
     assert.equal(result.released.length, 1, 'the album was released more than once');
     assert.equal(result.released[0].message_ids.length, 6);
@@ -181,15 +194,15 @@ test('six photographs the worker retained across shrinking answers are one relea
       assert.ok(harness.session.turns[0].input.includes(digest),
         'a stored photograph did not reach the turn input');
     }
-    assert.equal(new Set(inbound.map((one) => one.release.turn_id)).size, 1);
-    assert.ok(inbound.every((one) => one.release.completed_at), 'a record was left in an open release');
+    assert.equal(new Set(inbound.map((one) => one.release!.turn_id)).size, 1);
+    assert.ok(inbound.every((one) => one.release!.completed_at), 'a record was left in an open release');
 
     // At most one logical reply: one outbound record, whatever number of chunks
     // the server was asked to carry it in.
-    assert.deepEqual(result.delivered.map((one) => one.status), ['sent']);
+    assert.deepEqual(result.delivered.map((one: { status: string }) => one.status), ['sent']);
     const outbound = store.rebuild().filter((one) => one.direction === 'outbound');
     assert.equal(outbound.length, 1, 'the album was answered more than once');
-    assert.equal(outbound[0].delivery.status, 'sent');
+    assert.equal(outbound[0].delivery!.status, 'sent');
     assert.equal(lines.filter((line) => line.event === 'release').length, 1);
     assert.equal(lines.filter((line) => line.event === 'turn').length, 1);
 
@@ -218,12 +231,13 @@ test('two chats in one retained batch stay two releases and two turns', async ()
   const server = botServerOf({ respond: ({ call }) => script[call - 1] ?? [] });
 
   try {
-    const result = await passUntilCaptured(loop);
+    // The default forty attempts always run a pass; null only describes zero attempts.
+    const result = (await passUntilCaptured(loop))!;
 
     assert.equal(result.captured.length, 4, 'a retained update was lost between the chats');
     assert.equal(result.released.length, 2, 'the two chats were gathered into one release');
     assert.equal(harness.session.turns.length, 2);
-    const byConversation = new Map(result.released.map((one) => [
+    const byConversation = new Map<string, string[]>(result.released.map((one: { message_ids: string[] }) => [
       one.message_ids[0].split(':').slice(0, 2).join(':'), one.message_ids
     ]));
     assert.deepEqual([...byConversation.keys()].sort(),

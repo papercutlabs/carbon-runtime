@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import { fault, report } from '../stream/faults.ts';
 import { StreamFault } from '../stream/store.ts';
-import { botIdOf, call, readToken, TelegramFault } from '../adapters/telegram/api.mjs';
+import { botIdOf, call, readToken, TelegramFault } from '../adapters/telegram/api.ts';
 
 const HELP = `carbon-telegram — reach a real bot with the telegram adapter's own transport
 

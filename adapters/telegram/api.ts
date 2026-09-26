@@ -1,3 +1,5 @@
+import type { Fault } from '../../stream/faults.ts';
+import type { Fields, Transport } from './types.ts';
 // The Bot API, over https, with no library.
 //
 // The Bot API is JSON over HTTPS with no handshake, no session and no streaming:
@@ -18,10 +20,12 @@
 //    a message from the URL parser. A token in the unit's journal is readable by
 //    anyone who can read the box, and a bot token is the whole credential —
 //    there is no second factor and no per-device pairing to unlink.
-// 2. **This is the only file in the adapter that touches a network.** index.mjs
+// 2. **This is the only file in the adapter that touches a network.** index.ts
 //    turns updates into records and a reply into chunks, and every rule it holds
 //    is tested against recorded updates with no network in the test.
 
+// Property-view assertions below do not validate thrown or JSON fields: every
+// accessed value remains unknown and follows the original optional reads.
 import fs from 'node:fs';
 import { fault } from '../../stream/faults.ts';
 import { StreamFault } from '../../stream/store.ts';
@@ -42,8 +46,11 @@ export const ALLOWED_UPDATES = ['message', 'edited_message', 'channel_post', 'ed
 // A fault a caller may log or put on a record, with no token in it. It carries
 // the server's own error code where there was one, because "the token is
 // revoked" and "the server is busy" are different days' work.
-export class TelegramFault extends StreamFault {
-  constructor(faults, { errorCode = null, retryAfter = null } = {}) {
+export class TelegramFault extends StreamFault<unknown> {
+  declare errorCode: unknown;
+  declare retryAfter: unknown;
+
+  constructor(faults: Fault<unknown>[], { errorCode = null, retryAfter = null }: { errorCode?: unknown; retryAfter?: unknown } = {}) {
     super(faults);
     this.name = 'TelegramFault';
     this.errorCode = errorCode;
@@ -52,7 +59,7 @@ export class TelegramFault extends StreamFault {
 }
 
 // Replace the token wherever it appears in a string that is about to be shown.
-export function scrub(text, token) {
+export function scrub(text: unknown, token: unknown) {
   const said = String(text ?? '');
   if (typeof token !== 'string' || token.length === 0) return said;
   return said.split(token).join('<bot token>');
@@ -61,7 +68,7 @@ export function scrub(text, token) {
 // A token is `<bot id>:<secret>`, so the digits before the colon are the bot's
 // own user id and can be read without a call. That matters for one rule: a
 // message whose sender is this bot is the agent's own, not a person's.
-export function botIdOf(token) {
+export function botIdOf(token: unknown) {
   const match = /^([0-9]+):[A-Za-z0-9_-]+$/.exec(String(token ?? '').trim());
   return match === null ? null : Number(match[1]);
 }
@@ -70,7 +77,7 @@ export function botIdOf(token) {
 // never put in this process's environment and never written anywhere. The file
 // is placed by its owner through `carbon-apply secret place`, mode 0600, owned
 // by the account that reads it, which for a channel is the agent user.
-export function readToken(file) {
+export function readToken(file: unknown) {
   if (typeof file !== 'string' || file.length === 0) {
     throw new TelegramFault([fault('CHANNEL_TOKEN_PATH_ABSENT', 'transport.bot_token_ref',
       'this channel names no declared secret holding its bot token, and the adapter guesses no path for a credential',
@@ -81,9 +88,9 @@ export function readToken(file) {
     text = fs.readFileSync(file, 'utf8');
   } catch (error) {
     throw new TelegramFault([fault('CHANNEL_TOKEN_UNREADABLE', file,
-      error?.code === 'ENOENT'
+      (error as Fields | null | undefined)?.code === 'ENOENT'
         ? 'there is no file at this path'
-        : `this account cannot read the file: ${error?.code ?? error?.message}`,
+        : `this account cannot read the file: ${(error as Fields | null | undefined)?.code ?? (error as Fields | null | undefined)?.message}`,
       'the box owner places the token at this path, mode 0600, owned by the account the runtime runs as')]);
   }
   const token = text.trim();
@@ -98,12 +105,12 @@ export function readToken(file) {
 // One call. `timeoutMs` covers the whole call, and a long poll passes its own: a
 // getUpdates holding open for twenty-five seconds must not be cut off by a
 // timeout meant for a method that answers at once.
-export async function call(transport, method, params = {}, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
+export async function call(transport: Transport, method: string, params: Fields = {}, { timeoutMs = CALL_TIMEOUT_MS } = {}): Promise<unknown> {
   const { token, apiHost = DEFAULT_API_HOST } = transport;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let status = null;
-  let body = null;
+  let status: number | null = null;
+  let body: unknown = null;
   try {
     const response = await fetch(`https://${apiHost}/bot${token}/${method}`, {
       method: 'POST',
@@ -115,27 +122,27 @@ export async function call(transport, method, params = {}, { timeoutMs = CALL_TI
     body = await response.json();
   } catch (error) {
     throw new TelegramFault([fault('BOT_API_UNREACHABLE', method,
-      scrub(error?.message ?? String(error), token),
+      scrub((error as Fields | null | undefined)?.message ?? String(error), token),
       `check that ${apiHost} is reachable from this box; it is the host the declaration names in outbound_hosts`)]);
   } finally {
     clearTimeout(timer);
   }
 
-  if (body?.ok !== true) {
-    const code = body?.error_code ?? status;
+  if ((body as Fields | null)?.ok !== true) {
+    const code = (body as Fields | null)?.error_code ?? status;
     throw new TelegramFault([fault('BOT_API_REFUSED', method,
-      `the Bot API answered ${code}: ${scrub(body?.description ?? 'no description', token)}`,
+      `the Bot API answered ${code}: ${scrub((body as Fields | null)?.description ?? 'no description', token)}`,
       code === 401
         ? 'the token is wrong or has been revoked; place the token again and restart the unit'
         : 'read the description; it is the server\'s own words for what it refused')],
-    { errorCode: code, retryAfter: body?.parameters?.retry_after ?? null });
+    { errorCode: code, retryAfter: ((body as Fields | null)?.parameters as Fields | null)?.retry_after ?? null });
   }
-  return body.result;
+  return (body as Fields).result;
 }
 
 // The bytes of a file, by the path getFile answered with. The download URL
 // carries the token the way a method call does, so the same scrubbing applies.
-export async function download(transport, filePath, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
+export async function download(transport: Transport, filePath: string, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
   const { token, apiHost = DEFAULT_API_HOST } = transport;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -150,7 +157,7 @@ export async function download(transport, filePath, { timeoutMs = CALL_TIMEOUT_M
   } catch (error) {
     if (error instanceof TelegramFault) throw error;
     throw new TelegramFault([fault('ATTACHMENT_DOWNLOAD_FAILED', filePath,
-      scrub(error?.message ?? String(error), token),
+      scrub((error as Fields | null | undefined)?.message ?? String(error), token),
       'the record keeps the attachment as download_failed and is released anyway')]);
   } finally {
     clearTimeout(timer);
