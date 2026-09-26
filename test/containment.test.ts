@@ -3,16 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store, StreamFault } from '../stream/store.ts';
+import { Store, StreamFault, type MessageRecord } from '../stream/store.ts';
 import { componentFaults, encodeComponent, decodeComponent, resolveUnderStore } from '../stream/encode.ts';
 
 const ACCOUNT = 'agent-01@examplecorp.test';
 
-function open() {
+function open(): Store {
   return Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-store-')), 'store'));
 }
 
-function record(overrides) {
+function record(overrides: Partial<MessageRecord> = {}): MessageRecord {
   return {
     schema: 'carbon.message.v1',
     agent: 'agent-01',
@@ -35,9 +35,9 @@ function record(overrides) {
   };
 }
 
-function tree(dir) {
-  const found = [];
-  const walk = (at) => {
+function tree(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (at: string): void => {
     for (const name of fs.readdirSync(at)) {
       const full = path.join(at, name);
       if (fs.statSync(full).isDirectory()) walk(full);
@@ -48,7 +48,7 @@ function tree(dir) {
   return found.sort();
 }
 
-const HOSTILE = [
+const HOSTILE: [string, Partial<MessageRecord>, string[]][] = [
   ['a message id walking up out of the store', { message_id: '../../../../etc/passwd' }, ['IDENTIFIER_HAS_SEPARATOR', 'IDENTIFIER_HAS_DOT_SEGMENT']],
   ['a zip entry pointing outside media', { message_id: 'media/../../../home/somebody/.ssh/authorized_keys' }, ['IDENTIFIER_HAS_SEPARATOR', 'IDENTIFIER_HAS_DOT_SEGMENT']],
   ['a conversation that is a dot segment', { conversation_id: '..' }, ['IDENTIFIER_HAS_DOT_SEGMENT']],
@@ -61,7 +61,7 @@ for (const [name, overrides, expected] of HOSTILE) {
     const store = open();
     store.capture(record());
     const before = tree(store.dir);
-    let refused = null;
+    let refused: unknown = null;
     try {
       store.capture(record(overrides));
     } catch (error) {
