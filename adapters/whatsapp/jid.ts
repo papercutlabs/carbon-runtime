@@ -22,21 +22,21 @@ const LID_SERVER = 'lid';
 const PHONE_SERVER = 's.whatsapp.net';
 const GROUP_SERVER = 'g.us';
 
-export function serverOf(jid) {
+export function serverOf(jid: unknown) {
   if (typeof jid !== 'string') return null;
   const at = jid.lastIndexOf('@');
   return at < 0 ? null : jid.slice(at + 1);
 }
 
-export function isLid(jid) {
+export function isLid(jid: unknown) {
   return serverOf(jid) === LID_SERVER;
 }
 
-export function isPhoneJid(jid) {
+export function isPhoneJid(jid: unknown) {
   return serverOf(jid) === PHONE_SERVER;
 }
 
-export function isGroup(jid) {
+export function isGroup(jid: unknown) {
   return serverOf(jid) === GROUP_SERVER;
 }
 
@@ -46,7 +46,8 @@ export function isGroup(jid) {
 // about the jid is rewritten: a jid carrying something it should not, a control
 // byte for instance, stays exactly as it arrived, so the store's own refusal
 // sees it and reports it rather than this function quietly repairing it.
-export function normaliseJid(jid) {
+// Only a string is rewritten; every other value is returned unchanged.
+export function normaliseJid<T>(jid: T): T | string {
   if (typeof jid !== 'string') return jid;
   const at = jid.lastIndexOf('@');
   if (at < 0) return jid;
@@ -55,20 +56,22 @@ export function normaliseJid(jid) {
 }
 
 // The canonical chat key: the linked-id form when the event carries one.
-export function canonicalChatKey(key = {}) {
+export function canonicalChatKey(key: Record<string, unknown> = {}) {
   const candidates = [key.remoteJid, key.remoteJidAlt]
-    .filter((jid) => typeof jid === 'string' && jid.length > 0)
-    .map(normaliseJid);
+    // The existing check establishes a string before normalisation.
+    .filter((jid): jid is string => typeof jid === 'string' && jid.length > 0)
+    .map<string>(normaliseJid);
   if (candidates.length === 0) return null;
   return candidates.find(isLid) ?? candidates[0];
 }
 
 // The same rule for the person who spoke, which in a group is the participant
 // and not the chat.
-export function canonicalParticipant(key = {}) {
+export function canonicalParticipant(key: Record<string, unknown> = {}) {
   const candidates = [key.participant, key.participantAlt]
-    .filter((jid) => typeof jid === 'string' && jid.length > 0)
-    .map(normaliseJid);
+    // The existing check establishes a string before normalisation.
+    .filter((jid): jid is string => typeof jid === 'string' && jid.length > 0)
+    .map<string>(normaliseJid);
   if (candidates.length === 0) return null;
   return candidates.find(isLid) ?? candidates[0];
 }
@@ -76,9 +79,9 @@ export function canonicalParticipant(key = {}) {
 // Every phone-form and linked-id-form pair the event puts side by side, so the
 // map under the store can learn them. A pair is only learned when the event
 // carries both forms of one identity; nothing is inferred from one form alone.
-export function pairsIn(key = {}) {
-  const pairs = [];
-  const consider = (a, b) => {
+export function pairsIn(key: Record<string, unknown> = {}) {
+  const pairs: { phone: string; lid: string }[] = [];
+  const consider = (a: unknown, b: unknown) => {
     if (typeof a !== 'string' || typeof b !== 'string') return;
     const one = normaliseJid(a);
     const other = normaliseJid(b);
@@ -91,6 +94,6 @@ export function pairsIn(key = {}) {
   return pairs;
 }
 
-export function conversationKind(chatKey) {
+export function conversationKind(chatKey: unknown) {
   return isGroup(chatKey) ? 'group' : 'direct';
 }

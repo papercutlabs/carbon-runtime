@@ -108,7 +108,7 @@ import type { LedgerContext, LedgerItem, LidMap, ImportFields, ImportRecord, Imp
 // writes the same bytes and the import is idempotent in the sidecars as well as
 // in the records.
 
-import { conversationKind } from '../adapters/whatsapp/jid.mjs';
+import { conversationKind } from '../adapters/whatsapp/jid.ts';
 import { readLidMap } from '../adapters/whatsapp/channel-state.mjs';
 import { chatKeyFor } from './carbon-capture-whatsapp.ts';
 import { roleFor } from './ledger-mapping.ts';

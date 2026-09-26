@@ -19,7 +19,7 @@ import { fault } from '../../stream/faults.ts';
 import { StreamFault } from '../../stream/store.ts';
 import {
   canonicalChatKey, canonicalParticipant, conversationKind, pairsIn
-} from './jid.mjs';
+} from './jid.ts';
 import { albumOf, editOf, isHdChild, read, revokeOf } from './content.mjs';
 import { learnPairs } from './channel-state.mjs';
 import { arrivals, openSocketFor, socketFor } from './live.mjs';

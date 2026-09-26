@@ -20,7 +20,7 @@ import type { CaptureRow, ImportContext, LidMap, Fields, ImportRecord, CaptureOp
 // This module is both the adapter the conformance check runs and the library
 // `bin/carbon-import` uses, so what the check proves is what the command does.
 
-import { conversationKind, isPhoneJid, normaliseJid } from '../adapters/whatsapp/jid.mjs';
+import { conversationKind, isPhoneJid, normaliseJid } from '../adapters/whatsapp/jid.ts';
 import { readLidMap } from '../adapters/whatsapp/channel-state.mjs';
 
 export const capabilities = ['import'];

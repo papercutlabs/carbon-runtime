@@ -15,7 +15,7 @@ node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/wha
 | file | what it is |
 |---|---|
 | `index.mjs` | the adapter: the five operations, and every rule about what a message becomes |
-| `jid.mjs` | chat keys: the canonical form, and the map from the phone form to it |
+| `jid.ts` | chat keys: the canonical form, and the map from the phone form to it |
 | `content.mjs` | reading one message: the envelopes, the kinds, the edit, the album, the second upload |
 | `channel-state.mjs` | the connection state, the chat-key map and the latch, as files under the store |
 | `latch.mjs` | the terminal latch: what stops the unit when the device is unlinked |
@@ -154,7 +154,7 @@ This is the item the plan singles out, and the answer is not the one the earlier
 platform used. **The canonical chat key is the linked-id form** wherever the
 event offers one, in whichever field it arrived, and the phone form otherwise;
 groups and broadcasts keep their own jid, having no linked-id form. One rule, one
-function, `jid.mjs`, used by the adapter and by the import, so nothing can
+function, `jid.ts`, used by the adapter and by the import, so nothing can
 disagree with anything else. The device suffix a jid may carry is dropped. The
 phone form is not discarded: every event carrying both forms teaches a map under
 the store, which exists for one caller, the history import.

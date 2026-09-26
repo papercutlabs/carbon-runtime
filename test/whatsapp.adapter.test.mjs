@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
 import * as adapter from '../adapters/whatsapp/index.mjs';
-import { canonicalChatKey, canonicalParticipant, normaliseJid, pairsIn } from '../adapters/whatsapp/jid.mjs';
+import { canonicalChatKey, canonicalParticipant, normaliseJid, pairsIn } from '../adapters/whatsapp/jid.ts';
 import { readLidMap } from '../adapters/whatsapp/channel-state.mjs';
 
 const FIXTURES = path.join(import.meta.dirname, '..', 'adapters', 'whatsapp', 'fixtures');
