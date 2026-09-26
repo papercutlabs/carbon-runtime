@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 import { HarnessFault } from './session.mjs';
 import {
   sha256, bundleManifest, bundleSha256, assertMethodsExist, readSchemaPin

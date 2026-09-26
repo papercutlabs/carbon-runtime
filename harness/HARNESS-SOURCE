@@ -7,7 +7,7 @@ copied on           2026-09-16 (harness/codex/turn.mjs: PA-246, excludeSlashTmp 
 Copied verbatim, as whole files, with no edit of any kind:
 
   harness/codex/**        minus verifications/
-  lib/faults.mjs          the fault shape harness/codex/ imports
+  lib/faults.ts          the fault shape harness/codex/ imports
   tools/lib/mcp.mjs       the MCP server scaffold the reply tool is served by
   tools/lib/fault.mjs     what mcp.mjs imports
   tools/lib/args.mjs      what mcp.mjs imports

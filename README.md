@@ -37,7 +37,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `runtime/` | the process a unit starts: the release loop, the reply tool, the teaching tools, the tool-server launcher, the adapter registry, the per-adapter lock and the terminal latch |
 | `bin/carbon-runtime` | `run --agent-dir <dir>` on a box; every path explicit off one |
 | `harness/codex/` | a copy of the Codex harness the runtime spawns and drives; `harness/HARNESS-SOURCE` says where it came from and that nothing here edits it |
-| `lib/faults.mjs`, `tools/lib/` | the fault shape and the MCP server scaffold, copied under the same rule |
+| `lib/faults.ts`, `tools/lib/` | the fault shape and the MCP server scaffold, copied under the same rule |
 | `schema/carbon.message.v1.json` | the vendored record shape; one JSON file per record |
 | `stream/` | the store library: path derivation and containment, the write order, the two cursors, the merge, the arrivals index, the outbound records, the reply fence and the teachings |
 | `stream/adapter.md` | the adapter contract: the three capabilities, the five operations, the optional poll, the fixtures an adapter ships |

@@ -12,7 +12,7 @@
 
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 import { Connection } from './protocol.mjs';
 import { EventStream } from './events.mjs';
 

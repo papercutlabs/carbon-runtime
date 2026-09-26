@@ -47,7 +47,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
-import { fault, report } from '../lib/faults.mjs';
+import { fault, report } from '../lib/faults.ts';
 
 // ---- what the rules are ----------------------------------------------------
 
@@ -486,7 +486,7 @@ export function layerOf(rel) {
 // one place the two trees legitimately hold the same bytes, so the duplication
 // and one-direction rules step over them and the copy rule owns them instead.
 export const VENDORED = [
-  'lib/faults.mjs',
+  'lib/faults.ts',
   'tools/lib/fault.mjs',
   'tools/lib/args.mjs',
   'tools/lib/manifest.mjs',
@@ -1100,7 +1100,7 @@ function untestedSubcommands(root, modules, out, notes) {
   notes.push(`SHAPE_UNTESTED_SUBCOMMAND: ${counted} subcommands read off bin/`);
 }
 
-const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.ts', 'tools/lib/fault.mjs', 'runtime/faults.ts', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
+const FAULT_LIBRARIES = new Set(['lib/faults.ts', 'stream/faults.ts', 'tools/lib/fault.mjs', 'runtime/faults.ts', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
 
 function errorPaths(modules, out) {
   for (const module of modules.values()) {
@@ -1111,7 +1111,7 @@ function errorPaths(modules, out) {
         && t[i + 1]?.value === 'new' && t[i + 2]?.value === 'Error') {
         out.push(fault('SHAPE_ERROR_PATH', `${module.rel}:${t[i].line}`,
           'a bare `throw new Error` leaves the caller a string with no code, no subject and no fix',
-          'throw the fault shape from lib/faults.mjs, or collect it and report it with the other faults'));
+          'throw the fault shape from lib/faults.ts, or collect it and report it with the other faults'));
       }
       if (t[i].type === 'name' && t[i].value === 'catch') {
         let j = i + 1;

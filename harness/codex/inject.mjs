@@ -16,7 +16,7 @@
 // `thread/inject_items` is not one of the doors: its payload is unconstrained and
 // the pinned schema digest cannot protect it.
 
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 
 export const INJECT_FAULT_CODE = 'HARNESS_MID_TURN_INJECTION_REFUSED';
 
