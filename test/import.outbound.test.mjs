@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import {
   SOURCE, capabilities, locate, payload, recordFor, resolvedAnswers, writeBatch
 } from '../import/carbon-ledger-outbound.mjs';

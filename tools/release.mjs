@@ -37,7 +37,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { fault, report } from '../stream/faults.mjs';
+import { fault, report } from '../stream/faults.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 

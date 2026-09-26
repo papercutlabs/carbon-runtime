@@ -7,7 +7,7 @@
 //
 // There is no second directory and no index file. The list is the directory,
 // read by listing it, which is at most the declaration's teaching.max_active
-// small files. The writes go through stream/store.mjs's own temp-fsync-rename
+// small files. The writes go through stream/store.ts's own temp-fsync-rename
 // path and its resolve-under-store refusal, so a teaching record is written by
 // exactly the rule every other store write is written by.
 //
@@ -30,10 +30,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fault } from './faults.mjs';
-import { validate } from './validate.mjs';
-import { componentFaults } from './encode.mjs';
-import { StreamFault, writeAtomic } from './store.mjs';
+import { fault } from './faults.ts';
+import { validate } from './validate.ts';
+import { componentFaults } from './encode.ts';
+import { StreamFault, writeAtomic } from './store.ts';
 
 const SCHEMA = JSON.parse(fs.readFileSync(
   path.join(import.meta.dirname, '..', 'schema', 'carbon.teaching.v1.json'), 'utf8'));

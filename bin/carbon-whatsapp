@@ -11,7 +11,7 @@
 // is not run by the unit, and nothing here retries.
 
 import fs from 'node:fs';
-import { fault, report } from '../stream/faults.mjs';
+import { fault, report } from '../stream/faults.ts';
 import { isPaired } from '../adapters/whatsapp/auth-state.mjs';
 import { authState, library } from '../adapters/whatsapp/socket.mjs';
 

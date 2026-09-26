@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fault, report } from '../stream/faults.mjs';
+import { fault, report } from '../stream/faults.ts';
 
 const HERE = path.resolve(import.meta.dirname);
 const WORDS = path.join(HERE, 'denied-words.sha256');

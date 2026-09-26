@@ -46,6 +46,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { stripTypeScriptTypes } from 'node:module';
 import { fault, report } from '../lib/faults.mjs';
 
 // ---- what the rules are ----------------------------------------------------
@@ -265,9 +266,8 @@ function matchBrace(tokens, at) {
 const quoted = (t) => (t && t.type === 'string' ? t.value.slice(1, -1) : null);
 
 // Imports, exports and functions, read off the tokens.
-export function readModule(source) {
-  const all = tokenize(source);
-  const t = code(all);
+export function readModule(source, { typescript = false } = {}) {
+  let t = code(tokenize(source));
   const imports = [];
   const exports_ = [];
   const functions = [];
@@ -327,6 +327,12 @@ export function readModule(source) {
       }
     }
   }
+
+  // Keep imports (including type-only dependencies) above. For executable rules,
+  // Node's strip-only mode removes annotations without moving lines or columns.
+  // This is the same syntax the runtime executes; unsupported syntax must fail,
+  // never silently turn a typed function into an unmeasured one.
+  if (typescript) t = code(tokenize(stripTypeScriptTypes(source, { mode: 'strip' })));
 
   // Functions: the `function` keyword, and arrow functions with a block body.
   // Both are located by their body's braces, so a nested function is found too
@@ -452,8 +458,7 @@ const isTest = (rel) => rel.startsWith('test/') || rel.startsWith('conformance/'
 // Which repository is this. The private half has the installer and the host
 // contract; the public half has the store library. Neither has the other's.
 export function repoKindOf(root) {
-  if (fs.existsSync(path.join(root, 'stream', 'store.mjs'))
-    || fs.existsSync(path.join(root, 'stream', 'store.ts'))) return 'runtime';
+  if (fs.existsSync(path.join(root, 'stream', 'store.ts'))) return 'runtime';
   if (fs.existsSync(path.join(root, 'lib', 'install.mjs'))
     || fs.existsSync(path.join(root, 'lib', 'install.ts'))) return 'core';
   return null;
@@ -501,7 +506,7 @@ export function analyse(root) {
   const modules = new Map();
   for (const rel of files) {
     const source = fs.readFileSync(path.join(root, rel), 'utf8');
-    const module = readModule(source);
+    const module = readModule(source, { typescript: rel.endsWith('.ts') });
     const lines = source.split('\n');
     modules.set(rel, {
       rel,
@@ -1090,7 +1095,7 @@ function untestedSubcommands(root, modules, out, notes) {
   notes.push(`SHAPE_UNTESTED_SUBCOMMAND: ${counted} subcommands read off bin/`);
 }
 
-const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.mjs', 'tools/lib/fault.mjs', 'runtime/faults.mjs', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
+const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.ts', 'tools/lib/fault.mjs', 'runtime/faults.mjs', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
 
 function errorPaths(modules, out) {
   for (const module of modules.values()) {

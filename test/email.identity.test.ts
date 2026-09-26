@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store, StreamFault } from '../stream/store.mjs';
+import { Store, StreamFault } from '../stream/store.ts';
 import { ingest } from '../conformance/cases.mjs';
 import * as adapter from '../adapters/email/index.ts';
 import { TransportFault } from '../adapters/email/curl.ts';
@@ -14,7 +14,7 @@ import type { EmailChannelInput, EmailContext, EmailItem, EmailRecord, OutboundE
 const ACCOUNT = 'agent-01@example.test';
 
 function context(overrides: { channel?: EmailChannelInput } = {}): EmailContext {
-  const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-id-')), 'store'));
+  const store = Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-id-')), 'store'));
   return {
     store, adapter,
     agent: 'agent-01',

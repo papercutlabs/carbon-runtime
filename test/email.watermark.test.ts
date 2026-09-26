@@ -9,11 +9,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { ingest } from '../conformance/cases.mjs';
 import * as adapter from '../adapters/email/index.ts';
 import { TransportFault } from '../adapters/email/curl.ts';
-import type { ImapEmailContext } from '../adapters/email/index.ts';
+import type { EmailRecord, ImapEmailContext } from '../adapters/email/index.ts';
 
 const HERE = import.meta.dirname;
 const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
@@ -31,7 +31,7 @@ function recordedAs(changes: Record<string, string | Buffer> = {}): string {
 
 function context(recorded: string): ImapEmailContext {
   process.env.CARBON_EMAIL_RECORDED = recorded;
-  const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-wm-')), 'store'));
+  const store = Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-wm-')), 'store'));
   return {
     store, adapter,
     agent: 'agent-01',

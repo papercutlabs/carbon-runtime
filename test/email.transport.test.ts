@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store, StreamFault } from '../stream/store.mjs';
+import { Store, StreamFault } from '../stream/store.ts';
 import { ingest } from '../conformance/cases.mjs';
 import * as adapter from '../adapters/email/index.ts';
 import { STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../adapters/email/curl.ts';
@@ -32,7 +32,7 @@ function recordedAs(changes: Record<string, string | Buffer> = {}): string {
 
 function context(recorded = RECORDED, channel: EmailChannelInput & { inbound?: undefined } = {}): ImapEmailContext {
   process.env.CARBON_EMAIL_RECORDED = recorded;
-  const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-tx-')), 'store'));
+  const store = Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-tx-')), 'store'));
   return {
     store, adapter,
     agent: 'agent-01',
@@ -166,6 +166,7 @@ test('the outbound record is on disk as pending before the transport is called',
   const running = context();
   const { written } = pending(running);
   const onDisk = running.store.read(written.record.conversation_id, written.record.message_id, 0);
+  assert.ok(onDisk, 'the written reply is present in the store');
   assert.ok(hasDelivery(onDisk));
   assert.equal(onDisk.delivery.status, 'pending');
   assert.equal(onDisk.delivery.chunk_ids, undefined);

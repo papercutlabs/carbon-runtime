@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fault, RuntimeFault, EXIT } from './faults.mjs';
-import { encodeComponent } from '../stream/encode.mjs';
+import { encodeComponent } from '../stream/encode.ts';
 
 // What `ps` says about a pid, or null when there is no such process. Reading our
 // own command line the same way is deliberate: the two strings are then produced

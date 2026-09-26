@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { fault, RuntimeFault, EXIT } from './faults.mjs';
-import { StreamFault } from '../stream/store.mjs';
+import { StreamFault } from '../stream/store.ts';
 import { listTeachings, teachingsUnderRelease } from '../stream/teachings.mjs';
 import { latch } from './latch.mjs';
 import { REPLY_SERVER_NAME } from './reply-tool.mjs';

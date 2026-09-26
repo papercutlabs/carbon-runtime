@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import * as adapter from '../adapters/telegram/index.mjs';
 import { ingest } from '../conformance/cases.mjs';
 import { mediaOf, senderOf } from '../adapters/telegram/content.mjs';

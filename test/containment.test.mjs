@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store, StreamFault } from '../stream/store.mjs';
-import { componentFaults, encodeComponent, decodeComponent, resolveUnderStore } from '../stream/encode.mjs';
+import { Store, StreamFault } from '../stream/store.ts';
+import { componentFaults, encodeComponent, decodeComponent, resolveUnderStore } from '../stream/encode.ts';
 
 const ACCOUNT = 'agent-01@examplecorp.test';
 

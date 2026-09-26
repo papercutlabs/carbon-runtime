@@ -20,8 +20,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeAtomic, StreamFault } from '../stream/store.mjs';
-import { componentFaults, encodeComponent, decodeComponent } from '../stream/encode.mjs';
+import { writeAtomic, StreamFault } from '../stream/store.ts';
+import { componentFaults, encodeComponent, decodeComponent } from '../stream/encode.ts';
 
 const DIR_MODE = 0o700;
 

@@ -5,10 +5,10 @@
 // placed on the channel, written to disk, or included in a fault.
 
 import fs from 'node:fs';
-import { fault } from '../../stream/faults.mjs';
+import { fault } from '../../stream/faults.ts';
 import { TransportFault } from './curl.ts';
 
-type EmailFault = { code: string; subject: string; problem: string; fix: string };
+type EmailFault = { code: string; subject: string; problem: unknown; fix: string };
 type TransportDetails = { status?: number };
 type AgentMailChannel = {
   netrc?: string;
@@ -58,7 +58,7 @@ const DEFAULT_API_HOST = 'api.agentmail.to';
 const DEFAULT_LIST_LIMIT = 100;
 const CALL_TIMEOUT_MS = 60000;
 
-export class AgentMailFault extends TransportFault {
+export class AgentMailFault extends TransportFault<unknown> {
   constructor(faults: EmailFault[], transport: TransportDetails = {}) {
     super(faults, transport);
     this.name = 'AgentMailFault';
@@ -81,7 +81,7 @@ function readNetrc(file: string | undefined) {
   }
 }
 
-function errorDetails(error: unknown) {
+function errorDetails(error: unknown): { code?: unknown; message?: unknown } {
   if (typeof error !== 'object' || error === null) return {};
   return {
     ...('code' in error ? { code: error.code } : {}),
@@ -89,7 +89,7 @@ function errorDetails(error: unknown) {
   };
 }
 
-function quotedToken(text: string, start: number, file: string | undefined) {
+function quotedToken(text: string, start: number, file: string) {
   let value = '';
   for (let i = start + 1; i < text.length; i++) {
     const char = text[i];
@@ -109,7 +109,7 @@ function quotedToken(text: string, start: number, file: string | undefined) {
     'close the quoted value before the end of the file')]);
 }
 
-function netrcTokens(text: string, file: string | undefined) {
+function netrcTokens(text: string, file: string) {
   const tokens = [];
   let at = 0;
   while (at < text.length) {
@@ -152,7 +152,9 @@ export function readNetrcPassword(file: string | undefined, machine: string | un
       'the AgentMail REST transport needs the IMAP machine name whose password is its API key',
       'declare transport.imap_host as the AgentMail IMAP host')]);
   }
-  const tokens = netrcTokens(readNetrc(file), file);
+  const text = readNetrc(file);
+  // readNetrc has already refused an absent path, so retain that original path in later fault subjects.
+  const tokens = netrcTokens(text, file!);
   let at = -1;
   for (let i = 0; i < tokens.length - 1; i++) {
     if (tokens[i] === 'machine' && tokens[i + 1] === machine) { at = i + 2; break; }

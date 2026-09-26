@@ -8,8 +8,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { fault, report } from '../stream/faults.mjs';
-import { Store, StreamFault } from '../stream/store.mjs';
+import { fault, report } from '../stream/faults.ts';
+import { Store, StreamFault } from '../stream/store.ts';
 import { CASES, casesFor, rebuildAgainstIndex } from '../conformance/cases.mjs';
 
 const TOP_HELP = `carbon-stream — check an adapter, or a live store, against the stream contract

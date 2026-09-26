@@ -7,8 +7,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fault, report } from '../stream/faults.mjs';
-import { Store, StreamFault } from '../stream/store.mjs';
+import { fault, report } from '../stream/faults.ts';
+import { Store, StreamFault } from '../stream/store.ts';
 import { open as openExport, ZipFault } from '../import/zip.mjs';
 import { mimeOf, writeBatch } from '../import/carbon-capture-whatsapp.mjs';
 import * as ledger from '../import/carbon-ledger-sqlite.mjs';

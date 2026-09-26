@@ -12,7 +12,7 @@ import { writeConnectionState } from './channel-state.mjs';
 import { EXIT_TERMINAL_AUTH, latchFaults, terminalReason, writeLatch } from './latch.mjs';
 import { isPaired, makeTransactionalAuthState } from './auth-state.mjs';
 import { read } from './content.mjs';
-import { report } from '../../stream/faults.mjs';
+import { report } from '../../stream/faults.ts';
 
 const LIBRARY = '@whiskeysockets/baileys';
 

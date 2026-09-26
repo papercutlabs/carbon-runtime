@@ -32,9 +32,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeAtomic, StreamFault } from '../../stream/store.mjs';
-import { fault } from '../../stream/faults.mjs';
-import { componentFaults, encodeComponent } from '../../stream/encode.mjs';
+import { writeAtomic, StreamFault } from '../../stream/store.ts';
+import { fault } from '../../stream/faults.ts';
+import { componentFaults, encodeComponent } from '../../stream/encode.ts';
 
 export const EXIT_TERMINAL_AUTH = 78;
 

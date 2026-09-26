@@ -14,7 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { fault, report, RuntimeFault, EXIT } from './faults.mjs';
 import { refuseIfLatched } from './latch.mjs';
 import { takeLock, releaseLock } from './lock.mjs';

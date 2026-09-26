@@ -24,8 +24,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createServer } from '../tools/lib/mcp.mjs';
-import { StreamFault } from '../stream/store.mjs';
-import { fault } from '../stream/faults.mjs';
+import { StreamFault } from '../stream/store.ts';
+import { fault } from '../stream/faults.ts';
 import { managementConversationOf } from './channel.mjs';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';

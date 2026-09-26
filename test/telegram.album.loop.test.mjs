@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { ReleaseLoop } from '../runtime/loop.mjs';
 import { resolveChannel } from '../runtime/channel.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';

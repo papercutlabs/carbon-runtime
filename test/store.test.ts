@@ -5,22 +5,24 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { Store, StreamFault, mergeRecords } from '../stream/store.mjs';
+import { Store, StreamFault, mergeRecords, type Attachment, type MessageRecord } from '../stream/store.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CHECK = path.join(ROOT, 'bin', 'carbon-stream');
 const ACCOUNT = 'agent-01@examplecorp.test';
 const CONVERSATION = `${ACCOUNT}:room-7`;
 
-function open() {
-  return Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-store-')), 'store'));
+type TestRecord = MessageRecord<Attachment>;
+
+function open(): Store<TestRecord> {
+  return Store.open<TestRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-store-')), 'store'));
 }
 
-function sha256(text) {
+function sha256(text: string): string {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-function inbound(overrides = {}) {
+function inbound(overrides: Partial<TestRecord> = {}): TestRecord {
   return {
     schema: 'carbon.message.v1',
     agent: 'agent-01',
@@ -43,7 +45,7 @@ function inbound(overrides = {}) {
   };
 }
 
-function outbound(overrides = {}) {
+function outbound(overrides: Partial<TestRecord> = {}): TestRecord {
   return inbound({
     message_id: `${CONVERSATION}:out-0001`,
     platform_message_id: 'out-0001',
@@ -56,7 +58,7 @@ function outbound(overrides = {}) {
   });
 }
 
-function faultCodes(run) {
+function faultCodes(run: () => unknown): string[] {
   try {
     run();
   } catch (error) {
@@ -84,6 +86,7 @@ test('the request_id fence: sent returns the stored chunk ids, pending and unkno
   store.capture(inbound());
 
   const first = store.reply(outbound());
+  assert.ok(first.fenced === null);
   assert.equal(first.record.delivery.status, 'pending');
 
   assert.deepEqual(faultCodes(() => store.reply(outbound())), ['REQUEST_ALREADY_PENDING']);
@@ -159,7 +162,9 @@ test('a live store passes the rebuild against the index through the command', ()
 test('a thread file is written per unit of work, named by the unit id', () => {
   const store = open();
   store.writeThread('case-4711', { thread_id: 'thread-1', started_at: '2026-09-10T09:00:00.000Z' });
-  assert.equal(store.readThread('case-4711').thread_id, 'thread-1');
+  const thread = store.readThread('case-4711');
+  assert.ok(thread);
+  assert.equal(thread.thread_id, 'thread-1');
   assert.equal(store.readThread('case-4712'), null);
 });
 
@@ -168,4 +173,40 @@ test('there is no delete path: the store library exposes none', () => {
   for (const name of Object.getOwnPropertyNames(Object.getPrototypeOf(store))) {
     assert.doesNotMatch(name, /delete|remove|expire|drop/i, `${name} is a way to lose a client's record`);
   }
+});
+
+test('parking a captured-only record preserves extensions without promising captured-only state', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-park-state-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const record: TestRecord & { disposition: 'captured'; sender_name: string } = {
+    ...inbound(), disposition: 'captured', sender_name: 'Ada'
+  };
+  const store = Store.open<typeof record>(path.join(dir, 'store'));
+  const result = store.park(record, 'unreadable');
+  // This fails strict checking if park ever claims the input's captured-only subtype.
+  const capturedOnly: typeof result.record.disposition extends 'captured' ? true : false = false;
+  const sender: string = result.record.sender_name;
+  assert.equal(capturedOnly, false);
+  assert.equal(sender, 'Ada');
+  assert.equal(result.record.disposition, 'parked');
+  assert.equal(result.record.adapter_fields?.park_reason, 'unreadable');
+  assert.equal(JSON.parse(fs.readFileSync(result.file, 'utf8')).disposition, 'parked');
+});
+
+test('reply refuses an inherited outbound direction without writing a record or request', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-reply-prototype-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = Store.open<TestRecord>(path.join(dir, 'store'));
+  store.capture(inbound());
+  const record = outbound();
+  Reflect.deleteProperty(record, 'direction');
+  Object.setPrototypeOf(record, { direction: 'outbound' });
+  assert.throws(() => store.reply(record), (error: unknown) => {
+    assert.ok(error instanceof StreamFault);
+    assert.deepEqual(error.faults.map(({ code, subject }) => ({ code, subject })),
+      [{ code: 'FIELD_MISSING', subject: '$.direction' }]);
+    return true;
+  });
+  assert.equal(fs.existsSync(store.paths(record).record), false);
+  assert.equal(store.readRequest('req-0001'), null);
 });

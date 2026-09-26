@@ -7,7 +7,7 @@
 // before anything started, the harness child dying, another runtime already
 // holding the lock, and the terminal latch.
 
-import { fault, report } from '../stream/faults.mjs';
+import { fault, report } from '../stream/faults.ts';
 
 export { fault, report };
 
