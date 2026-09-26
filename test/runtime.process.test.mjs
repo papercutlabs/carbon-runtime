@@ -17,7 +17,7 @@ import {
 import { serveReplyTool } from '../runtime/reply-tool.mjs';
 import { Store } from '../stream/store.ts';
 import { fakeHarness } from './fake-harness.mjs';
-import * as fixture from '../adapters/fixture/index.mjs';
+import * as fixture from '../adapters/fixture/index.ts';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
