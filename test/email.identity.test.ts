@@ -6,14 +6,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store, StreamFault } from '../stream/store.ts';
-import { ingest } from '../conformance/cases.mjs';
+import { ingest } from '../conformance/cases.ts';
 import * as adapter from '../adapters/email/index.ts';
 import { TransportFault } from '../adapters/email/curl.ts';
 import type { EmailChannelInput, EmailContext, EmailItem, EmailRecord, OutboundEmailRecord } from '../adapters/email/index.ts';
 
 const ACCOUNT = 'agent-01@example.test';
 
-function context(overrides: { channel?: EmailChannelInput } = {}): EmailContext {
+function context(overrides: { channel?: EmailChannelInput } = {}): EmailContext & { store: Store<EmailRecord>; adapter: typeof adapter } {
   const store = Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-id-')), 'store'));
   return {
     store, adapter,
@@ -97,8 +97,10 @@ test('a stranger is a contact, a person at our own mailbox is the operator and h
   })]);
   assert.equal(operator.record.role, 'operator');
   assert.equal(operator.record.direction, 'inbound');
-  assert.equal(operator.record.hold.release_after_ms, 3600000);
-  assert.equal(running.store.isHeld(contact.record.conversation_id, Date.parse(operator.record.hold.set_at) + 1), true);
+  // This operator fixture supplies a hold; a missing hold must still fail at the original read.
+  assert.equal(operator.record.hold!.release_after_ms, 3600000);
+  // Read the hold created by this operator fixture without adding a fallback.
+  assert.equal(running.store.isHeld(contact.record.conversation_id, Date.parse(operator.record.hold!.set_at) + 1), true);
 });
 
 test('the agent\'s own sent mail, coming back, is the agent and holds nothing', () => {
@@ -155,7 +157,8 @@ test('a reply carries In-Reply-To and References from the inbound, not from the 
   const [second] = ingest(running, [item({
     id: 'reply-f@example.test', subject: 'Re: August invoice', references: ['root-f@example.test']
   })]);
-  const references = adapter.referencesFor(second.record);
+  // This valid reply fixture produces an email capture; retain referencesFor’s existing read of it.
+  const references = adapter.referencesFor(second.record as EmailRecord);
   assert.deepEqual(references, ['root-f@example.test', 'reply-f@example.test']);
   const built = adapter.buildMessage({
     from: ACCOUNT, to: ['ada@example.test'], subject: 'Re: August invoice',

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
-import { ingest } from '../conformance/cases.mjs';
+import { ingest } from '../conformance/cases.ts';
 import { ReleaseLoop } from '../runtime/loop.ts';
 import { pollState } from '../runtime/poll.ts';
 import { fakeHarness } from './fake-harness.ts';
@@ -27,7 +27,7 @@ function netrcFile(body: string): string {
   return file;
 }
 
-function context(): AgentMailEmailContext & { store: Store<EmailRecord>; channel: AgentMailEmailContext['channel'] & { kind: string; account: string } } {
+function context(): AgentMailEmailContext & { store: Store<EmailRecord>; adapter: typeof adapter; channel: AgentMailEmailContext['channel'] & { kind: string; account: string } } {
   return {
     store: Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-agentmail-')), 'store')),
     adapter,
@@ -197,14 +197,17 @@ test('list pagination and full fetch produce the existing email capture and hold
     assert.equal(contact.conversation_id, `${ACCOUNT}:root@example.test`);
     assert.notEqual(contact.conversation_id, `${ACCOUNT}:provider-thread-id-is-not-carbon-identity`);
     assert.equal(contact.attachments.length, 1);
-    assert.equal(fs.readFileSync(running.store.under(contact.attachments[0].file), 'utf8'), 'file');
+    // The recorded attachment should have been written; the raw field is consumed only as this read path.
+    assert.equal(fs.readFileSync(running.store.under((contact.attachments[0] as { file: string }).file), 'utf8'), 'file');
 
     const operator = written[1].record;
     assert.equal(operator.role, 'operator');
     assert.equal(operator.reply_to, 'root@example.test');
     assert.equal(operator.conversation_id, contact.conversation_id);
-    assert.equal(operator.hold.release_after_ms, 3600000);
-    assert.equal(running.store.isHeld(contact.conversation_id, Date.parse(operator.hold.set_at) + 1), true);
+    // This operator fixture should create a hold; preserve the original missing-hold failure.
+    assert.equal(operator.hold!.release_after_ms, 3600000);
+    // Read the fixture hold time at the existing Date.parse operation, without a default.
+    assert.equal(running.store.isHeld(contact.conversation_id, Date.parse(operator.hold!.set_at) + 1), true);
 
     server.makeEmpty();
     const again = await adapter.poll(running);

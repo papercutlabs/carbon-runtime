@@ -10,7 +10,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { fault, report } from '../stream/faults.ts';
 import { Store, StreamFault } from '../stream/store.ts';
-import { CASES, casesFor, rebuildAgainstIndex } from '../conformance/cases.mjs';
+import { CASES, casesFor, rebuildAgainstIndex } from '../conformance/cases.ts';
 
 const TOP_HELP = `carbon-stream — check an adapter, or a live store, against the stream contract
 
@@ -145,7 +145,7 @@ function reportError(error) {
   else {
     report([fault('CASE_FAILED', error.name ?? 'error',
       (error.message ?? String(error)).split('\n')[0],
-      'read the case in conformance/cases.mjs and the adapter it ran against')]);
+      'read the case in conformance/cases.ts and the adapter it ran against')]);
   }
 }
 

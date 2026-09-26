@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fault, report } from '../stream/faults.ts';
 import { Store, StreamFault } from '../stream/store.ts';
-import { ingest } from '../conformance/cases.mjs';
+import { ingest } from '../conformance/cases.ts';
 import * as adapter from '../adapters/email/index.ts';
 import { TransportFault, listMailboxes, sendMessage } from '../adapters/email/curl.ts';
 

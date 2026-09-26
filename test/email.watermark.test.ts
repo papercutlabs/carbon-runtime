@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
-import { ingest } from '../conformance/cases.mjs';
+import { ingest } from '../conformance/cases.ts';
 import * as adapter from '../adapters/email/index.ts';
 import { TransportFault } from '../adapters/email/curl.ts';
 import type { EmailRecord, ImapEmailContext } from '../adapters/email/index.ts';
@@ -29,7 +29,7 @@ function recordedAs(changes: Record<string, string | Buffer> = {}): string {
   return dir;
 }
 
-function context(recorded: string): ImapEmailContext {
+function context(recorded: string): ImapEmailContext & { store: Store<EmailRecord>; adapter: typeof adapter } {
   process.env.CARBON_EMAIL_RECORDED = recorded;
   const store = Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-wm-')), 'store'));
   return {

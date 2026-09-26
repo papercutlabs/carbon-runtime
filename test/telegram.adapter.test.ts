@@ -24,7 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
 import * as adapter from '../adapters/telegram/index.ts';
-import { ingest } from '../conformance/cases.mjs';
+import { ingest } from '../conformance/cases.ts';
 import { mediaOf, senderOf } from '../adapters/telegram/content.ts';
 
 const FIXTURES = path.join(import.meta.dirname, '..', 'adapters', 'telegram', 'fixtures');
@@ -126,7 +126,8 @@ test('every item of an album is its own record, and each carries the group id', 
   const ids = written.map((one) => one.record.message_id);
   assert.equal(new Set(ids).size, 3);
   for (const one of written) {
-    assert.equal(one.record.adapter_fields.media_group_id, '13500000000000001');
+    // The album fixture supplies these extension fields; keep the original missing-object failure.
+    assert.equal(one.record.adapter_fields!.media_group_id, '13500000000000001');
   }
   assert.equal(written[0].record.body, 'The three pages of the signed order.');
   assert.equal(written[1].record.body, '', 'only the first item of an album carries the caption');
@@ -147,8 +148,10 @@ test('a caption is the body of a message that carries a file', () => {
   const c = context();
   const [document] = ingest(c, fixture('attachment.json').slice(0, 1));
   assert.equal(document.record.body, 'The invoice is attached.');
-  assert.equal(document.record.attachments[0].filename, 'august-invoice.txt');
-  assert.equal(document.record.adapter_fields.file_name, 'august-invoice.txt');
+  // Read the raw attachment filename only for the existing equality assertion.
+  assert.equal((document.record.attachments[0] as { filename?: unknown }).filename, 'august-invoice.txt');
+  // The document fixture supplies this extension object; preserve the original missing-object failure.
+  assert.equal(document.record.adapter_fields!.file_name, 'august-invoice.txt');
 });
 
 // ---- who is who --------------------------------------------------------------
@@ -157,7 +160,8 @@ test('a sender the declaration names as an operator holds the agent, and nobody 
   const c = context();
   const [operator] = ingest(c, fixture('operator.json'));
   assert.equal(operator.record.role, 'operator');
-  assert.equal(operator.record.hold.release_after_ms, 3600000);
+  // This declared operator fixture should create a hold; do not mask its absence.
+  assert.equal(operator.record.hold!.release_after_ms, 3600000);
 
   const [contact] = ingest(c, fixture('inbound.json').slice(0, 1));
   assert.equal(contact.record.role, 'contact');
@@ -177,11 +181,12 @@ test('a chat the declaration does not name is captured and never answered', () =
   const [stranger] = ingest(c, fixture('stranger.json'));
   assert.equal(stranger.record.disposition, 'policy-drop');
   assert.equal(stranger.record.body, 'Hello, is this thing on?');
+  // send refuses this foreign chat before attachments matter; the assertion passes the original object unchanged.
   assert.throws(() => adapter.send(c, {
     ...stranger.record,
     conversation_id: `${c.account}:123123123`,
     delivery: { request_id: 'req-stranger', status: 'pending' }
-  }), (error) => (error as TelegramFault).faults[0].code === 'CHAT_NOT_DECLARED');
+  } as Reply & { delivery: { request_id: string; status: string } }), (error) => (error as TelegramFault).faults[0].code === 'CHAT_NOT_DECLARED');
 });
 
 test('the word any answers whoever writes, and a list answers only the chats it names', () => {
