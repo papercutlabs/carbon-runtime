@@ -7,8 +7,8 @@
 
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { fault, report } from '../stream/faults.mjs';
-import { Store, StreamFault } from '../stream/store.mjs';
+import { fault, report } from '../stream/faults.ts';
+import { Store, StreamFault } from '../stream/store.ts';
 import { SOURCE, payload, resolvedAnswers, writeEntries } from './carbon-ledger-outbound.mjs';
 import { outboundFaults, toleranceMs } from './outbound-mapping.mjs';
 import {

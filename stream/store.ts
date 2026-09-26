@@ -18,7 +18,7 @@
 //   teachings/<id>.json                   one thing the client taught this agent
 //   seq                                   the store's monotonic ordinal
 //
-// <C>, <M>, <U> and <R> are encoded by stream/encode.mjs, which also refuses an
+// <C>, <M>, <U> and <R> are encoded by stream/encode.ts, which also refuses an
 // identifier shaped like an escape before anything is written.
 //
 // The write order is the contract: the raw payload is appended and fsynced, the
@@ -30,11 +30,80 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fault } from './faults.mjs';
-import { validate } from './validate.mjs';
-import { componentFaults, encodeComponent, resolveUnderStore } from './encode.mjs';
+import { fault, type Fault } from './faults.ts';
+import { validate, type JsonSchema } from './validate.ts';
+import { componentFaults, encodeComponent, resolveUnderStore } from './encode.ts';
 
-const SCHEMA = JSON.parse(fs.readFileSync(
+export type MessageDisposition = 'captured' | 'held' | 'parked' | 'policy-drop' | 'unsupported' | 'permanent-error';
+export type MessageRole = 'contact' | 'operator' | 'agent' | 'system';
+export type Delivery = {
+  request_id: string;
+  status: string;
+  text_sha256?: string;
+  chunk_ids?: string[];
+  completed_at?: string;
+  [key: string]: unknown;
+};
+export type MessageRecord<TAttachment = unknown> = {
+  [key: string]: unknown;
+  schema: string;
+  agent: string;
+  source: string;
+  account: string;
+  conversation_id: string;
+  conversation_kind: string;
+  message_id: string;
+  platform_message_id: string;
+  revision: number;
+  direction: 'inbound' | 'outbound';
+  role: MessageRole;
+  sender_id: string;
+  sender_name?: string;
+  received_at: string;
+  sent_at?: string;
+  body: string;
+  attachments: TAttachment[];
+  historical: boolean;
+  disposition: MessageDisposition;
+  hold?: { reason: string; set_at: string; release_after_ms?: number };
+  release?: { released_at: string; thread_id: string; turn_id: string; completed_at?: string };
+  delivery?: Delivery;
+  adapter_fields?: Record<string, unknown>;
+  raw?: string;
+  reply_to?: string;
+};
+export type Attachment = {
+  file: string;
+  mime: string;
+  bytes: number;
+  sha256: string;
+  download_failed?: boolean;
+  filename?: string;
+};
+type MessageIdentity = Pick<MessageRecord, 'conversation_id' | 'message_id'> & { revision?: number };
+type RecordPaths = { conversationDir: string; record: string; raw: string; attachments: string };
+type CaptureOptions<T extends MessageRecord> = {
+  raw?: string;
+  cursor?: { kind: 'message' | 'revision'; position: string };
+  disposition?: T['disposition'];
+};
+type CaptureResult<T extends MessageRecord> = { file: string; seq: number; merged: boolean; record: T };
+type CursorState = { message: string | null; revision: string | null };
+type ReplyRequest = {
+  request_id: string;
+  status: string;
+  conversation_id: string;
+  message_id: string;
+  revision?: number;
+  chunk_ids?: string[];
+};
+type ThreadRecord = { unit_id: string; [key: string]: unknown };
+type ReplyOutcome<T extends MessageRecord> =
+  | { fenced: 'sent'; chunk_ids: string[]; message_id: string }
+  | { fenced: null; record: T & { direction: 'outbound'; delivery: Delivery }; file: string };
+
+// JSON.parse has no schema type; this checked-in JSON Schema is consumed by the validator below.
+const SCHEMA: JsonSchema = JSON.parse(fs.readFileSync(
   path.join(import.meta.dirname, '..', 'schema', 'carbon.message.v1.json'), 'utf8'));
 
 const DIR_MODE = 0o700;
@@ -45,21 +114,23 @@ const FILE_MODE = 0o600;
 // one of them a merging source is that it is an import, not which import it is.
 const MERGING_PREFIX = 'import:';
 
-function merges(source) {
+function merges(source: unknown): boolean {
   return typeof source === 'string' && source.startsWith(MERGING_PREFIX);
 }
 
 let tempCounter = 0;
 
 export class StreamFault extends Error {
-  constructor(faults) {
+  declare readonly faults: Fault[];
+
+  constructor(faults: Fault[]) {
     super(faults.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('\n'));
     this.name = 'StreamFault';
     this.faults = faults;
   }
 }
 
-function fsyncDir(dir) {
+function fsyncDir(dir: string): void {
   const fd = fs.openSync(dir, 'r');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
@@ -69,7 +140,7 @@ function fsyncDir(dir) {
 // is written by the same rule as a record: temp, fsync, rename, fsync the
 // directory. There is one write order in this library and no adapter invents a
 // second one.
-export function writeAtomic(file, data, mode = FILE_MODE) {
+export function writeAtomic(file: string, data: string | Uint8Array, mode = FILE_MODE): void {
   const dir = path.dirname(file);
   const temp = path.join(dir, `.temp-${process.pid}-${tempCounter++}`);
   const fd = fs.openSync(temp, 'wx', mode);
@@ -83,7 +154,7 @@ export function writeAtomic(file, data, mode = FILE_MODE) {
   fsyncDir(dir);
 }
 
-function appendFsync(file, data, mode = FILE_MODE) {
+function appendFsync(file: string, data: string | Uint8Array, mode = FILE_MODE): void {
   const existed = fs.existsSync(file);
   const fd = fs.openSync(file, 'a', mode);
   try {
@@ -95,32 +166,34 @@ function appendFsync(file, data, mode = FILE_MODE) {
   if (!existed) fsyncDir(path.dirname(file));
 }
 
-function mkdirp(dir) {
+function mkdirp(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
 }
 
-function sha256(buffer) {
+function sha256(buffer: Uint8Array): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-function millis(stamp) {
+function millis(stamp: string): number | null {
   const value = Date.parse(stamp);
   return Number.isNaN(value) ? null : value;
 }
 
-export function recordFileName(encodedMessageId, revision) {
+export function recordFileName(encodedMessageId: string, revision: number): string {
   return revision === 0 ? `${encodedMessageId}.json` : `${encodedMessageId}.${revision}.json`;
 }
 
-export class Store {
-  constructor(dir) {
+export class Store<TRecord extends MessageRecord = MessageRecord> {
+  declare dir: string;
+
+  constructor(dir: string) {
     this.dir = path.resolve(dir);
   }
 
   // Open a store, creating the tree if it is not there. The store directory is
   // 0700 because everything under it is the client's.
-  static open(dir) {
-    const store = new Store(dir);
+  static open<TRecord extends MessageRecord = MessageRecord>(dir: string): Store<TRecord> {
+    const store = new Store<TRecord>(dir);
     mkdirp(store.dir);
     fs.chmodSync(store.dir, DIR_MODE);
     for (const sub of ['captures', 'cursors', 'threads', 'teachings', path.join('outbound', 'requests')]) {
@@ -129,17 +202,17 @@ export class Store {
     return store;
   }
 
-  under(...components) {
+  under(...components: string[]): string {
     return resolveUnderStore(this.dir, ...components);
   }
 
-  relative(file) {
+  relative(file: string): string {
     return path.relative(this.dir, file);
   }
 
   // ---- ordinals -----------------------------------------------------------
 
-  nextSeq() {
+  nextSeq(): number {
     const file = this.under('seq');
     let value = 0;
     try { value = Number(fs.readFileSync(file, 'utf8').trim()) || 0; } catch { value = 0; }
@@ -152,7 +225,7 @@ export class Store {
 
   // Every path the store derives goes through here, so the refusal and the
   // encoding cannot be skipped by a caller that builds a path itself.
-  paths(record) {
+  paths(record: MessageIdentity): RecordPaths {
     const faults = [
       ...componentFaults('conversation_id', record.conversation_id),
       ...componentFaults('message_id', record.message_id)
@@ -179,7 +252,7 @@ export class Store {
   // options.cursor    { kind: 'message' | 'revision', position } advanced last,
   //                   and advanced even when the record write throws
   // options.disposition  written as its own step after the record
-  capture(record, options = {}) {
+  capture<T extends TRecord>(record: T, options: CaptureOptions<T> = {}): CaptureResult<T> {
     const faults = validate(SCHEMA, record, '$', 'carbon.message.v1');
     if (faults.length > 0) throw new StreamFault(faults);
 
@@ -193,9 +266,10 @@ export class Store {
       }
 
       let merged = false;
-      let written = record;
+      let written: T = record;
       if (fs.existsSync(places.record)) {
-        const existing = JSON.parse(fs.readFileSync(places.record, 'utf8'));
+        // Store records were schema-validated when captured; JSON.parse itself carries no record type.
+        const existing: T = JSON.parse(fs.readFileSync(places.record, 'utf8'));
         if (existing.source !== record.source && !merges(record.source)) {
           throw new StreamFault([fault('MESSAGE_ID_CLAIMED', record.message_id,
             `this message_id is already written by the adapter whose source is ${existing.source}`,
@@ -223,9 +297,13 @@ export class Store {
   }
 
   // A payload nothing can parse is kept where it landed and never delivered.
-  park(record, reason, options = {}) {
-    const parked = { ...record, disposition: 'parked' };
-    parked.adapter_fields = { ...(record.adapter_fields ?? {}), park_reason: reason };
+  park(record: TRecord, reason: string, options: CaptureOptions<TRecord> = {}): CaptureResult<TRecord> {
+    // The park path preserves a caller's record extension fields while adding the schema's parked disposition.
+    const parked = {
+      ...record,
+      disposition: 'parked' as const,
+      adapter_fields: { ...(record.adapter_fields ?? {}), park_reason: reason }
+    } as TRecord;
     return this.capture(parked, options);
   }
 
@@ -233,11 +311,12 @@ export class Store {
   // what keeps one record the runtime cannot handle from stopping the channel:
   // the fault is written on the record where the next reader looks for it, the
   // record is never released again, and the loop moves to the next one.
-  parkFailed(record, faults, { reason = null } = {}) {
-    const all = Array.isArray(faults) ? faults : [faults];
+  parkFailed(record: TRecord, faults: Fault | Fault[], { reason = null }: { reason?: string | null } = {}): MessageRecord {
+    const all: Fault[] = Array.isArray(faults) ? faults : [faults];
     const places = this.paths(record);
-    const on_disk = JSON.parse(fs.readFileSync(places.record, 'utf8'));
-    const written = {
+    // Store records were schema-validated when captured; JSON.parse itself carries no record type.
+    const on_disk: MessageRecord = JSON.parse(fs.readFileSync(places.record, 'utf8'));
+    const written: MessageRecord = {
       ...on_disk,
       disposition: 'parked',
       adapter_fields: {
@@ -253,18 +332,20 @@ export class Store {
   // Fields carbon itself puts on a record after it was captured. They go under
   // adapter_fields, which is the one place the message schema carries keys it
   // does not name, and they never touch what the adapter wrote.
-  annotate(record, fields) {
+  annotate(record: TRecord, fields: Record<string, unknown>): MessageRecord {
     const places = this.paths(record);
-    const on_disk = JSON.parse(fs.readFileSync(places.record, 'utf8'));
+    // Store records were schema-validated when captured; JSON.parse itself carries no record type.
+    const on_disk: MessageRecord = JSON.parse(fs.readFileSync(places.record, 'utf8'));
     const written = { ...on_disk, adapter_fields: { ...(on_disk.adapter_fields ?? {}), ...fields } };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
     return written;
   }
 
-  setDisposition(record, disposition) {
+  setDisposition<T extends TRecord>(record: T, disposition: T['disposition']): T {
     const places = this.paths(record);
-    const on_disk = JSON.parse(fs.readFileSync(places.record, 'utf8'));
-    const written = { ...on_disk, disposition };
+    // Store records were schema-validated when captured; JSON.parse itself carries no record type.
+    const on_disk: T = JSON.parse(fs.readFileSync(places.record, 'utf8'));
+    const written: T = { ...on_disk, disposition };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
     return written;
   }
@@ -274,7 +355,7 @@ export class Store {
   // Attachments sit beside their record, named by their own sha256, written
   // 0600 with no execute bit. Content addressing is what makes the merge of a
   // repeated write converge: a union by sha256 is a union of file names.
-  putAttachment(record, bytes, meta = {}) {
+  putAttachment(record: MessageIdentity, bytes: Uint8Array, meta: { mime?: string; filename?: string } = {}): Attachment {
     const places = this.paths(record);
     mkdirp(places.attachments);
     const digest = sha256(bytes);
@@ -285,7 +366,7 @@ export class Store {
     // its digest, which is what makes a repeated write converge, so the sender's
     // name has nowhere else to live; without it the turn input can say a file
     // arrived but not which file the message's own text is talking about.
-    const written = {
+    const written: Attachment = {
       file: this.relative(file),
       mime: meta.mime ?? 'application/octet-stream',
       bytes: bytes.length,
@@ -295,7 +376,7 @@ export class Store {
     return written;
   }
 
-  attachmentIntact(attachment) {
+  attachmentIntact(attachment: Attachment): boolean {
     if (attachment.download_failed === true) return true;
     const file = this.under(attachment.file);
     if (!fs.existsSync(file)) return false;
@@ -304,7 +385,7 @@ export class Store {
 
   // ---- index --------------------------------------------------------------
 
-  appendIndex(record, seq, file) {
+  appendIndex(record: MessageRecord, seq: number, file: string): void {
     const line = {
       seq,
       message_id: record.message_id,
@@ -319,7 +400,7 @@ export class Store {
     appendFsync(this.under('index.jsonl'), JSON.stringify(line) + '\n');
   }
 
-  indexEntries() {
+  indexEntries(): unknown[] {
     try {
       return fs.readFileSync(this.under('index.jsonl'), 'utf8')
         .split('\n').filter(Boolean).map((line) => JSON.parse(line));
@@ -333,8 +414,9 @@ export class Store {
   // Read one record file and refuse it if the file name, the conversation
   // directory and the content disagree, because a record that has been moved is
   // a record whose identity is no longer the one the store derived.
-  readAt(file) {
-    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  readAt(file: string): TRecord {
+    // Store records were schema-validated when captured; JSON.parse itself carries no record type.
+    const record: TRecord = JSON.parse(fs.readFileSync(file, 'utf8'));
     const expected = this.paths(record).record;
     if (path.resolve(file) !== expected) {
       throw new StreamFault([fault('RECORD_MISPLACED', this.relative(file),
@@ -344,13 +426,13 @@ export class Store {
     return record;
   }
 
-  read(conversation_id, message_id, revision = 0) {
+  read(conversation_id: string, message_id: string, revision = 0): TRecord | null {
     const places = this.paths({ conversation_id, message_id, revision });
     if (!fs.existsSync(places.record)) return null;
     return this.readAt(places.record);
   }
 
-  conversations() {
+  conversations(): string[] {
     const dir = this.under('captures');
     if (!fs.existsSync(dir)) return [];
     return fs.readdirSync(dir).filter((name) => !name.startsWith('.'));
@@ -358,8 +440,8 @@ export class Store {
 
   // Every record rebuilt from the files themselves. Case 11 compares this with
   // the index.
-  rebuild() {
-    const records = [];
+  rebuild(): TRecord[] {
+    const records: TRecord[] = [];
     for (const conversation of this.conversations()) {
       const dir = this.under('captures', conversation);
       for (const name of fs.readdirSync(dir)) {
@@ -370,7 +452,7 @@ export class Store {
     return records;
   }
 
-  recordsIn(conversation_id) {
+  recordsIn(conversation_id: string): TRecord[] {
     const faults = componentFaults('conversation_id', conversation_id);
     if (faults.length > 0) throw new StreamFault(faults);
     const dir = this.under('captures', encodeComponent(conversation_id));
@@ -392,19 +474,21 @@ export class Store {
   // positions lexicographically and never moves a cursor backwards, so an
   // adapter must mint positions that sort in channel order: zero-padded
   // integers, or a zero-padded (uidvalidity, uid) pair for a mailbox.
-  cursorFile(conversation_id) {
+  cursorFile(conversation_id: string): string {
     const faults = componentFaults('conversation_id', conversation_id);
     if (faults.length > 0) throw new StreamFault(faults);
     return this.under('cursors', `${encodeComponent(conversation_id)}.json`);
   }
 
-  cursors(conversation_id) {
+  cursors(conversation_id: string): CursorState {
     const file = this.cursorFile(conversation_id);
     if (!fs.existsSync(file)) return { message: null, revision: null };
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    // Cursor files are written by advanceCursor; JSON.parse itself carries no cursor type.
+    const cursors: CursorState = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return cursors;
   }
 
-  advanceCursor(conversation_id, kind, position) {
+  advanceCursor(conversation_id: string, kind: string, position: string): CursorState {
     if (kind !== 'message' && kind !== 'revision') {
       throw new StreamFault([fault('CURSOR_KIND_UNKNOWN', String(kind),
         'a conversation has exactly two cursors, message and revision',
@@ -423,7 +507,7 @@ export class Store {
   // on the operator's record; when it releases is the declaration's business,
   // carried here as release_after_ms. A hold with no release_after_ms does not
   // expire on time and is lifted by whatever the declaration names.
-  heldUntil(conversation_id) {
+  heldUntil(conversation_id: string): number | null {
     let until = null;
     for (const record of this.recordsIn(conversation_id)) {
       if (!record.hold) continue;
@@ -435,7 +519,7 @@ export class Store {
     return until;
   }
 
-  isHeld(conversation_id, now = Date.now()) {
+  isHeld(conversation_id: string, now = Date.now()): boolean {
     const until = this.heldUntil(conversation_id);
     return until !== null && now < until;
   }
@@ -444,8 +528,10 @@ export class Store {
   // turn starts, so a restart mid-turn can tell an open release from a finished
   // one. A historical record never releases; a held or parked one does not
   // release yet.
-  release(record, { released_at, thread_id, turn_id, now = Date.now(), hold_applies = true }) {
-    const faults = [];
+  release(record: TRecord, { released_at, thread_id, turn_id, now = Date.now(), hold_applies = true }: {
+    released_at: string; thread_id: string; turn_id: string; now?: number; hold_applies?: boolean;
+  }): MessageRecord {
+    const faults: Fault[] = [];
     if (record.historical === true) {
       faults.push(fault('HISTORICAL_NEVER_RELEASES', record.message_id,
         'a historical record is the client\'s own past and releases no turn',
@@ -480,7 +566,7 @@ export class Store {
     return written;
   }
 
-  completeRelease(record, completed_at) {
+  completeRelease(record: TRecord, completed_at: string): MessageRecord {
     const places = this.paths(record);
     const on_disk = this.readAt(places.record);
     const written = { ...on_disk, release: { ...on_disk.release, completed_at } };
@@ -490,16 +576,18 @@ export class Store {
 
   // ---- outbound -----------------------------------------------------------
 
-  requestFile(request_id) {
+  requestFile(request_id: string): string {
     const faults = componentFaults('request_id', request_id);
     if (faults.length > 0) throw new StreamFault(faults);
     return this.under('outbound', 'requests', `${encodeComponent(request_id)}.json`);
   }
 
-  readRequest(request_id) {
+  readRequest(request_id: string): ReplyRequest | null {
     const file = this.requestFile(request_id);
     if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    // Request files are written by reply() and settleDelivery(); JSON.parse itself carries no request type.
+    const request: ReplyRequest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return request;
   }
 
   // The reply tool's one door. The outbound record exists as pending before any
@@ -521,8 +609,8 @@ export class Store {
   // written reply. Which of the two a reply is written at is the caller's, not
   // this library's: the store knows what a held reply is and the runtime knows
   // which room holds one.
-  reply(record, { status = 'pending' } = {}) {
-    const faults = [];
+  reply(record: TRecord, { status = 'pending' }: { status?: string } = {}): ReplyOutcome<TRecord> {
+    const faults: Fault[] = [];
     if (status !== 'pending' && status !== 'pending-teach-check') {
       faults.push(fault('REPLY_STATUS_UNWRITABLE', String(status),
         'a reply is written pending, or pending-teach-check when it is held until its turn completes, and never at any other status',
@@ -550,29 +638,35 @@ export class Store {
     }
     if (faults.length > 0) throw new StreamFault(faults);
 
-    const existing = this.readRequest(record.delivery.request_id);
+    // The earlier validation refusal guarantees this delivery exists; this assertion is type-only.
+    const delivery = record.delivery!;
+    const existing = this.readRequest(delivery.request_id);
     if (existing && existing.status === 'sent') {
       return { fenced: 'sent', chunk_ids: existing.chunk_ids ?? [], message_id: existing.message_id };
     }
     // A held reply is a written reply, so it fences the same way: one request id
     // is one reply, whether it is waiting for the transport or for the check.
     if (existing && (existing.status === 'pending' || existing.status === 'pending-teach-check')) {
-      throw new StreamFault([fault('REQUEST_ALREADY_PENDING', record.delivery.request_id,
+      throw new StreamFault([fault('REQUEST_ALREADY_PENDING', delivery.request_id,
         existing.status === 'pending-teach-check'
           ? 'a reply with this request_id is already written and is held until this turn completes'
           : 'a reply with this request_id is already written and not yet sent',
         'wait for the send to finish; do not write a second reply under one request id')]);
     }
     if (existing && existing.status === 'unknown') {
-      throw new StreamFault([fault('DELIVERY_UNKNOWN_NEVER_RETRIED', record.delivery.request_id,
+      throw new StreamFault([fault('DELIVERY_UNKNOWN_NEVER_RETRIED', delivery.request_id,
         'this reply\'s acceptance is unknown, and an uncertain send is never retried blindly',
         'a person decides what happened to this send')]);
     }
 
-    const pending = { ...record, delivery: { ...record.delivery, status } };
+    const pending: TRecord & { direction: 'outbound'; delivery: Delivery } = {
+      ...record,
+      direction: 'outbound',
+      delivery: { ...delivery, status }
+    };
     const result = this.capture(pending);
-    writeAtomic(this.requestFile(record.delivery.request_id), JSON.stringify({
-      request_id: record.delivery.request_id,
+    writeAtomic(this.requestFile(delivery.request_id), JSON.stringify({
+      request_id: delivery.request_id,
       status,
       conversation_id: record.conversation_id,
       message_id: record.message_id,
@@ -582,14 +676,15 @@ export class Store {
     return { fenced: null, record: result.record, file: result.file };
   }
 
-  settleDelivery(request_id, status, extra = {}) {
+  settleDelivery(request_id: string, status: string, extra: { chunk_ids?: string[]; completed_at?: string } = {}): TRecord {
     const request = this.readRequest(request_id);
     if (!request) {
       throw new StreamFault([fault('REQUEST_UNKNOWN', request_id,
         'no reply was written under this request id',
         'write the reply before settling its delivery')]);
     }
-    const record = this.read(request.conversation_id, request.message_id, request.revision ?? 0);
+    // A written request names its captured record; keep the original null-dereference failure if that link is broken.
+    const record = this.read(request.conversation_id, request.message_id, request.revision ?? 0)!;
     const delivery = { ...record.delivery, status, ...extra };
     const places = this.paths(record);
     writeAtomic(places.record, JSON.stringify({ ...record, delivery }, null, 2) + '\n');
@@ -602,7 +697,7 @@ export class Store {
   // A held reply, let go. It becomes an ordinary pending reply and the next
   // deliver pass sends it; its text is not touched, because the runtime never
   // rewrites what the model said, and the record is the one the reply tool wrote.
-  releaseHeldReply(request_id) {
+  releaseHeldReply(request_id: string): TRecord {
     const request = this.readRequest(request_id);
     if (!request || request.status !== 'pending-teach-check') {
       throw new StreamFault([fault('REPLY_NOT_HELD', request_id,
@@ -616,34 +711,36 @@ export class Store {
 
   // Every chunk id a split reply produced is written back, so a person reading
   // the store can find each piece on the channel.
-  markSent(request_id, chunk_ids, completed_at = new Date().toISOString()) {
+  markSent(request_id: string, chunk_ids: string[], completed_at = new Date().toISOString()): TRecord {
     return this.settleDelivery(request_id, 'sent', { chunk_ids, completed_at });
   }
 
-  markUnknown(request_id, completed_at = new Date().toISOString()) {
+  markUnknown(request_id: string, completed_at = new Date().toISOString()): TRecord {
     return this.settleDelivery(request_id, 'unknown', { completed_at });
   }
 
-  markFailed(request_id, completed_at = new Date().toISOString()) {
+  markFailed(request_id: string, completed_at = new Date().toISOString()): TRecord {
     return this.settleDelivery(request_id, 'failed', { completed_at });
   }
 
   // ---- threads ------------------------------------------------------------
 
-  threadFile(unit_id) {
+  threadFile(unit_id: string): string {
     const faults = componentFaults('unit_id', unit_id);
     if (faults.length > 0) throw new StreamFault(faults);
     return this.under('threads', `${encodeComponent(unit_id)}.json`);
   }
 
-  writeThread(unit_id, data) {
+  writeThread(unit_id: string, data: Record<string, unknown>): void {
     writeAtomic(this.threadFile(unit_id), JSON.stringify({ unit_id, ...data }, null, 2) + '\n');
   }
 
-  readThread(unit_id) {
+  readThread(unit_id: string): ThreadRecord | null {
     const file = this.threadFile(unit_id);
     if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    // Thread files are written by writeThread(); JSON.parse itself carries no thread type.
+    const thread: ThreadRecord = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return thread;
   }
 }
 
@@ -651,12 +748,25 @@ export class Store {
 // and the first times win, so a re-run of an import changes no capture bytes;
 // attachments are a union by sha256, so a second write that carries a file the
 // first did not adds it and nothing else.
-export function mergeRecords(existing, incoming) {
+function attachmentSha256(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    throw new TypeError(`Cannot read properties of ${value} (reading 'sha256')`);
+  }
+  // Reflect.get preserves the original property's getter/proxy behavior; its untyped result stays unknown here.
+  const digest: unknown = Reflect.get(Object(value), 'sha256');
+  return digest;
+}
+
+export function mergeRecords<TAttachment, T extends MessageRecord<TAttachment>>(
+  existing: T,
+  incoming: T
+): T {
   const attachments = [...(existing.attachments ?? [])];
-  const seen = new Set(attachments.map((a) => a.sha256));
+  const seen = new Set(attachments.map(attachmentSha256));
   for (const attachment of incoming.attachments ?? []) {
-    if (!seen.has(attachment.sha256)) {
-      seen.add(attachment.sha256);
+    const digest = attachmentSha256(attachment);
+    if (!seen.has(digest)) {
+      seen.add(digest);
       attachments.push(attachment);
     }
   }

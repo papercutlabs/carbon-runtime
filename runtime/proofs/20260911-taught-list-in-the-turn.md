@@ -16,7 +16,7 @@ it is real:
 1. The tool call is real. Turn one calls `remember` on a real `carbon-teach`
    server, served by `runtime/teach-tool.mjs` over loopback and spoken to over
    HTTP with a `tools/call` request, not through the store library.
-2. The store is real, opened by `stream/store.mjs`, and the record is written by
+2. The store is real, opened by `stream/store.ts`, and the record is written by
    `stream/teachings.mjs` through the tool server's own handler.
 3. The loop is the real `ReleaseLoop`: it captures the message, writes the
    release, composes the input, and resumes the unit's thread for turn two.

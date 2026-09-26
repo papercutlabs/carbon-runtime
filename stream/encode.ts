@@ -27,12 +27,12 @@
 
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { fault } from './faults.mjs';
+import { fault, type Fault } from './faults.ts';
 
 const MAX_ENCODED = 200;
 const MAX_RAW = 1024;
 
-function isSafeByte(byte) {
+function isSafeByte(byte: number): boolean {
   return (byte >= 0x41 && byte <= 0x5a) // A-Z
     || (byte >= 0x61 && byte <= 0x7a) // a-z
     || (byte >= 0x30 && byte <= 0x39) // 0-9
@@ -41,8 +41,8 @@ function isSafeByte(byte) {
 }
 
 // Every reason this identifier may not become a path component, all at once.
-export function componentFaults(subject, raw) {
-  const faults = [];
+export function componentFaults(subject: string, raw: unknown): Fault[] {
+  const faults: Fault[] = [];
   if (typeof raw !== 'string' || raw.length === 0) {
     faults.push(fault('IDENTIFIER_EMPTY', subject,
       'an identifier used as a path component must be a non-empty string',
@@ -75,7 +75,7 @@ export function componentFaults(subject, raw) {
   return faults;
 }
 
-export function encodeComponent(raw) {
+export function encodeComponent(raw: string): string {
   let encoded = '';
   for (const byte of Buffer.from(raw, 'utf8')) {
     encoded += isSafeByte(byte)
@@ -89,7 +89,7 @@ export function encodeComponent(raw) {
 }
 
 // The inverse of encodeComponent for every component it did not have to hash.
-export function decodeComponent(encoded) {
+export function decodeComponent(encoded: string): string {
   if (encoded.startsWith('~h')) {
     throw new Error(`${encoded} is the hashed form of an identifier too long to encode; read the raw id from the record`);
   }
@@ -107,7 +107,7 @@ export function decodeComponent(encoded) {
 
 // Join encoded components under the store and refuse anything that lands
 // outside it. This is the backstop, not the guard: the guard is componentFaults.
-export function resolveUnderStore(storeDir, ...components) {
+export function resolveUnderStore(storeDir: string, ...components: string[]): string {
   const root = path.resolve(storeDir);
   const resolved = path.resolve(root, ...components);
   if (resolved !== root && !resolved.startsWith(root + path.sep)) {

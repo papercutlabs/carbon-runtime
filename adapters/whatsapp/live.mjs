@@ -16,8 +16,8 @@
 // would lose the album. Items therefore stay in the buffer, oldest dropped past
 // RETAINED, which is far more than any window keeps open.
 
-import { fault } from '../../stream/faults.mjs';
-import { StreamFault } from '../../stream/store.mjs';
+import { fault } from '../../stream/faults.ts';
+import { StreamFault } from '../../stream/store.ts';
 import { openChannel } from './socket.mjs';
 
 // How many arrivals are kept per account. An item this far back has been through

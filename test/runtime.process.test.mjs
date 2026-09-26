@@ -15,7 +15,7 @@ import {
   awaitToolServers, toolsUserServer, serverNameFromInstance
 } from '../runtime/tool-servers.mjs';
 import { serveReplyTool } from '../runtime/reply-tool.mjs';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { fakeHarness } from './fake-harness.mjs';
 import * as fixture from '../adapters/fixture/index.mjs';
 

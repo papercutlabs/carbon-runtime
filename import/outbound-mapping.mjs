@@ -59,7 +59,7 @@
 // selects is carried whole, because a mapping that selects something had a
 // reason and this is not the place to decide it was wrong.
 
-import { fault } from '../stream/faults.mjs';
+import { fault } from '../stream/faults.ts';
 import { describeMedia, isRead, mediaRefsOf, toIso } from './ledger-mapping.mjs';
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;

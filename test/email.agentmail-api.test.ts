@@ -6,14 +6,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { ingest } from '../conformance/cases.mjs';
 import { ReleaseLoop } from '../runtime/loop.mjs';
 import { pollState } from '../runtime/poll.mjs';
 import { fakeHarness } from './fake-harness.mjs';
 import * as adapter from '../adapters/email/index.ts';
 import { AgentMailFault, readNetrcPassword } from '../adapters/email/agentmail-api.ts';
-import type { AgentMailEmailContext } from '../adapters/email/index.ts';
+import type { AgentMailEmailContext, EmailRecord } from '../adapters/email/index.ts';
 
 const ACCOUNT = 'agent-01@example.test';
 const API_KEY = 'am_fixture_key';
@@ -28,7 +28,7 @@ function netrcFile(body: string): string {
 
 function context(): AgentMailEmailContext {
   return {
-    store: Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-agentmail-')), 'store')),
+    store: Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-agentmail-')), 'store')),
     adapter,
     agent: 'agent-01',
     account: ACCOUNT,

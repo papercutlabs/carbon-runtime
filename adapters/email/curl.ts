@@ -24,7 +24,7 @@
 // verdict that triggers it is made.
 
 import { spawnSync } from 'node:child_process';
-import { fault } from '../../stream/faults.mjs';
+import { fault } from '../../stream/faults.ts';
 
 type EmailFault = { code: string; subject: string; problem: string; fix: string };
 type TransportDetails = { operation?: string | null; exit?: number; timed_out?: boolean; status?: number };

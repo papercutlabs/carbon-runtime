@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { StreamFault } from '../stream/store.mjs';
+import { StreamFault } from '../stream/store.ts';
 import { forget, listTeachings, raiseChange, remember, writeTeaching } from '../stream/teachings.mjs';
 
 function sha256(text) {

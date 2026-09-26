@@ -452,8 +452,7 @@ const isTest = (rel) => rel.startsWith('test/') || rel.startsWith('conformance/'
 // Which repository is this. The private half has the installer and the host
 // contract; the public half has the store library. Neither has the other's.
 export function repoKindOf(root) {
-  if (fs.existsSync(path.join(root, 'stream', 'store.mjs'))
-    || fs.existsSync(path.join(root, 'stream', 'store.ts'))) return 'runtime';
+  if (fs.existsSync(path.join(root, 'stream', 'store.ts'))) return 'runtime';
   if (fs.existsSync(path.join(root, 'lib', 'install.mjs'))
     || fs.existsSync(path.join(root, 'lib', 'install.ts'))) return 'core';
   return null;
@@ -1090,7 +1089,7 @@ function untestedSubcommands(root, modules, out, notes) {
   notes.push(`SHAPE_UNTESTED_SUBCOMMAND: ${counted} subcommands read off bin/`);
 }
 
-const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.mjs', 'tools/lib/fault.mjs', 'runtime/faults.mjs', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
+const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.ts', 'tools/lib/fault.mjs', 'runtime/faults.mjs', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
 
 function errorPaths(modules, out) {
   for (const module of modules.values()) {

@@ -19,7 +19,7 @@
 // nothing in this file writes a file at all.
 
 import zlib from 'node:zlib';
-import { fault } from '../stream/faults.mjs';
+import { fault } from '../stream/faults.ts';
 
 const EOCD = 0x06054b50;
 const EOCD64 = 0x06064b50;

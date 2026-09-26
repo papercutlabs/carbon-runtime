@@ -34,7 +34,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fault } from '../../stream/faults.mjs';
+import { fault } from '../../stream/faults.ts';
 import { MimeUnreadable, decodeWords, header, headerRaw, headersAll, readMessage } from './mime.ts';
 import { TransportFault, fetchMessage, listMailboxes, restoreUnseen, searchUids, sendMessage, status, unseenUids } from './curl.ts';
 import { pollAgentMail } from './agentmail-api.ts';
@@ -131,7 +131,7 @@ export type EmailStore = {
   advanceCursor(conversationId: string, kind: string, position: string): void;
   under(relativePath: string): string;
   reply(record: EmailRecord): StoreReplyOutcome;
-  read(conversationId: string, messageId: string, revision: number): EmailRecord;
+  read(conversationId: string, messageId: string, revision: number): EmailRecord | null;
   markSent(requestId: string, chunkIds: string[]): EmailRecord;
   markUnknown(requestId: string): EmailRecord;
   markFailed(requestId: string): EmailRecord;

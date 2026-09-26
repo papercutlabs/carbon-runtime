@@ -15,8 +15,8 @@
 // adapter was built against, with what it does about each, is README.md.
 
 import crypto from 'node:crypto';
-import { fault } from '../../stream/faults.mjs';
-import { StreamFault } from '../../stream/store.mjs';
+import { fault } from '../../stream/faults.ts';
+import { StreamFault } from '../../stream/store.ts';
 import {
   canonicalChatKey, canonicalParticipant, conversationKind, pairsIn
 } from './jid.mjs';

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { listTeachings } from '../stream/teachings.mjs';
 import { checkManifest } from '../tools/lib/manifest.mjs';
 import {

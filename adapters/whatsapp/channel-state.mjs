@@ -15,8 +15,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeAtomic, StreamFault } from '../../stream/store.mjs';
-import { componentFaults, encodeComponent } from '../../stream/encode.mjs';
+import { writeAtomic, StreamFault } from '../../stream/store.ts';
+import { componentFaults, encodeComponent } from '../../stream/encode.ts';
 
 const DIR_MODE = 0o700;
 

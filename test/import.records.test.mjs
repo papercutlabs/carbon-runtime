@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { learnPairs, writeConnectionState } from '../adapters/whatsapp/channel-state.mjs';
 import { chatKeyFor, mimeOf } from '../import/carbon-capture-whatsapp.mjs';
 import { buildExport, buildZip } from './zip-writer.mjs';

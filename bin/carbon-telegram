@@ -13,8 +13,8 @@
 // chat and the agent answers it.
 
 import fs from 'node:fs';
-import { fault, report } from '../stream/faults.mjs';
-import { StreamFault } from '../stream/store.mjs';
+import { fault, report } from '../stream/faults.ts';
+import { StreamFault } from '../stream/store.ts';
 import { botIdOf, call, readToken, TelegramFault } from '../adapters/telegram/api.mjs';
 
 const HELP = `carbon-telegram — reach a real bot with the telegram adapter's own transport

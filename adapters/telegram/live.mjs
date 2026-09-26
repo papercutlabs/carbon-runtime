@@ -43,7 +43,7 @@
 // the retained set is the single authority for the waiting, the downloads, the
 // handoff and the watermark that follows it.
 
-import { fault } from '../../stream/faults.mjs';
+import { fault } from '../../stream/faults.ts';
 import { ALLOWED_UPDATES, DEFAULT_API_HOST, TelegramFault, call, download, readToken } from './api.mjs';
 import { albumOf, mediaOf, messageOf } from './content.mjs';
 import { nextOffset, positionOf } from './cursors.mjs';

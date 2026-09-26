@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store, StreamFault } from '../stream/store.mjs';
+import { Store, StreamFault } from '../stream/store.ts';
 import {
   forget, listTeachings, raiseChange, readTeachings, remember, teachingId, teachingsDir, writeTeaching
 } from '../stream/teachings.mjs';

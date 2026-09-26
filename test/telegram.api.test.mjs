@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { botIdOf, call, readToken, scrub, TelegramFault } from '../adapters/telegram/api.mjs';
 import { ALBUM_QUIET_MS, arrivals, forget, IDLE_MS, transportFor } from '../adapters/telegram/live.mjs';
 import { nextOffset } from '../adapters/telegram/cursors.mjs';

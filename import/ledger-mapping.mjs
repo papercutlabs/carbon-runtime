@@ -15,8 +15,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fault } from '../stream/faults.mjs';
-import { StreamFault } from '../stream/store.mjs';
+import { fault } from '../stream/faults.ts';
+import { StreamFault } from '../stream/store.ts';
 
 const TIMESTAMP_FORMATS = ['epoch_seconds', 'epoch_millis', 'iso8601'];
 const MEDIA_REF_FORMATS = ['json_array', 'comma', 'single', 'none'];

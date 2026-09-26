@@ -5,22 +5,24 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { Store, StreamFault, mergeRecords } from '../stream/store.mjs';
+import { Store, StreamFault, mergeRecords, type Attachment, type MessageRecord } from '../stream/store.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CHECK = path.join(ROOT, 'bin', 'carbon-stream');
 const ACCOUNT = 'agent-01@examplecorp.test';
 const CONVERSATION = `${ACCOUNT}:room-7`;
 
-function open() {
-  return Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-store-')), 'store'));
+type TestRecord = MessageRecord<Attachment>;
+
+function open(): Store<TestRecord> {
+  return Store.open<TestRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-store-')), 'store'));
 }
 
-function sha256(text) {
+function sha256(text: string): string {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-function inbound(overrides = {}) {
+function inbound(overrides: Partial<TestRecord> = {}): TestRecord {
   return {
     schema: 'carbon.message.v1',
     agent: 'agent-01',
@@ -43,7 +45,7 @@ function inbound(overrides = {}) {
   };
 }
 
-function outbound(overrides = {}) {
+function outbound(overrides: Partial<TestRecord> = {}): TestRecord {
   return inbound({
     message_id: `${CONVERSATION}:out-0001`,
     platform_message_id: 'out-0001',
@@ -56,7 +58,7 @@ function outbound(overrides = {}) {
   });
 }
 
-function faultCodes(run) {
+function faultCodes(run: () => unknown): string[] {
   try {
     run();
   } catch (error) {
@@ -84,6 +86,7 @@ test('the request_id fence: sent returns the stored chunk ids, pending and unkno
   store.capture(inbound());
 
   const first = store.reply(outbound());
+  assert.ok(first.fenced === null);
   assert.equal(first.record.delivery.status, 'pending');
 
   assert.deepEqual(faultCodes(() => store.reply(outbound())), ['REQUEST_ALREADY_PENDING']);
@@ -159,7 +162,9 @@ test('a live store passes the rebuild against the index through the command', ()
 test('a thread file is written per unit of work, named by the unit id', () => {
   const store = open();
   store.writeThread('case-4711', { thread_id: 'thread-1', started_at: '2026-09-10T09:00:00.000Z' });
-  assert.equal(store.readThread('case-4711').thread_id, 'thread-1');
+  const thread = store.readThread('case-4711');
+  assert.ok(thread);
+  assert.equal(thread.thread_id, 'thread-1');
   assert.equal(store.readThread('case-4712'), null);
 });
 

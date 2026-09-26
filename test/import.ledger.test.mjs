@@ -13,8 +13,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 
-import { Store } from '../stream/store.mjs';
-import { encodeComponent } from '../stream/encode.mjs';
+import { Store } from '../stream/store.ts';
+import { encodeComponent } from '../stream/encode.ts';
 import { SOURCE, writeBatch, messageIndexOf } from '../import/carbon-ledger-sqlite.mjs';
 import {
   isRead, mappingFaults, messageQuery, normaliseRow, toIso, mediaRefsOf, roleFor,

@@ -50,7 +50,7 @@ import { createServer } from '../tools/lib/mcp.mjs';
 import { readManifest } from '../tools/lib/manifest.mjs';
 import { renderHelp } from '../tools/lib/help.mjs';
 import { ToolFault, fault as toolFault } from '../tools/lib/fault.mjs';
-import { Store, StreamFault } from '../stream/store.mjs';
+import { Store, StreamFault } from '../stream/store.ts';
 import { remember, raiseChange, forget } from '../stream/teachings.mjs';
 import { fault, report, RuntimeFault, EXIT } from './faults.mjs';
 import { managementConversationOf } from './channel.mjs';

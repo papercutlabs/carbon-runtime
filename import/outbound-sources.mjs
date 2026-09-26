@@ -12,8 +12,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fault } from '../stream/faults.mjs';
-import { StreamFault } from '../stream/store.mjs';
+import { fault } from '../stream/faults.ts';
+import { StreamFault } from '../stream/store.ts';
 import { itemFrom, selects, turnItem, turnRowFaults, valueAt } from './outbound-mapping.mjs';
 
 const LINE_SUFFIX = '.jsonl';

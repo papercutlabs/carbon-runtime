@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import {
   ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
   checkoutLine, followUpInput, taughtBlock, holdApplies, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES,

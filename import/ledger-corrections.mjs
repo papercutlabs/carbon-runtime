@@ -15,8 +15,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeAtomic } from '../stream/store.mjs';
-import { encodeComponent } from '../stream/encode.mjs';
+import { writeAtomic } from '../stream/store.ts';
+import { encodeComponent } from '../stream/encode.ts';
 import { toIso } from './ledger-mapping.mjs';
 
 export const CORRECTIONS_SCHEMA = 'carbon.ledger-corrections.v1';

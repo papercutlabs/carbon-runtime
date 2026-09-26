@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fault } from '../stream/faults.mjs';
+import { fault } from '../stream/faults.ts';
 
 // The WhatsApp accounts this store already knows about, read from the channel
 // state the live adapter writes. One account is an answer; none or several is a

@@ -23,8 +23,8 @@
 //    is tested against recorded updates with no network in the test.
 
 import fs from 'node:fs';
-import { fault } from '../../stream/faults.mjs';
-import { StreamFault } from '../../stream/store.mjs';
+import { fault } from '../../stream/faults.ts';
+import { StreamFault } from '../../stream/store.ts';
 
 export const DEFAULT_API_HOST = 'api.telegram.org';
 

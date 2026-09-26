@@ -45,8 +45,8 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { fault } from '../../stream/faults.mjs';
-import { StreamFault } from '../../stream/store.mjs';
+import { fault } from '../../stream/faults.ts';
+import { StreamFault } from '../../stream/store.ts';
 import { albumOf, bodyOf, conversationKind, mediaOf, messageOf, readable, senderOf, serviceKindOf } from './content.mjs';
 import { TelegramFault, call, readToken } from './api.mjs';
 import { nextOffset, offsetPositionOf, positionOf, updatesConversation } from './cursors.mjs';

@@ -43,7 +43,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Store } from '../stream/store.mjs';
+import { Store } from '../stream/store.ts';
 import { listTeachings } from '../stream/teachings.mjs';
 import { holdApplies, releaseDecision } from '../runtime/loop.mjs';
 import { resolveChannel } from '../runtime/channel.mjs';

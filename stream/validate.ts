@@ -5,7 +5,21 @@
 // title are metadata and ignored). Anything else in a schema file is a bug in the
 // schema, not in the document, and this validator says so.
 
-import { fault } from './faults.mjs';
+import { fault, type Fault } from './faults.ts';
+
+export type JsonSchema = {
+  [keyword: string]: unknown;
+  type?: string;
+  const?: unknown;
+  enum?: unknown[];
+  pattern?: string;
+  minLength?: number;
+  minimum?: number;
+  required?: string[];
+  properties?: Record<string, JsonSchema>;
+  additionalProperties?: boolean | JsonSchema;
+  items?: JsonSchema;
+};
 
 const KNOWN = new Set([
   '$schema', '$id', 'title', 'description',
@@ -13,14 +27,14 @@ const KNOWN = new Set([
   'required', 'properties', 'additionalProperties', 'items'
 ]);
 
-function typeOf(value) {
+function typeOf(value: unknown): string {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
   if (Number.isInteger(value)) return 'integer';
   return typeof value;
 }
 
-function matchesType(value, want) {
+function matchesType(value: unknown, want: string): boolean {
   const got = typeOf(value);
   if (want === 'number') return got === 'integer' || got === 'number';
   if (want === 'object') return got === 'object';
@@ -29,8 +43,12 @@ function matchesType(value, want) {
 
 // Returns a list of faults. `subject` is a JSON-pointer-ish path used as the
 // fault's subject so the caller can find the field.
-export function validate(schema, value, subject = '$', schemaName = 'schema') {
-  const faults = [];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function validate(schema: JsonSchema, value: unknown, subject = '$', schemaName = 'schema') {
+  const faults: Fault[] = [];
 
   for (const key of Object.keys(schema)) {
     if (!KNOWN.has(key)) {
@@ -80,13 +98,14 @@ export function validate(schema, value, subject = '$', schemaName = 'schema') {
       `raise ${subject} to at least ${schema.minimum}`));
   }
 
-  if (typeOf(value) === 'array' && schema.items) {
+  const items = schema.items;
+  if (Array.isArray(value) && items) {
     value.forEach((item, i) => {
-      faults.push(...validate(schema.items, item, `${subject}[${i}]`, schemaName));
+      faults.push(...validate(items, item, `${subject}[${i}]`, schemaName));
     });
   }
 
-  if (typeOf(value) === 'object') {
+  if (isRecord(value)) {
     const properties = schema.properties || {};
     for (const name of schema.required || []) {
       if (!(name in value)) {
