@@ -9,10 +9,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Store, StreamFault } from '../stream/store.ts';
+import { Store, StreamFault, type MessageRecord } from '../stream/store.ts';
 import {
   forget, listTeachings, raiseChange, readTeachings, remember, teachingId, teachingsDir, writeTeaching
-} from '../stream/teachings.mjs';
+} from '../stream/teachings.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const AGENT = 'agent-01';
@@ -23,8 +23,8 @@ const NOW = '2026-09-11T10:15:00.000Z';
 const CAPS = { max_active: 40, max_chars: 400 };
 const TEXT = 'A workbook arriving in this chat is not permission to change records.';
 
-function inbound(overrides = {}) {
-  const record = {
+function inbound(overrides: Partial<MessageRecord> = {}) {
+  const record: MessageRecord = {
     schema: 'carbon.message.v1',
     agent: AGENT,
     source: 'email',
@@ -52,20 +52,20 @@ function inbound(overrides = {}) {
 }
 
 // A store with one inbound capture in it, which is the thing a teaching cites.
-function taught(overrides = {}) {
+function taught(overrides: Partial<MessageRecord> = {}) {
   const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-teach-')), 'store'));
   store.capture(inbound(overrides));
   return store;
 }
 
-function call(overrides = {}) {
+function call(overrides: Parameters<typeof remember>[1] = {}) {
   return {
     agent: AGENT, text: TEXT, conversation_id: CONVERSATION, source_message_id: SOURCE, now: NOW,
     ...CAPS, ...overrides
   };
 }
 
-function faultCodes(run) {
+function faultCodes(run: () => unknown) {
   try {
     run();
   } catch (error) {
@@ -76,6 +76,12 @@ function faultCodes(run) {
   throw new assert.AssertionError({ message: 'nothing was refused' });
 }
 
+// These fixtures write ordinary JSON objects. Establish that at the assertion
+// boundary without narrowing unvalidated teaching outputs for other callers.
+function assertRecord(value: unknown): asserts value is Record<string, unknown> {
+  assert.ok(typeof value === 'object' && value !== null && !Array.isArray(value));
+}
+
 test('a remembered instruction is one record at the id its source and its time derive', () => {
   const store = taught();
   const written = remember(store, call());
@@ -83,6 +89,7 @@ test('a remembered instruction is one record at the id its source and its time d
   assert.match(written.id, /^teach-20260911T101500Z-[0-9a-f]{8}$/);
   assert.equal(written.file, path.join(teachingsDir(store), `${written.id}.json`));
   assert.equal(written.active, 1);
+  assertRecord(written.record);
   assert.equal(written.record.schema, 'carbon.teaching.v1');
   assert.equal(written.record.agent, AGENT);
   assert.equal(written.record.text, TEXT);
@@ -107,6 +114,7 @@ test('the teacher is copied from the cited capture and never taken from the call
     ...call(),
     taught_by: { sender_id: 'someone-else@examplecorp.test', role: 'operator' }
   });
+  assertRecord(written.record);
   assert.deepEqual(written.record.taught_by, {
     sender_id: 'ada@examplecorp.test', role: 'operator', sender_name: 'Ada'
   });
@@ -115,6 +123,7 @@ test('the teacher is copied from the cited capture and never taken from the call
 test('a capture with no sender name writes no empty name', () => {
   const store = taught({ sender_name: undefined });
   const written = remember(store, call());
+  assertRecord(written.record);
   assert.deepEqual(written.record.taught_by, { sender_id: 'ada@examplecorp.test', role: 'operator' });
 });
 
@@ -175,6 +184,7 @@ test('a second instruction from the same message in the same second gets its own
   const first = remember(store, call());
   const second = remember(store, call({ text: 'Send the weekly summary on a Friday.' }));
   assert.notEqual(second.id, first.id);
+  assertRecord(second.record);
   assert.equal(second.record.taught_at, NOW, 'the record\'s own time was moved to free the id');
   assert.equal(listTeachings(store).active.length, 2);
   assert.equal(readTeachings(store).records.length, 2);
@@ -206,9 +216,11 @@ test('the four groups come back oldest first', () => {
 test('a status that does not belong to the kind is refused', () => {
   const store = taught();
   const written = remember(store, call());
-  assert.ok(faultCodes(() => writeTeaching(store, { ...written.record, status: 'open' }))
+  const record = written.record;
+  assertRecord(record);
+  assert.ok(faultCodes(() => writeTeaching(store, { ...record, status: 'open' }))
     .includes('TEACHING_STATUS_NOT_FOR_KIND'));
-  assert.ok(faultCodes(() => writeTeaching(store, { ...written.record, kind: 'change-request', status: 'active' }))
+  assert.ok(faultCodes(() => writeTeaching(store, { ...record, kind: 'change-request', status: 'active' }))
     .includes('TEACHING_STATUS_NOT_FOR_KIND'));
 });
 
@@ -237,7 +249,22 @@ test('a record moved to a file its id does not derive is reported, not read', ()
 // A client agent keeps what it was told. There is no expiry here, no age-out and
 // no sweep, and this is what keeps it that way.
 test('nothing in the teachings library takes a record away', () => {
-  const source = fs.readFileSync(path.join(ROOT, 'stream', 'teachings.mjs'), 'utf8');
+  const source = fs.readFileSync(path.join(ROOT, 'stream', 'teachings.ts'), 'utf8');
   assert.doesNotMatch(source, /prune|retention/i);
   assert.doesNotMatch(source, /\bunlinkSync\b|\brmSync\b|\brmdirSync\b/);
+});
+
+// The validator checks required inherited fields but only validates own values.
+// Unknown extension values are carried, including JSON's serialization hook.
+test('a serialization extension can return a primitive without a teaching-shaped readback promise', () => {
+  const store = taught();
+  const first = remember(store, call());
+  assertRecord(first.record);
+  // Object.create carries these synthetic fields on the prototype, as intended.
+  const inherited: Record<string, unknown> = Object.create({ ...first.record, id: undefined });
+  inherited.toJSON = () => 'legacy primitive';
+  const written = writeTeaching(store, inherited);
+  assert.equal(written.id, undefined);
+  assert.equal(written.record, 'legacy primitive');
+  assert.equal(fs.readFileSync(written.file, 'utf8'), '"legacy primitive"\n');
 });

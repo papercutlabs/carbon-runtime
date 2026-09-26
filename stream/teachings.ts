@@ -30,38 +30,67 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fault } from './faults.ts';
-import { validate } from './validate.ts';
+import { fault, type Fault } from './faults.ts';
+import { validate, type JsonSchema } from './validate.ts';
 import { componentFaults } from './encode.ts';
-import { StreamFault, writeAtomic } from './store.ts';
+import { StreamFault, writeAtomic, type Store, type MessageRecord } from './store.ts';
 
-const SCHEMA = JSON.parse(fs.readFileSync(
+// The checked-in schema declares properties; parsing it does not type its JSON.
+const SCHEMA: JsonSchema & { properties: Record<string, JsonSchema> } = JSON.parse(fs.readFileSync(
   path.join(import.meta.dirname, '..', 'schema', 'carbon.teaching.v1.json'), 'utf8'));
 
 const DIR = 'teachings';
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
-const KINDS = ['instruction', 'change-request'];
+const KINDS: readonly unknown[] = ['instruction', 'change-request'];
 const STATUSES = { instruction: ['active', 'forgotten'], 'change-request': ['open', 'closed'] };
-const QUESTIONS = [1, 2, 3, 4, 'size'];
+const QUESTIONS: readonly unknown[] = [1, 2, 3, 4, 'size'];
+
+// A readable persisted teaching has only its filename/id agreement checked.
+// Every other field, including known schema fields, remains unvalidated.
+export type ReadTeaching = Record<string, unknown> & { id: string };
+type TeachingStore = Pick<Store, 'under' | 'relative' | 'recordsIn'>;
+type TeachingOptions = {
+  agent?: string;
+  text?: string;
+  conversation_id?: string;
+  source_message_id?: string;
+  max_active?: number;
+  max_chars?: number;
+  failed_question?: number | string;
+  release_id?: unknown;
+  now?: string;
+  [key: string]: unknown;
+};
+type ForgetOptions = {
+  id?: string;
+  conversation_id?: string;
+  source_message_id?: string;
+  now?: string;
+};
+type BaseOptions = Pick<TeachingOptions, 'agent' | 'text' | 'conversation_id' | 'release_id'> & {
+  source_message_id: string;
+  now: string;
+  capture: MessageRecord;
+};
 
 // teach-<utc compact>-<first 8 of the sha256 of source_message_id>.
-export function teachingId(source_message_id, at) {
+export function teachingId(source_message_id: string, at: string) {
   const stamp = new Date(at).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   const digest = crypto.createHash('sha256').update(source_message_id, 'utf8').digest('hex').slice(0, 8);
   return `teach-${stamp}-${digest}`;
 }
 
-export function teachingsDir(store) {
+export function teachingsDir(store: TeachingStore) {
   return store.under(DIR);
 }
 
-function teachingFile(store, id) {
+function teachingFile(store: TeachingStore, id: unknown) {
   return store.under(DIR, `${id}.json`);
 }
 
-function ensureDir(store) {
+function ensureDir(store: TeachingStore) {
   const dir = teachingsDir(store);
   fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
   return dir;
@@ -71,10 +100,10 @@ function ensureDir(store) {
 // rather than skipped. A record is carried as it was written: a field this
 // version does not know about is a field a newer or an older writer added, and
 // dropping it on the way through would lose it on the next write.
-export function readTeachings(store) {
+export function readTeachings(store: TeachingStore) {
   const dir = teachingsDir(store);
-  const records = [];
-  const unreadable = [];
+  const records: ReadTeaching[] = [];
+  const unreadable: Fault[] = [];
   let names = [];
   try {
     names = fs.readdirSync(dir);
@@ -84,12 +113,14 @@ export function readTeachings(store) {
   for (const name of names.sort()) {
     if (!name.endsWith('.json') || name.startsWith('.')) continue;
     const file = path.join(dir, name);
-    let record;
+    // Optional property reads below intentionally retain primitive/null JSON behavior.
+    let record: Record<string, unknown> | null;
     try {
       record = JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch (error) {
+      // fs and JSON.parse throw Error here; keep the original message fallback unchanged.
       unreadable.push(fault('TEACHING_UNREADABLE', store.relative(file),
-        `this file is in the teachings directory and is not a record that can be read: ${(error.message ?? String(error)).split('\n')[0]}`,
+        `this file is in the teachings directory and is not a record that can be read: ${((error as Error).message ?? String(error)).split('\n')[0]}`,
         'read the file by hand and restore it from the message it cites; the other records are returned regardless'));
       continue;
     }
@@ -99,17 +130,18 @@ export function readTeachings(store) {
         'the record has been moved or renamed; restore it to the path its own id derives'));
       continue;
     }
-    records.push(record);
+    // The equality above establishes only a string id, not the teaching schema.
+    records.push(record as ReadTeaching);
   }
   return { records, unreadable };
 }
 
 // The four groups a reader outside the box prints, oldest first, and the files
 // that could not be read. A caller that wants the records themselves reads `records`.
-export function listTeachings(store) {
+export function listTeachings(store: TeachingStore) {
   const { records, unreadable } = readTeachings(store);
-  const byTime = (a, b) => String(a.taught_at).localeCompare(String(b.taught_at)) || String(a.id).localeCompare(String(b.id));
-  const of = (kind, status) => records.filter((r) => r.kind === kind && r.status === status).sort(byTime);
+  const byTime = (a: ReadTeaching, b: ReadTeaching) => String(a.taught_at).localeCompare(String(b.taught_at)) || String(a.id).localeCompare(String(b.id));
+  const of = (kind: string, status: string) => records.filter((r) => r.kind === kind && r.status === status).sort(byTime);
   return {
     records: [...records].sort(byTime),
     active: of('instruction', 'active'),
@@ -122,15 +154,16 @@ export function listTeachings(store) {
 
 // The capture this record is about. It must be an inbound record of this store,
 // in the conversation the caller named, and it is where taught_by comes from.
-function citedCapture(store, conversation_id, source_message_id) {
+function citedCapture(store: TeachingStore, conversation_id: string | undefined, source_message_id: string | undefined) {
   const faults = [
     ...componentFaults('conversation_id', conversation_id),
     ...componentFaults('source_message_id', source_message_id)
   ];
   if (faults.length > 0) return { faults, capture: null };
-  let held = [];
+  let held: MessageRecord[] = [];
   try {
-    held = store.recordsIn(conversation_id);
+    // componentFaults returned no faults, which establishes both identifiers as strings.
+    held = store.recordsIn(conversation_id!);
   } catch (error) {
     if (!(error instanceof StreamFault)) throw error;
     return { faults: error.faults, capture: null };
@@ -141,7 +174,8 @@ function citedCapture(store, conversation_id, source_message_id) {
   if (captures.length === 0) {
     return {
       capture: null,
-      faults: [fault('TEACHING_SOURCE_NOT_A_CAPTURE', source_message_id,
+      // The component checks above established source_message_id as a string.
+      faults: [fault('TEACHING_SOURCE_NOT_A_CAPTURE', source_message_id!,
         `no inbound capture in this agent's own store on conversation ${JSON.stringify(conversation_id)} has this message_id, so there is no message that taught this and nothing to copy the teacher from`,
         'cite the message_id of the inbound record the client taught this in; a teaching whose source is not in the store is not written')]
     };
@@ -149,7 +183,7 @@ function citedCapture(store, conversation_id, source_message_id) {
   return { capture: captures[0], faults: [] };
 }
 
-function textFaults(text, max_chars) {
+function textFaults(text: string | undefined, max_chars: number | undefined) {
   const faults = [];
   if (typeof max_chars !== 'number' || !Number.isInteger(max_chars) || max_chars < 1) {
     faults.push(fault('TEACHING_MAX_CHARS_UNGIVEN', 'max_chars',
@@ -160,7 +194,8 @@ function textFaults(text, max_chars) {
     faults.push(fault('TEACHING_TEXT_EMPTY', 'text',
       'a teaching record with no text says nothing about what the agent will now do',
       'pass the instruction in plain words'));
-  } else if (Number.isInteger(max_chars) && text.length > max_chars) {
+  // Number.isInteger excludes undefined; it is not a TypeScript type predicate.
+  } else if (Number.isInteger(max_chars) && text.length > max_chars!) {
     faults.push(fault('TEACHING_TEXT_TOO_LONG', 'text',
       `this text is ${text.length} characters and the cap this agent's declaration sets is ${max_chars}`,
       `say it in ${max_chars} characters or fewer; an instruction that does not fit is raised as a change request rather than remembered, and the cap itself moves only by a change to this agent's declaration`));
@@ -173,9 +208,9 @@ function textFaults(text, max_chars) {
 // reader's: these files are read by a person looking at a client's own box, and
 // a record whose fields land in the order the caller happened to build them in
 // reads differently every time.
-function inSchemaOrder(record) {
+function inSchemaOrder(record: Record<string, unknown>) {
   const declared = Object.keys(SCHEMA.properties);
-  const ordered = {};
+  const ordered: Record<string, unknown> = {};
   for (const key of declared) if (key in record) ordered[key] = record[key];
   for (const key of Object.keys(record)) if (!declared.includes(key)) ordered[key] = record[key];
   return ordered;
@@ -185,16 +220,18 @@ function inSchemaOrder(record) {
 // status that do not go together, writes by the store's own temp-fsync-rename
 // path, and reads the file back before returning: a write nobody read back is a
 // claim, not a record.
-export function writeTeaching(store, record) {
+export function writeTeaching<T extends Record<string, unknown>>(store: TeachingStore, record: T): { id: T['id']; file: string; record: unknown } {
   const faults = [];
   if (!KINDS.includes(record?.kind)) {
     faults.push(fault('TEACHING_KIND_UNKNOWN', String(record?.kind),
       `a teaching record is one of ${KINDS.join(' or ')}, and this is neither`,
       `write kind as ${KINDS.join(' or ')}; there is no second schema for a change request`));
-  } else if (!STATUSES[record.kind].includes(record?.status)) {
+  // KINDS membership establishes the two STATUSES keys. The status assertion only
+  // lets includes test an unknown value; it does not claim the status is valid.
+  } else if (!STATUSES[record.kind as keyof typeof STATUSES].includes(record?.status as string)) {
     faults.push(fault('TEACHING_STATUS_NOT_FOR_KIND', String(record?.status),
-      `a record of kind ${record.kind} is ${STATUSES[record.kind].join(' or ')}, and this one says ${JSON.stringify(record?.status)}`,
-      `write status as ${STATUSES[record.kind].join(' or ')}`));
+      `a record of kind ${record.kind} is ${STATUSES[record.kind as keyof typeof STATUSES].join(' or ')}, and this one says ${JSON.stringify(record?.status)}`,
+      `write status as ${STATUSES[record.kind as keyof typeof STATUSES].join(' or ')}`));
   }
   faults.push(...validate(SCHEMA, record, '$', 'carbon.teaching.v1'));
   if (faults.length > 0) throw new StreamFault(faults);
@@ -203,19 +240,23 @@ export function writeTeaching(store, record) {
   const file = teachingFile(store, record.id);
   writeAtomic(file, JSON.stringify(inSchemaOrder(record), null, 2) + '\n', FILE_MODE);
   fs.chmodSync(file, FILE_MODE);
-  const on_disk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  // This is only the property view needed by the existing id comparison. An
+  // extension such as toJSON can change serialization, so the returned record
+  // stays unknown rather than promising an object or the teaching schema.
+  const on_disk: { id?: unknown } = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (on_disk.id !== record.id) {
     throw new StreamFault([fault('TEACHING_READBACK_DISAGREES', store.relative(file),
       `the file read back names ${JSON.stringify(on_disk.id)} and the record written named ${JSON.stringify(record.id)}`,
       'the write did not land; the store is the thing to look at before anything is taught again')]);
   }
-  return { id: record.id, file, record: on_disk };
+  // This is the caller's unchanged id, not a claim about the parsed record's shape.
+  return { id: record.id as T['id'], file, record: on_disk };
 }
 
 // Two records written in the same second, citing the same message, would derive
 // one id. The format is fixed, so the way out is the next free second: the id
 // stays readable, no record is overwritten, and taught_at keeps the real time.
-function freeId(store, source_message_id, at) {
+function freeId(store: TeachingStore, source_message_id: string, at: string) {
   let seconds = Date.parse(at);
   for (let tries = 0; tries < 120; tries++) {
     const id = teachingId(source_message_id, new Date(seconds).toISOString());
@@ -227,8 +268,8 @@ function freeId(store, source_message_id, at) {
     'read the teachings directory; something is writing records in a loop')]);
 }
 
-function base(store, { agent, text, conversation_id, source_message_id, capture, now, release_id }) {
-  const record = {
+function base(store: TeachingStore, { agent, text, conversation_id, source_message_id, capture, now, release_id }: BaseOptions) {
+  const record: Record<string, unknown> & { id: string } = {
     schema: 'carbon.teaching.v1',
     id: freeId(store, source_message_id, now),
     agent,
@@ -250,7 +291,7 @@ function base(store, { agent, text, conversation_id, source_message_id, capture,
 // record anything at all, or did the agent only say it would. A record with no
 // release_id was written by a server no release loop told, and belongs to no
 // release here.
-export function teachingsUnderRelease(store, release_id) {
+export function teachingsUnderRelease(store: TeachingStore, release_id: unknown) {
   if (typeof release_id !== 'string' || release_id.length === 0) return [];
   return listTeachings(store).records.filter((r) => r.release_id === release_id);
 }
@@ -258,15 +299,15 @@ export function teachingsUnderRelease(store, release_id) {
 // Copied from the capture, never from the caller. sender_name is written only
 // when the capture carries one, because the schema names it and an empty string
 // is not a name.
-function taughtBy(capture) {
-  const teacher = { sender_id: capture.sender_id, role: capture.role };
+function taughtBy(capture: MessageRecord) {
+  const teacher: Pick<MessageRecord, 'sender_id' | 'role' | 'sender_name'> = { sender_id: capture.sender_id, role: capture.role };
   if (typeof capture.sender_name === 'string' && capture.sender_name.length > 0) {
     teacher.sender_name = capture.sender_name;
   }
   return teacher;
 }
 
-function agentFaults(agent, capture) {
+function agentFaults(agent: string | undefined, capture: MessageRecord | null) {
   if (typeof agent !== 'string' || agent.length === 0) {
     return [fault('TEACHING_AGENT_UNGIVEN', 'agent',
       'a teaching record says which agent was taught, as the declaration names it',
@@ -286,7 +327,7 @@ function agentFaults(agent, capture) {
 // Two calls quoting the same source message and the same text are one thing
 // taught once: the second returns the first record and writes nothing. A client
 // repeating themselves, and a turn re-issued after a restart, are both that.
-export function remember(store, { agent, text, conversation_id, source_message_id, max_active, max_chars, release_id = null, now = new Date().toISOString() } = {}) {
+export function remember(store: TeachingStore, { agent, text, conversation_id, source_message_id, max_active, max_chars, release_id = null, now = new Date().toISOString() }: TeachingOptions = {}) {
   const { capture, faults: sourceFaults } = citedCapture(store, conversation_id, source_message_id);
   const faults = [...sourceFaults, ...textFaults(text, max_chars), ...agentFaults(agent, capture)];
 
@@ -302,7 +343,8 @@ export function remember(store, { agent, text, conversation_id, source_message_i
     return { id: same.id, file: teachingFile(store, same.id), record: same, active: active.length, already: true };
   }
 
-  if (Number.isInteger(max_active) && !same && active.length >= max_active) {
+  // Number.isInteger excludes undefined without narrowing its TypeScript type.
+  if (Number.isInteger(max_active) && !same && active.length >= max_active!) {
     faults.push(fault('TEACHING_AT_CAP', String(max_active),
       `this agent already holds ${active.length} active instructions and its declaration's cap is ${max_active}`,
       `forget one of the instructions it is already following, or raise this as a change request: a full list is a sign a workflow has been taught one sentence at a time, and the cap moves only by a change to this agent's declaration`));
@@ -310,7 +352,8 @@ export function remember(store, { agent, text, conversation_id, source_message_i
   if (faults.length > 0) throw new StreamFault(faults);
 
   const written = writeTeaching(store, {
-    ...base(store, { agent, text, conversation_id, source_message_id, capture, now, release_id }),
+    // Source faults have been refused: the source id and capture are present.
+    ...base(store, { agent, text, conversation_id, source_message_id: source_message_id!, capture: capture!, now, release_id }),
     kind: 'instruction',
     status: 'active'
   });
@@ -320,7 +363,7 @@ export function remember(store, { agent, text, conversation_id, source_message_i
 // Record an instruction the agent refused as a change for the people who build
 // it, with which boundary question was answered yes. The same shape and the same directory:
 // one record set, one writer, one reader.
-export function raiseChange(store, { agent, text, conversation_id, source_message_id, failed_question, max_chars, release_id = null, now = new Date().toISOString() } = {}) {
+export function raiseChange(store: TeachingStore, { agent, text, conversation_id, source_message_id, failed_question, max_chars, release_id = null, now = new Date().toISOString() }: TeachingOptions = {}) {
   const { capture, faults: sourceFaults } = citedCapture(store, conversation_id, source_message_id);
   const faults = [...sourceFaults, ...textFaults(text, max_chars), ...agentFaults(agent, capture)];
   if (!QUESTIONS.includes(failed_question)) {
@@ -338,7 +381,8 @@ export function raiseChange(store, { agent, text, conversation_id, source_messag
 
   return {
     ...writeTeaching(store, {
-      ...base(store, { agent, text, conversation_id, source_message_id, capture, now, release_id }),
+      // Source faults have been refused: the source id and capture are present.
+      ...base(store, { agent, text, conversation_id, source_message_id: source_message_id!, capture: capture!, now, release_id }),
       kind: 'change-request',
       status: 'open',
       failed_question
@@ -351,7 +395,7 @@ export function raiseChange(store, { agent, text, conversation_id, source_messag
 // revocation: the status becomes forgotten and the message the client revoked it
 // in is written beside it, so the revocation is as traceable as the instruction.
 // Returns { id, file, record, active }.
-export function forget(store, { id, conversation_id, source_message_id, now = new Date().toISOString() } = {}) {
+export function forget(store: TeachingStore, { id, conversation_id, source_message_id, now = new Date().toISOString() }: ForgetOptions = {}) {
   // The revoking message is a capture of this store too: a revocation nobody
   // sent is the same failure as an instruction nobody gave.
   const { faults: sourceFaults } = citedCapture(store, conversation_id, source_message_id);
@@ -369,7 +413,8 @@ export function forget(store, { id, conversation_id, source_message_id, now = ne
   if (faults.length > 0) throw new StreamFault(faults);
 
   const written = writeTeaching(store, {
-    ...held,
+    // A missing active record added a fault and was refused above.
+    ...held!,
     status: 'forgotten',
     forgotten: { at: now, source_message_id }
   });

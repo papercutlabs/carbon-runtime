@@ -16,7 +16,7 @@ import {
 import { EXIT, RuntimeFault, fault } from '../runtime/faults.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
 import { serveTeachTool } from '../runtime/teach-tool.mjs';
-import { listTeachings, remember } from '../stream/teachings.mjs';
+import { listTeachings, remember } from '../stream/teachings.ts';
 import { fakeHarness } from './fake-harness.mjs';
 import * as fixture from '../adapters/fixture/index.ts';
 

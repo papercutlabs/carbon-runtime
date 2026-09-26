@@ -10,7 +10,7 @@
 // own declaration by carbon-core's scored runner, through the codex app-server,
 // on the interface a client agent runs on live. The teaching tools are the real
 // `runtime/teach-tool.mjs`, started as a declared tool server of that
-// declaration, writing into a real store through `stream/teachings.mjs`. The
+// declaration, writing into a real store through `stream/teachings.ts`. The
 // boundary text the model reads is the real manifest. Nothing here stands in for
 // the model's judgment: what this file writes is the client repository, the
 // store the agent's captures are in, and the three cases; what happens after
@@ -44,7 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../stream/store.ts';
-import { listTeachings } from '../stream/teachings.mjs';
+import { listTeachings } from '../stream/teachings.ts';
 import { holdApplies, releaseDecision } from '../runtime/loop.mjs';
 import { resolveChannel } from '../runtime/channel.mjs';
 
