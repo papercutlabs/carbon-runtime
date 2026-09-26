@@ -1,3 +1,4 @@
+type WrittenPoll = { consecutive_failures: unknown; holding: unknown; last_attempt_at: unknown; last_success_at: unknown; last_item_count: unknown; inbound_transport: unknown; last_fault: { code: string; problem: string } | null };
 // AgentMail REST inbound, recorded at the fetch boundary. No test reaches a
 // network or reads a real credential.
 
@@ -8,9 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
 import { ingest } from '../conformance/cases.mjs';
-import { ReleaseLoop } from '../runtime/loop.mjs';
-import { pollState } from '../runtime/poll.mjs';
-import { fakeHarness } from './fake-harness.mjs';
+import { ReleaseLoop } from '../runtime/loop.ts';
+import { pollState } from '../runtime/poll.ts';
+import { fakeHarness } from './fake-harness.ts';
 import * as adapter from '../adapters/email/index.ts';
 import { AgentMailFault, readNetrcPassword } from '../adapters/email/agentmail-api.ts';
 import type { AgentMailEmailContext, EmailRecord } from '../adapters/email/index.ts';
@@ -26,7 +27,7 @@ function netrcFile(body: string): string {
   return file;
 }
 
-function context(): AgentMailEmailContext {
+function context(): AgentMailEmailContext & { store: Store<EmailRecord>; channel: AgentMailEmailContext['channel'] & { kind: string; account: string } } {
   return {
     store: Store.open<EmailRecord>(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-agentmail-')), 'store')),
     adapter,
@@ -245,7 +246,7 @@ test('an AgentMail 5xx is one failed runtime poll cycle and reaches the existing
     const result = await loop.poll();
     assert.equal(result.failures, 1);
     assert.equal(result.holding, false);
-    assert.equal(pollState(running.store, ACCOUNT, 'email').consecutive_failures, 1);
+    assert.equal((pollState(running.store, ACCOUNT, 'email') as WrittenPoll).consecutive_failures, 1); // This case wrote these synthetic poll fields; the production reader still returns unknown.
   } finally {
     globalThis.fetch = previous;
   }
@@ -271,11 +272,11 @@ async function rejectedAttachmentCycle(serverOptions: RecordedServerOptions, cod
     const result = await loop.poll();
     assert.equal(result.failures, 1);
     assert.equal(result.holding, false);
-    assert.equal(result.items.length, 0);
+    assert.equal((result.items as unknown[]).length, 0); // This fixture creates the selected value before this access; retain the original failure if it is absent.
     assert.ok(result.fault);
-    assert.match(result.fault.problem, new RegExp(`^${code}:`));
-    assert.equal(pollState(running.store, ACCOUNT, 'email').consecutive_failures, 1);
-    assert.equal(pollState(running.store, ACCOUNT, 'email').holding, false);
+    assert.match(result.fault!.problem as string, new RegExp(`^${code}:`)); // The fixture supplies this text; the existing text assertion remains the runtime check.
+    assert.equal((pollState(running.store, ACCOUNT, 'email') as WrittenPoll).consecutive_failures, 1); // This case wrote these synthetic poll fields; the production reader still returns unknown.
+    assert.equal((pollState(running.store, ACCOUNT, 'email') as WrittenPoll).holding, false); // This case wrote these synthetic poll fields; the production reader still returns unknown.
     assert.equal(running.store.rebuild().length, 0, 'the failed poll created a capture');
     assert.equal(
       running.store.cursors(adapter.pollWatermarkConversation(running, 'INBOX')).message,
@@ -300,7 +301,7 @@ test('unreadable netrc faults preserve non-string thrown code and message proper
   for (const [thrown, expected] of [
     [{ code: 404, message: 123 }, 'this account cannot read the file: 404'],
     [{ message: 123 }, 'this account cannot read the file: 123']
-  ] as const) {
+  ] as const) { // Keep this fixture's literal type without changing its value.
     const read = t.mock.method(fs, 'readFileSync', () => { throw thrown; });
     try {
       assert.throws(() => readNetrcPassword(file, 'example.test'), (error: unknown) => {

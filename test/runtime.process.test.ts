@@ -1,3 +1,7 @@
+import type { Fault } from '../stream/faults.ts';
+import type { RuntimeFault } from '../runtime/faults.ts';
+import type { Declaration, Channel, Server } from '../runtime/types.ts';
+type TestDeclaration = Declaration & { schema: string; agent: { id: string; client: string }; channels: Channel[]; secrets: { name: string; path: string; purpose?: string }[]; tool_servers: Server[] };
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -5,28 +9,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { PROVIDER_AUTH, providerKey, run, placesUnder, placeGuidance, GUIDANCE_NAMES } from '../runtime/index.mjs';
-import { EXIT } from '../runtime/faults.mjs';
-import { takeLock, lockFile, commandLineOf } from '../runtime/lock.mjs';
-import { latch, refuseIfLatched } from '../runtime/latch.mjs';
-import { loadAdapter, registeredKinds } from '../runtime/registry.mjs';
+import { PROVIDER_AUTH, providerKey, run, placesUnder, placeGuidance, GUIDANCE_NAMES } from '../runtime/index.ts';
+import { EXIT } from '../runtime/faults.ts';
+import { takeLock, lockFile, commandLineOf } from '../runtime/lock.ts';
+import { latch, refuseIfLatched } from '../runtime/latch.ts';
+import { loadAdapter, registeredKinds } from '../runtime/registry.ts';
 import {
   environmentFor, commandFor, secretEnvName, serversToStart, serversToAwait,
   awaitToolServers, toolsUserServer, serverNameFromInstance
-} from '../runtime/tool-servers.mjs';
-import { serveReplyTool } from '../runtime/reply-tool.mjs';
+} from '../runtime/tool-servers.ts';
+import { serveReplyTool } from '../runtime/reply-tool.ts';
 import { Store } from '../stream/store.ts';
-import { fakeHarness } from './fake-harness.mjs';
+import { fakeHarness } from './fake-harness.ts';
 import * as fixture from '../adapters/fixture/index.ts';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
 
-function tmp(name) {
+function tmp(name: string) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `carbon-${name}-`));
 }
 
-function declaration() {
+function declaration(): TestDeclaration {
   return {
     schema: 'carbon.agent-declaration.v1',
     agent: { id: AGENT, client: 'ExampleCorp' },
@@ -47,7 +51,7 @@ function port() {
   return 20000 + Math.floor(Math.random() * 20000);
 }
 
-async function runOnce(options = {}) {
+async function runOnce(options: { dir?: string; declaration?: TestDeclaration; harness?: ReturnType<typeof fakeHarness>; items?: unknown[] } = {}) {
   const dir = options.dir ?? tmp('process');
   const declarationPath = path.join(dir, 'carbon.agent.json');
   const decl = options.declaration ?? declaration();
@@ -55,7 +59,7 @@ async function runOnce(options = {}) {
   // The work directory is the thread's own and the runtime links the checkout's
   // guidance into it, so it has to exist before a run the way install makes it.
   fs.mkdirSync(path.join(dir, 'work'), { recursive: true });
-  const log = [];
+  const log: Record<string, unknown>[] = [];
   const code = await run({
     declaration: decl,
     declarationPath,
@@ -96,7 +100,7 @@ test('a lock whose holder is gone is taken over, which is what a kill -9 leaves 
   assert.equal(code, EXIT.OK);
   const taken = log.find((l) => l.event === 'lock.taken_over');
   assert.ok(taken, 'the stale lock was obeyed rather than taken over');
-  assert.equal(taken.previous.pid, 999999);
+  assert.equal((taken.previous as { pid: number }).pid, 999999); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('a lock a live process of the same command line holds is refused, and nothing starts', async () => {
@@ -108,8 +112,8 @@ test('a lock a live process of the same command line holds is refused, and nothi
   try {
     takeLock(storeDir, `fixture:${ACCOUNT}`, { pid: child.pid, commandLine: commandLineOf(child.pid) });
     await assert.rejects(() => runOnce({ dir }), (error) => {
-      assert.equal(error.exitCode, EXIT.LOCK_HELD);
-      assert.equal(error.faults[0].code, 'ADAPTER_LOCK_HELD');
+      assert.equal((error as RuntimeFault).exitCode, EXIT.LOCK_HELD); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
+      assert.equal((error as RuntimeFault).faults[0].code, 'ADAPTER_LOCK_HELD'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
       return true;
     });
   } finally {
@@ -126,10 +130,10 @@ test('a latched store refuses to start, with the code the unit does not restart 
     problem: 'the server reports this device as removed',
     fix: 'a person re-pairs the device'
   });
-  assert.throws(() => refuseIfLatched(store), (error) => error.exitCode === EXIT.LATCHED);
+  assert.throws(() => refuseIfLatched(store), (error) => (error as RuntimeFault).exitCode === EXIT.LATCHED); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
   await assert.rejects(() => runOnce({ dir }), (error) => {
-    assert.equal(error.exitCode, EXIT.LATCHED);
-    assert.equal(error.faults[0].subject, `fixture:${ACCOUNT}`);
+    assert.equal((error as RuntimeFault).exitCode, EXIT.LATCHED); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
+    assert.equal((error as RuntimeFault).faults[0].subject, `fixture:${ACCOUNT}`); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
     return true;
   });
 });
@@ -146,7 +150,7 @@ test('the harness child exiting ends the process with its own code', async () =>
     statuses: () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }],
     onTurn: (session) => {
       session.endChild({ code: 1, signal: null });
-      const error = new Error('the app-server exited before the turn completed');
+      const error = new Error('the app-server exited before the turn completed') as Error & { fault: Fault; faults: Fault[] }; // This fixture creates the selected value before this access; retain the original failure if it is absent.
       error.fault = { code: 'HARNESS_CHILD_EXITED_MID_TURN', subject: 'thread-1:turn-1', problem: 'the app-server exited', fix: 'restart' };
       error.faults = [error.fault];
       throw error;
@@ -162,12 +166,12 @@ test('the harness child exiting ends the process with its own code', async () =>
 test('a channel whose adapter this build does not carry is one named fault at start', async () => {
   const empty = tmp('registry');
   await assert.rejects(() => loadAdapter('email', { root: empty }), (error) => {
-    assert.equal(error.faults[0].code, 'ADAPTER_MODULE_ABSENT');
-    assert.equal(error.faults[0].subject, 'email');
+    assert.equal((error as RuntimeFault).faults[0].code, 'ADAPTER_MODULE_ABSENT'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
+    assert.equal((error as RuntimeFault).faults[0].subject, 'email'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
     return true;
   });
   await assert.rejects(() => loadAdapter('sms'), (error) => {
-    assert.equal(error.faults[0].code, 'CHANNEL_KIND_UNREGISTERED');
+    assert.equal((error as RuntimeFault).faults[0].code, 'CHANNEL_KIND_UNREGISTERED'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
     return true;
   });
   assert.deepEqual(registeredKinds(), ['email', 'fixture', 'telegram', 'whatsapp']);
@@ -231,14 +235,14 @@ test('the runtime starts the agent-user servers and waits for the tools-user one
   // A required server that never answers is reported and does not stop the
   // process: the agent still has to read its mailbox, and release is held by
   // name while it is down.
-  const lines = [];
+  const lines: Record<string, unknown>[] = [];
   const silent = await awaitToolServers(decl, {
     timeoutMs: 10, intervalMs: 1, now: (() => { let t = 0; return () => (t += 6); })(),
     sleep: async () => {}, probe: async () => false, log: (line) => lines.push(line)
   });
   assert.deepEqual(silent, [{ name: 'client-api', url: 'http://127.0.0.1:8731/mcp', answered: false, required: true }]);
   assert.equal(lines[0].event, 'tool_server.silent');
-  assert.equal(lines[0].fault.code, 'TOOL_SERVER_UNIT_SILENT');
+  assert.equal((lines[0].fault as Fault).code, 'TOOL_SERVER_UNIT_SILENT'); // This case selected the fault log entry and now checks its original fields.
 
   const up = await awaitToolServers(decl, { probe: async () => true, log: (line) => lines.push(line) });
   assert.deepEqual(up.map((s) => s.answered), [true]);
@@ -265,13 +269,13 @@ test('the tool unit launcher takes only a tools-user http server, and reads its 
   // the agent id and never against the first hyphen.
   assert.equal(serverNameFromInstance('example-agent-client-api', 'example-agent'), 'client-api');
   assert.throws(() => serverNameFromInstance('other-agent-client-api', 'example-agent'),
-    (error) => error.faults[0].code === 'TOOL_UNIT_INSTANCE_UNREADABLE');
+    (error) => (error as RuntimeFault).faults[0].code === 'TOOL_UNIT_INSTANCE_UNREADABLE'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
 
   assert.equal(toolsUserServer(decl, 'client-api').name, 'client-api');
   assert.throws(() => toolsUserServer(decl, 'client-read'),
-    (error) => error.faults[0].code === 'TOOL_SERVER_NOT_A_TOOLS_SERVER');
+    (error) => (error as RuntimeFault).faults[0].code === 'TOOL_SERVER_NOT_A_TOOLS_SERVER'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
   assert.throws(() => toolsUserServer(decl, 'nobody'),
-    (error) => error.faults[0].code === 'TOOL_SERVER_UNDECLARED');
+    (error) => (error as RuntimeFault).faults[0].code === 'TOOL_SERVER_UNDECLARED'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
 });
 
 test('the reply tool answers over loopback and writes a pending record', async () => {
@@ -285,14 +289,14 @@ test('the reply tool answers over loopback and writes a pending record', async (
   });
   const served = await serveReplyTool({ store, agent: AGENT, port: port() });
   try {
-    const call = async (body) => {
+    const call = async (body: Record<string, unknown>) => {
       const response = await fetch(served.url, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
       });
       return response.json();
     };
     const listed = await call({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
-    assert.deepEqual(listed.result.tools.map((t) => t.name), ['reply']);
+    assert.deepEqual(listed.result.tools.map((t: { name: string }) => t.name), ['reply']);
     assert.deepEqual(Object.keys(listed.result.tools[0].inputSchema.properties).sort(),
       ['attachments', 'conversation_id', 'request_id', 'text']);
 
@@ -303,8 +307,8 @@ test('the reply tool answers over loopback and writes a pending record', async (
     assert.equal(called.result.isError, false);
     assert.equal(called.result.structuredContent.status, 'written');
     const outbound = store.rebuild().find((r) => r.direction === 'outbound');
-    assert.equal(outbound.delivery.status, 'pending');
-    assert.equal(outbound.body, 'the answer');
+    assert.equal(outbound!.delivery!.status, 'pending'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+    assert.equal(outbound!.body, 'the answer'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   } finally {
     await served.close();
   }
@@ -329,7 +333,7 @@ test('an api key is read from the file the declaration names, and passed under t
 
 test('a declaration that names neither way of authenticating is refused by name', () => {
   assert.throws(() => providerKey({ provider: { name: 'openai' } }),
-    (error) => error.faults.some((f) => f.code === 'PROVIDER_AUTH_UNKNOWN'));
+    (error) => (error as RuntimeFault).faults.some((f) => f.code === 'PROVIDER_AUTH_UNKNOWN')); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
   assert.deepEqual(PROVIDER_AUTH, ['chatgpt', 'api_key']);
 });
 
@@ -400,5 +404,5 @@ test('what stands at those two names is written again from the checkout at every
 test('a run with no work directory on the box is refused rather than opened somewhere else', () => {
   const dir = tmp('guidance');
   assert.throws(() => placeGuidance({ work: path.join(dir, 'work'), checkout: dir }),
-    (error) => error.faults.some((f) => f.code === 'WORK_DIR_ABSENT'));
+    (error) => (error as RuntimeFault).faults.some((f) => f.code === 'WORK_DIR_ABSENT')); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
 });

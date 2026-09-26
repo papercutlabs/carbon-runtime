@@ -1,10 +1,11 @@
+import type { MessageRecord, Attachment } from '../stream/store.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store, StreamFault } from '../stream/store.ts';
-import { replyHandler } from '../runtime/reply-tool.mjs';
+import { replyHandler } from '../runtime/reply-tool.ts';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
@@ -14,7 +15,7 @@ function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-reply-'));
   const work = path.join(dir, 'work');
   fs.mkdirSync(work);
-  const store = Store.open(path.join(dir, 'store'));
+  const store = Store.open<MessageRecord<Attachment>>(path.join(dir, 'store'));
   store.capture({
     schema: 'carbon.message.v1',
     agent: AGENT,
@@ -41,7 +42,7 @@ function pdfBytes() {
   return Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n', 'latin1');
 }
 
-function refuse(run) {
+function refuse(run: () => unknown) {
   try {
     run();
   } catch (error) {
@@ -63,12 +64,12 @@ test('a reply with a PDF attachment writes a pending record the adapter would se
   });
   assert.equal(result.data.status, 'written');
   const outbound = store.rebuild().find((r) => r.direction === 'outbound');
-  assert.equal(outbound.delivery.status, 'pending');
-  assert.equal(outbound.body, 'BOR attached.');
-  assert.equal(outbound.attachments.length, 1);
-  assert.equal(outbound.attachments[0].mime, 'application/pdf');
-  assert.equal(outbound.attachments[0].filename, 'bor.pdf');
-  const onDisk = store.under(outbound.attachments[0].file);
+  assert.equal(outbound!.delivery!.status, 'pending'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+  assert.equal(outbound!.body, 'BOR attached.'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(outbound!.attachments.length, 1); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(outbound!.attachments[0].mime, 'application/pdf'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(outbound!.attachments[0].filename, 'bor.pdf'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  const onDisk = store.under(outbound!.attachments[0].file); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   assert.equal(fs.existsSync(onDisk), true);
   assert.equal(fs.readFileSync(onDisk).slice(0, 5).toString(), '%PDF-');
 });
@@ -81,9 +82,9 @@ test('a reply without attachments still writes text only', () => {
     text: 'missing page 10'
   });
   const outbound = store.rebuild().find((r) => r.direction === 'outbound');
-  assert.equal(outbound.delivery.status, 'pending');
-  assert.deepEqual(outbound.attachments, []);
-  assert.equal(outbound.body, 'missing page 10');
+  assert.equal(outbound!.delivery!.status, 'pending'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+  assert.deepEqual(outbound!.attachments, []); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(outbound!.body, 'missing page 10'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('a missing attachment file is a fault with a fix', () => {

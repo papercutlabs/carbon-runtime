@@ -1,3 +1,7 @@
+import type { Declaration, Teaching } from './types.ts';
+type TeachArgs = { text?: string; conversation_id?: string; source_message_id?: string; id?: string; failed_question?: number | string };
+type TeachOptions = { store: Store; agent: string; declaration: Declaration };
+type HandlerOptions = { store: Store; agent: string; teaching: Teaching; management: string | null; release?: () => string | null; now?: () => string };
 // The `teach` tools: what a client may teach their agent, and what has to come
 // back to the people who build it.
 //
@@ -24,7 +28,7 @@
 // this file, which is where it differs from the reply tool: `carbon tool check`
 // reads a directory holding `tool-server.json`, and the plan asks for this server
 // to pass it. The directory holds the manifest and nothing else; the entry it
-// names is this file, and `node runtime/teach-tool.mjs --help` renders the manual
+// names is this file, and `node runtime/teach-tool.ts --help` renders the manual
 // from that same manifest, so the manual and the descriptions the model reads are
 // one text.
 //
@@ -52,8 +56,8 @@ import { renderHelp } from '../tools/lib/help.mjs';
 import { ToolFault, fault as toolFault } from '../tools/lib/fault.mjs';
 import { Store, StreamFault } from '../stream/store.ts';
 import { remember, raiseChange, forget } from '../stream/teachings.ts';
-import { fault, report, RuntimeFault, EXIT } from './faults.mjs';
-import { managementConversationOf } from './channel.mjs';
+import { fault, report, RuntimeFault, EXIT } from './faults.ts';
+import { managementConversationOf } from './channel.ts';
 
 export const TEACH_SERVER_NAME = 'carbon-teach';
 // The teaching tools listen here unless a caller names another port. It is a
@@ -67,7 +71,7 @@ export const MANIFEST = readManifest(MANIFEST_DIR);
 
 // The declaration's teaching block, or a refusal. Nothing here has a default:
 // a cap this file chose would be a cap no client repository agreed to.
-export function teachingOf(declaration) {
+export function teachingOf(declaration: Declaration | null | undefined) {
   const teaching = declaration?.teaching;
   if (!teaching || typeof teaching !== 'object') {
     throw new RuntimeFault(fault('TEACHING_BLOCK_ABSENT', 'teaching',
@@ -89,7 +93,7 @@ export function teachingOf(declaration) {
 // about how the agent operates. The failure is silent if it is not refused - it
 // looks like the agent behaving oddly, not like something it was never told to
 // stand on.
-export function managementFaults(management, conversation_id) {
+export function managementFaults(management: string | null, conversation_id: unknown) {
   if (management !== null && conversation_id === management) return [];
   return [toolFault('TEACHING_NOT_IN_MANAGEMENT_CONVERSATION', String(conversation_id),
     management === null
@@ -100,7 +104,7 @@ export function managementFaults(management, conversation_id) {
 
 // Everything below this line refuses in the tool fault shape, so the model reads
 // what is wrong and what to do about it rather than a stack.
-function asToolFault(thrown) {
+function asToolFault(thrown: unknown) {
   if (thrown instanceof StreamFault) return new ToolFault(thrown.faults);
   return thrown;
 }
@@ -109,13 +113,13 @@ function asToolFault(thrown) {
 // leaves nothing behind at all. It is the conversation the call names that is
 // checked; a source_message_id from another conversation is not in this
 // conversation's captures and stream/teachings.ts refuses it by name.
-function refuseOutsideManagement(management, { conversation_id }) {
+function refuseOutsideManagement(management: string | null, { conversation_id }: { conversation_id?: string }) {
   const faults = managementFaults(management, conversation_id);
   if (faults.length > 0) throw new ToolFault(faults);
 }
 
-function rememberHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }) {
-  return (args) => {
+function rememberHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }: HandlerOptions) {
+  return (args: TeachArgs) => {
     refuseOutsideManagement(management, args);
     let written;
     try {
@@ -141,8 +145,8 @@ function rememberHandler({ store, agent, teaching, management, release = () => n
   };
 }
 
-function raiseChangeHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }) {
-  return (args) => {
+function raiseChangeHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }: HandlerOptions) {
+  return (args: TeachArgs) => {
     refuseOutsideManagement(management, args);
     let written;
     try {
@@ -170,8 +174,8 @@ function raiseChangeHandler({ store, agent, teaching, management, release = () =
 // client says about how the agent operates, so it is said where the instruction
 // was said; a revocation taken from a work chat would let one sentence there drop
 // a standing instruction the management conversation put up.
-function forgetHandler({ store, management, now = () => new Date().toISOString() }) {
-  return (args) => {
+function forgetHandler({ store, management, now = () => new Date().toISOString() }: Pick<HandlerOptions, 'store' | 'management' | 'now'>) {
+  return (args: TeachArgs) => {
     refuseOutsideManagement(management, args);
     let written;
     try {
@@ -197,7 +201,7 @@ function forgetHandler({ store, management, now = () => new Date().toISOString()
 // runs no release loop — a scored run, which hosts these tools for the length of
 // one turn and has no release — names none, and the records it writes carry no
 // release_id, which is the truth about them.
-export function createTeachServer({ store, agent, declaration, release = () => null }) {
+export function createTeachServer({ store, agent, declaration, release = () => null }: TeachOptions & { release?: () => string | null }) {
   const teaching = teachingOf(declaration);
   const management = managementConversationOf(declaration);
   return createServer({
@@ -210,18 +214,18 @@ export function createTeachServer({ store, agent, declaration, release = () => n
   });
 }
 
-export async function serveTeachTool({ store, agent, declaration, host = '127.0.0.1', port = TEACH_PORT }) {
+export async function serveTeachTool({ store, agent, declaration, host = '127.0.0.1', port = TEACH_PORT }: TeachOptions & { host?: string; port?: number }) {
   // One value, held here and read at the moment a call arrives, because turns are
   // taken one at a time in this process: two channels on one agent are two loops
   // that never take a turn at the same moment.
-  let current = null;
+  let current: string | null = null;
   const server = createTeachServer({ store, agent, declaration, release: () => current });
   const { server: http, url } = await server.serveHttp({ host, port });
   return {
     http,
     url,
-    setRelease: (release_id) => { current = release_id ?? null; },
-    close: () => new Promise((resolve) => http.close(resolve))
+    setRelease: (release_id: string | null | undefined) => { current = release_id ?? null; },
+    close: () => new Promise<unknown>((resolve) => http.close(resolve))
   };
 }
 
@@ -243,13 +247,13 @@ export async function serveTeachTool({ store, agent, declaration, host = '127.0.
 // the declaration's `runtime.env`, which is how any tool server on a box is told
 // what to reach. It is not defaulted: a teaching server writing into a store
 // nobody named is a client's standing instructions landing where nobody looks.
-export function argumentFaults(args) {
+export function argumentFaults(args: Record<string, string | undefined>) {
   const faults = [];
   for (const name of ['declaration', 'host', 'port']) {
     if (args[name] === undefined || args[name] === '') {
       faults.push(fault('MISSING_ARGUMENT', `--${name}`,
         'the teaching server is told what it serves and where it binds, and nothing here has a default that guesses',
-        `pass --${name}; node runtime/teach-tool.mjs --help says what each is`));
+        `pass --${name}; node runtime/teach-tool.ts --help says what each is`));
     }
   }
   if (args.store === undefined || args.store === '') {
@@ -260,8 +264,8 @@ export function argumentFaults(args) {
   return faults;
 }
 
-export function parseServeArgv(argv) {
-  const args = { store: process.env.CARBON_TEACH_STORE };
+export function parseServeArgv(argv: string[]) {
+  const args: Record<string, string | undefined> = { store: process.env.CARBON_TEACH_STORE };
   for (const name of ['declaration', 'host', 'port']) {
     const at = argv.indexOf(`--${name}`);
     if (at !== -1) args[name] = argv[at + 1];
@@ -271,13 +275,14 @@ export function parseServeArgv(argv) {
 
 // The manual, rendered from the manifest, so `carbon tool check` reads the same
 // text the harness puts in front of the model.
-async function main(argv) {
+async function main(argv: string[]) {
   if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
-    console.log(renderHelp(MANIFEST, {
+    // The vendored JS helper iterates string usage lines, but its empty default infers never[].
+    console.log((renderHelp as (manifest: unknown, options: { serverUsage: string[] }) => string)(MANIFEST, {
       serverUsage: [
         'served by the carbon runtime on loopback beside the reply tool, in the same process',
-        `node runtime/teach-tool.mjs --declaration <file> --host <host> --port <n>    serve it as its own process, with CARBON_TEACH_STORE naming the store (the runtime's own port is ${TEACH_PORT})`,
-        'node runtime/teach-tool.mjs --help    the manual'
+        `node runtime/teach-tool.ts --declaration <file> --host <host> --port <n>    serve it as its own process, with CARBON_TEACH_STORE naming the store (the runtime's own port is ${TEACH_PORT})`,
+        'node runtime/teach-tool.ts --help    the manual'
       ]
     }));
     return 0;
@@ -288,10 +293,14 @@ async function main(argv) {
     report(faults);
     return EXIT.FAULT;
   }
-  const declaration = JSON.parse(fs.readFileSync(args.declaration, 'utf8'));
+  // argumentFaults above establishes these required paths; JSON itself remains unvalidated.
+  const raw: unknown = JSON.parse(fs.readFileSync(args.declaration!, 'utf8'));
+  // The CLI consumes the declaration's existing operations without adding validation.
+  const declaration = raw as Declaration;
   const { url } = await serveTeachTool({
-    store: Store.open(args.store),
-    agent: declaration.agent?.id,
+    store: Store.open(args.store!),
+    // Existing server startup passes the raw agent id to the store boundary.
+    agent: declaration.agent?.id!,
     declaration,
     host: args.host,
     port: Number(args.port)

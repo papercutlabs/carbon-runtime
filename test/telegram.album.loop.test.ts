@@ -1,3 +1,4 @@
+import type { Channel } from '../runtime/types.ts';
 // Assertions on fixture-only fault shapes and nonempty test results preserve
 // the original failure assertions; they add no fallback for a missing result.
 import type { Respond } from './telegram-fixtures.ts';
@@ -22,10 +23,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { Store } from '../stream/store.ts';
-import { ReleaseLoop } from '../runtime/loop.mjs';
-import { resolveChannel } from '../runtime/channel.mjs';
-import { replyHandler } from '../runtime/reply-tool.mjs';
-import { fakeHarness } from './fake-harness.mjs';
+import { ReleaseLoop } from '../runtime/loop.ts';
+import { resolveChannel } from '../runtime/channel.ts';
+import { replyHandler } from '../runtime/reply-tool.ts';
+import { fakeHarness } from './fake-harness.ts';
 import { forget, IDLE_MS } from '../adapters/telegram/live.ts';
 import * as telegram from '../adapters/telegram/index.ts';
 import { photoUpdate, sleep, tokenFile } from './telegram-fixtures.ts';
@@ -46,7 +47,7 @@ function botServerOf({ respond }: { respond: Respond }) {
   globalThis.fetch = (async (url: string, options: RequestInit = {}) => {
     if (url.includes('/getUpdates')) {
       calls += 1;
-      const params = JSON.parse(options.body as string);
+      const params = JSON.parse(options.body as string); // The adapter JSON-encodes this request; narrow RequestInit.body only for this fake fetch handler's JSON.parse.
       const offset = params.offset ?? null;
       const produced = respond({ call: calls, offset }) ?? [];
       const result = produced.filter((one) => offset === null || one.update_id >= offset);
@@ -55,7 +56,7 @@ function botServerOf({ respond }: { respond: Respond }) {
       return { status: 200, json: async () => ({ ok: true, result }) };
     }
     if (url.includes('/getFile')) {
-      const { file_id } = JSON.parse(options.body as string);
+      const { file_id } = JSON.parse(options.body as string); // The adapter JSON-encodes this request; narrow RequestInit.body only for this fake fetch handler's JSON.parse.
       return { status: 200, json: async () => ({ ok: true, result: { file_path: `files/${file_id}.jpg` } }) };
     }
     if (url.includes('/file/bot')) {
@@ -66,7 +67,7 @@ function botServerOf({ respond }: { respond: Respond }) {
       return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(bytes).buffer };
     }
     if (url.includes('/sendMessage')) {
-      const params = JSON.parse(options.body as string);
+      const params = JSON.parse(options.body as string); // The adapter JSON-encodes this request; narrow RequestInit.body only for this fake fetch handler's JSON.parse.
       sent.push(params);
       return {
         status: 200,
@@ -74,7 +75,7 @@ function botServerOf({ respond }: { respond: Respond }) {
       };
     }
     throw new Error(`unexpected fake request ${url}`);
-  }) as unknown as typeof fetch;
+  }) as unknown as typeof fetch; // Install a synthetic fetch that accepts the adapter's string URLs and implements only the response fields used here: status, json, and file ok/arrayBuffer.
   return { asked, sent, restore: () => { globalThis.fetch = previous; } };
 }
 
@@ -118,7 +119,7 @@ function answering(store: Store) {
   const handle = replyHandler({ store, agent: AGENT });
   return (session: unknown, params: { input: string; clientUserMessageId: string }) => {
     const conversation = /conversation_id: (\S+)/.exec(params.input)?.[1];
-    handle({ conversation_id: conversation, request_id: params.clientUserMessageId, text: 'the answer' });
+    handle({ conversation_id: conversation!, request_id: params.clientUserMessageId, text: 'the answer' }); // This fixture creates the selected value before this access; retain the original failure if it is absent.
     return 'completed';
   };
 }
@@ -129,13 +130,13 @@ function makeLoop() {
   const declaration = declarationOf(tokenFile());
   // The unconverted helper infers zero-argument defaults, but its source calls
   // onTurn(session, params, n) and returns the listed statuses unchanged.
-  const harness = (fakeHarness as unknown as (options: {
+  const harness = (fakeHarness as unknown as (options: { // This fixture creates the selected value before this access; retain the original failure if it is absent.
     onTurn: ReturnType<typeof answering>; statuses: typeof REPLY_LISTED;
   }) => ReturnType<typeof fakeHarness>)({ onTurn: answering(store), statuses: REPLY_LISTED });
   const lines: { event: string }[] = [];
   const loop = new ReleaseLoop({
     declaration,
-    channel: resolveChannel(declaration, declaration.channels[0]),
+    channel: resolveChannel(declaration, declaration.channels[0]) as Channel, // The fixture supplies these channel fields; resolved transport overrides remain unvalidated in the runtime API.
     store,
     storeDir: dir,
     adapter: telegram,
@@ -146,7 +147,7 @@ function makeLoop() {
     work: dir,
     // ReleaseLoop's JavaScript default infers no argument; the implementation
     // supplies log events. Preserve that callback unchanged at this boundary.
-    log: ((line: { event: string }) => lines.push(line)) as unknown as () => void
+    log: ((line: { event: string }) => lines.push(line)) as unknown as () => void // This fixture creates the selected value before this access; retain the original failure if it is absent.
   });
   return { loop, store, harness, lines };
 }
@@ -175,7 +176,7 @@ test('six photographs the worker retained across shrinking answers are one relea
 
   try {
     // The default forty attempts always run a pass; null only describes zero attempts.
-    const result = (await passUntilCaptured(loop))!;
+    const result = (await passUntilCaptured(loop))!; // This fixture creates the selected value before this access; retain the original failure if it is absent.
 
     assert.equal(result.captured.length, 6, 'the album did not reach the loop whole');
     assert.equal(new Set(result.captured.map((one: MessageRecord) => one.message_id)).size, 6,
@@ -194,15 +195,15 @@ test('six photographs the worker retained across shrinking answers are one relea
       assert.ok(harness.session.turns[0].input.includes(digest),
         'a stored photograph did not reach the turn input');
     }
-    assert.equal(new Set(inbound.map((one) => one.release!.turn_id)).size, 1);
-    assert.ok(inbound.every((one) => one.release!.completed_at), 'a record was left in an open release');
+    assert.equal(new Set(inbound.map((one) => one.release!.turn_id)).size, 1); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
+    assert.ok(inbound.every((one) => one.release!.completed_at), 'a record was left in an open release'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
 
     // At most one logical reply: one outbound record, whatever number of chunks
     // the server was asked to carry it in.
-    assert.deepEqual(result.delivered.map((one: { status: string }) => one.status), ['sent']);
+    assert.deepEqual(result.delivered.map((one) => one.status), ['sent']);
     const outbound = store.rebuild().filter((one) => one.direction === 'outbound');
     assert.equal(outbound.length, 1, 'the album was answered more than once');
-    assert.equal(outbound[0].delivery!.status, 'sent');
+    assert.equal(outbound[0].delivery!.status, 'sent'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
     assert.equal(lines.filter((line) => line.event === 'release').length, 1);
     assert.equal(lines.filter((line) => line.event === 'turn').length, 1);
 
@@ -232,7 +233,7 @@ test('two chats in one retained batch stay two releases and two turns', async ()
 
   try {
     // The default forty attempts always run a pass; null only describes zero attempts.
-    const result = (await passUntilCaptured(loop))!;
+    const result = (await passUntilCaptured(loop))!; // This fixture creates the selected value before this access; retain the original failure if it is absent.
 
     assert.equal(result.captured.length, 4, 'a retained update was lost between the chats');
     assert.equal(result.released.length, 2, 'the two chats were gathered into one release');

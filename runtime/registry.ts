@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { fault, RuntimeFault } from './faults.mjs';
+import { fault, RuntimeFault } from './faults.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -30,7 +30,7 @@ export function registeredKinds() {
 
 // Returns the module. Throws a named fault when the kind is not registered, or
 // is registered and its module is not in this build.
-export async function loadAdapter(kind, { root = ROOT, registry = REGISTRY } = {}) {
+export async function loadAdapter(kind: string, { root = ROOT, registry = REGISTRY }: { root?: string; registry?: Record<string, string> } = {}): Promise<Record<string, unknown>> {
   const relative = registry[kind];
   if (relative === undefined) {
     throw new RuntimeFault(fault('CHANNEL_KIND_UNREGISTERED', kind,
@@ -43,7 +43,7 @@ export async function loadAdapter(kind, { root = ROOT, registry = REGISTRY } = {
       `the ${kind} adapter is registered at ${relative} and this build does not carry that file`,
       `install a carbon-runtime release that carries the ${kind} adapter, or remove the channel from the declaration`));
   }
-  const module = await import(pathToFileURL(file).href);
+  const module: Record<string, unknown> = await import(pathToFileURL(file).href);
   const missing = ['capabilities', 'listPending', 'consume', 'payload', 'send']
     .filter((name) => module[name] === undefined);
   if (missing.length > 0) {

@@ -1,3 +1,5 @@
+import type { Context, Log } from './types.ts';
+import type { MessageRecord } from '../stream/store.ts';
 // The signal that says a turn is running.
 //
 // A person who has sent a message to their agent sees nothing at all while the
@@ -33,14 +35,16 @@ const CALL_BOUND_MS = 2000;
 // Telegram bounds its own calls at sixty seconds and the WhatsApp library's
 // presence call has no timeout at all, so a stop the release waited on could
 // hold that release for a minute or forever.
-export function startTyping({ adapter, context, record, log = () => {} }) {
+export function startTyping({ adapter, context, record, log = () => {} }: { adapter: object; context: Context; record: MessageRecord; log?: Log }) {
   // The email path, and the path for any adapter whose channel has no such
   // signal: no call, no log line, and a stop that does nothing.
-  if (typeof adapter.typing !== 'function') return { stop: () => {} };
+  // Presence and thenability are checked below; outputs are otherwise unknown.
+  const operation = adapter as { typing?: (context: Context, record: MessageRecord, state: string) => unknown };
+  if (typeof operation.typing !== 'function') return { stop: () => {} };
 
   const state = { stopped: false, inFlight: false };
 
-  const issue = (asked) => {
+  const issue = (asked: string): void => {
     // Once stopped, no further `composing` may go out: a tick that raced the
     // stop would turn the indicator back on behind the reply.
     if (asked === 'composing' && state.stopped) return;
@@ -53,25 +57,29 @@ export function startTyping({ adapter, context, record, log = () => {} }) {
       // leaves the provider holding "typing", so it is followed by a `paused`.
       if (state.stopped) issue('paused');
     };
-    const failed = (error) => {
+    const failed = (error: unknown) => {
       log({
         event: 'typing.failed',
         channel: context.channel?.kind,
         account: context.account,
         state: asked,
-        problem: error?.message ?? String(error)
+        // The optional message field is logged verbatim, never promised as text.
+        problem: (error as { message?: unknown } | null)?.message ?? String(error)
       });
     };
 
     let result;
     try {
-      result = adapter.typing(context, record, asked);
+      // The initial typeof check established the callable operation.
+      result = operation.typing!(context, record, asked);
     } catch (error) {
       failed(error);
       settled();
       return;
     }
-    if (typeof result?.then !== 'function') {
+    // Only the existing then property check governs this provider value.
+    const pending = result as { then?: (ok: () => void, failed: (error: unknown) => void) => unknown } | null | undefined;
+    if (typeof pending?.then !== 'function') {
       settled();
       return;
     }
@@ -79,7 +87,7 @@ export function startTyping({ adapter, context, record, log = () => {} }) {
     // below, and this only stops the refresh from waiting on it.
     const bound = setTimeout(() => { if (asked === 'composing') state.inFlight = false; }, CALL_BOUND_MS);
     bound.unref?.();
-    result.then(() => { clearTimeout(bound); settled(); }, (error) => {
+    pending.then(() => { clearTimeout(bound); settled(); }, (error) => {
       clearTimeout(bound);
       failed(error);
       settled();

@@ -29,8 +29,10 @@ export const EXIT = {
   LATCHED: 78
 };
 
-export class RuntimeFault extends Error {
-  constructor(faults, exitCode = EXIT.FAULT) {
+export class RuntimeFault<TProblem = string, TFix = string> extends Error {
+  declare faults: { code: string; subject: string; problem: TProblem; fix: TFix }[];
+  declare exitCode: number;
+  constructor(faults: { code: string; subject: string; problem: TProblem; fix: TFix } | { code: string; subject: string; problem: TProblem; fix: TFix }[], exitCode = EXIT.FAULT) {
     const all = Array.isArray(faults) ? faults : [faults];
     super(all.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('\n'));
     this.name = 'RuntimeFault';

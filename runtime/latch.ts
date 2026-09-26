@@ -1,3 +1,6 @@
+type LatchFields = { code?: unknown; reason?: unknown; problem?: unknown; what_now?: unknown; fix?: unknown };
+import type { Store } from '../stream/store.ts';
+import type { Fault } from '../stream/faults.ts';
 // The terminal latch, for the runtime as a whole.
 //
 // Some endings are not worth restarting into. The WhatsApp adapter already has
@@ -25,11 +28,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { writeAtomic, StreamFault } from '../stream/store.ts';
 import { componentFaults, encodeComponent, decodeComponent } from '../stream/encode.ts';
-import { fault, RuntimeFault, EXIT } from './faults.mjs';
+import { fault, RuntimeFault, EXIT } from './faults.ts';
 
 export const EXIT_LATCHED = EXIT.LATCHED;
 
-export function latchFile(store, account, kind) {
+export function latchFile(store: Pick<Store, 'under'>, account: string, kind: string) {
   const faults = [...componentFaults('account', account), ...componentFaults('channel kind', kind)];
   if (faults.length > 0) throw new StreamFault(faults);
   const dir = store.under('channels', encodeComponent(account));
@@ -40,7 +43,7 @@ export function latchFile(store, account, kind) {
 // Every latch under the store, whoever wrote it. A runtime hosts more than one
 // adapter, and one latched channel stops the process, so the start check reads
 // them all and reports them together rather than the first one it meets.
-export function latchesUnder(store) {
+export function latchesUnder(store: Pick<Store, 'under'>) {
   const dir = store.under('channels');
   if (!fs.existsSync(dir)) return [];
   const found = [];
@@ -49,7 +52,7 @@ export function latchesUnder(store) {
     if (!fs.statSync(at).isDirectory()) continue;
     for (const name of fs.readdirSync(at).sort()) {
       if (!name.endsWith('.latch.json')) continue;
-      let content = null;
+      let content: unknown = null;
       try { content = JSON.parse(fs.readFileSync(path.join(at, name), 'utf8')); } catch { content = null; }
       found.push({
         account: decodeComponent(account),
@@ -62,19 +65,21 @@ export function latchesUnder(store) {
   return found;
 }
 
-export function latchFaults(store) {
+export function latchFaults(store: Pick<Store, 'under'>): { code: string; subject: string; problem: unknown; fix: unknown }[] {
+  // Persisted latch fields are read verbatim; assertions authorize only these
+  // property reads. The result keeps both problem and fix unknown.
   return latchesUnder(store).map(({ account, kind, latch: content }) => fault(
-    content?.code ? `CHANNEL_LATCHED_${content.code}` : 'CHANNEL_LATCHED',
+    (content as LatchFields | null)?.code ? `CHANNEL_LATCHED_${(content as LatchFields).code}` : 'CHANNEL_LATCHED',
     `${kind}:${account}`,
-    content?.reason ?? content?.problem ?? 'this channel is latched and the reason was not readable',
-    content?.what_now ?? content?.fix ?? 'a person decides what happened, fixes it, and the next carbon install clears the latch'
+    (content as LatchFields | null)?.reason ?? (content as LatchFields | null)?.problem ?? 'this channel is latched and the reason was not readable', // Read the persisted latch fields verbatim; the returned problem and fix remain unknown.
+    ((content as LatchFields | null)?.what_now ?? (content as LatchFields | null)?.fix ?? 'a person decides what happened, fixes it, and the next carbon install clears the latch') as string // Read the persisted latch fields verbatim; the returned problem and fix remain unknown.
   ));
 }
 
 // A latched agent does not start. This is what makes the latch a stop rather than
 // a note: the process refuses before it opens a socket or a thread, so a unit
 // restarted by hand stops again with the same code and the same reason.
-export function refuseIfLatched(store) {
+export function refuseIfLatched(store: Pick<Store, 'under'>) {
   const faults = latchFaults(store);
   if (faults.length > 0) throw new RuntimeFault(faults, EXIT.LATCHED);
 }
@@ -82,7 +87,7 @@ export function refuseIfLatched(store) {
 // Write the latch and return the fault to stop on. The first cause is the one
 // that matters: a latch already on disk is left as it is, because the second
 // cause is usually the first one seen again.
-export function latch(store, account, kind, cause) {
+export function latch(store: Pick<Store, 'under'>, account: string, kind: string, cause: Fault<unknown>) {
   const file = latchFile(store, account, kind);
   if (!fs.existsSync(file)) {
     writeAtomic(file, JSON.stringify({

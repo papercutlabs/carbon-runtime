@@ -1,3 +1,7 @@
+import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
+import type { Declaration } from './types.ts';
+type ReplyArgs = { conversation_id: string; request_id: string; text: string; attachments?: unknown[] | null };
+type ReplyOptions = { store: Store; agent: string; declaration?: Declaration | null; work?: string | null };
 // The `reply` tool: the one door out of a turn.
 //
 // It writes an outbound record as `pending` and returns. It does not send. The
@@ -26,7 +30,7 @@ import path from 'node:path';
 import { createServer } from '../tools/lib/mcp.mjs';
 import { StreamFault } from '../stream/store.ts';
 import { fault } from '../stream/faults.ts';
-import { managementConversationOf } from './channel.mjs';
+import { managementConversationOf } from './channel.ts';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
 // The reply tool listens here unless a caller names another port. It is a
@@ -38,7 +42,7 @@ export const MANIFEST = {
   schema: 'carbon.tool-server.v1',
   name: REPLY_SERVER_NAME,
   version: '1',
-  entry: 'runtime/reply-tool.mjs',
+  entry: 'runtime/reply-tool.ts',
   transport: 'http',
   secrets: [],
   tools: [
@@ -79,14 +83,14 @@ export const MANIFEST = {
 // record released to the model and not yet completed. The link is written on the
 // outbound record as reply_to so a transport can hang its reply under the newest
 // message. A restart matches delivery.request_id against release.turn_id.
-export function openReleaseIn(store, conversation_id) {
+export function openReleaseIn(store: Store, conversation_id: string) {
   return store.recordsIn(conversation_id)
     .filter((r) => r.direction === 'inbound' && r.release && !r.release.completed_at)
     .sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)))
     .at(-1) ?? null;
 }
 
-function resolveWorkRoot(work) {
+function resolveWorkRoot(work: unknown) {
   if (typeof work !== 'string' || work.length === 0) {
     throw new StreamFault([fault('WORK_DIR_ABSENT', String(work ?? ''),
       'the reply tool sends only files from the turn workspace, and no workspace was given',
@@ -101,12 +105,12 @@ function resolveWorkRoot(work) {
   }
 }
 
-function insideWork(root, resolved) {
+function insideWork(root: string, resolved: string) {
   const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
   return resolved === root || resolved.startsWith(prefix);
 }
 
-function readAttachments(paths, work) {
+function readAttachments(paths: unknown[] | null | undefined, work: unknown) {
   const list = paths ?? [];
   if (list.length === 0) return [];
   const root = resolveWorkRoot(work);
@@ -159,7 +163,7 @@ function readAttachments(paths, work) {
   return ready;
 }
 
-function attachmentsFromPaths(store, record, paths, work) {
+function attachmentsFromPaths(store: Store, record: MessageRecord, paths: unknown[] | null | undefined, work: unknown) {
   const ready = readAttachments(paths, work);
   return ready.map((one) => store.putAttachment(record, one.bytes, {
     mime: one.mime,
@@ -167,7 +171,7 @@ function attachmentsFromPaths(store, record, paths, work) {
   }));
 }
 
-export function outboundRecord(store, { agent, conversation_id, request_id, text, attachments = [], work = null, now = new Date() }) {
+export function outboundRecord(store: Store, { agent, conversation_id, request_id, text, attachments = [], work = null, now = new Date() }: ReplyArgs & { agent: string; work?: string | null; now?: Date }) {
   const inbound = store.recordsIn(conversation_id).filter((r) => r.direction === 'inbound');
   if (inbound.length === 0) {
     throw new StreamFault([{
@@ -177,9 +181,10 @@ export function outboundRecord(store, { agent, conversation_id, request_id, text
       fix: 'reply on a conversation this agent owns'
     }]);
   }
-  const newest = inbound.sort((a, b) => String(a.received_at).localeCompare(String(b.received_at))).at(-1);
+  // inbound is nonempty after the refusal above.
+  const newest = inbound.sort((a, b) => String(a.received_at).localeCompare(String(b.received_at))).at(-1)!;
   const open = openReleaseIn(store, conversation_id);
-  const record = {
+  const record: MessageRecord<Attachment> = {
     schema: 'carbon.message.v1',
     agent,
     source: newest.source,
@@ -216,7 +221,7 @@ export function outboundRecord(store, { agent, conversation_id, request_id, text
 // a reply that claims a memory can be a reply about a memory that does not exist.
 // A customer or an ops conversation is untouched by any of this and its replies go
 // out exactly as they did before.
-export function teachCheckConversation(declaration) {
+export function teachCheckConversation(declaration: Declaration | null | undefined) {
   if (declaration?.teaching?.enabled !== true) return null;
   return managementConversationOf(declaration);
 }
@@ -227,9 +232,9 @@ export function teachCheckConversation(declaration) {
 // The declaration is what says whether this reply is held. Without one — which is
 // every caller that is not the runtime — nothing is held and the reply is written
 // as it always was.
-export function replyHandler({ store, agent, declaration = null, work = null, now = () => new Date() }) {
+export function replyHandler({ store, agent, declaration = null, work = null, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
   const heldIn = teachCheckConversation(declaration);
-  return (args) => {
+  return (args: ReplyArgs) => {
     const record = outboundRecord(store, {
       agent,
       conversation_id: args.conversation_id,
@@ -256,15 +261,15 @@ export function replyHandler({ store, agent, declaration = null, work = null, no
   };
 }
 
-export function createReplyServer({ store, agent, declaration = null, work = null }) {
+export function createReplyServer({ store, agent, declaration = null, work = null }: ReplyOptions) {
   return createServer({
     manifest: MANIFEST,
     handlers: { reply: replyHandler({ store, agent, declaration, work }) }
   });
 }
 
-export async function serveReplyTool({ store, agent, declaration = null, work = null, host = '127.0.0.1', port = REPLY_PORT }) {
+export async function serveReplyTool({ store, agent, declaration = null, work = null, host = '127.0.0.1', port = REPLY_PORT }: ReplyOptions & { host?: string; port?: number }) {
   const server = createReplyServer({ store, agent, declaration, work });
   const { server: http, url } = await server.serveHttp({ host, port });
-  return { http, url, close: () => new Promise((resolve) => http.close(resolve)) };
+  return { http, url, close: () => new Promise<unknown>((resolve) => http.close(resolve)) };
 }

@@ -1,3 +1,6 @@
+import type { ThreadOpening, TurnParams, TurnResult, ChildExit, Status } from '../runtime/types.ts';
+export type OnTurn = (session: FakeSession, params: TurnParams, turn: number) => string | TurnResult | Promise<string | TurnResult>;
+
 // A harness that runs no model and opens no process, so the release loop can be
 // tested for what it does rather than for what a model says. It carries the real
 // `policyFor` and the real `holdsRelease` from the harness itself, because those
@@ -6,6 +9,14 @@
 import { policyFor, holdsRelease } from '../harness/codex/index.mjs';
 
 export class FakeSession {
+  declare threads: Map<string, string>;
+  declare turns: TurnParams[];
+  declare opens?: (ThreadOpening | (ThreadOpening & { threadId: string }))[];
+  declare resumed?: string[];
+  declare statusHandlers: ((status?: unknown) => void)[];
+  declare stopped: boolean;
+  declare exit: Promise<ChildExit>;
+  declare endChild: (value: ChildExit) => void;
   constructor() {
     this.threads = new Map();
     this.turns = [];
@@ -21,7 +32,7 @@ export class FakeSession {
 //   onTurn(session, params, n)  what the model does in a turn; returns a status
 //                               string or a whole result object
 //   statuses()                  what mcpServerStatus/list reports
-export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] } = {}) {
+export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] }: { onTurn?: OnTurn; statuses?: () => Status[] } = {}) {
   const session = new FakeSession();
   let opened = 0;
   let turns = 0;
@@ -33,7 +44,7 @@ export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] } 
 
     async connect() { return session; },
 
-    async openThread(s, params) {
+    async openThread(s: FakeSession, params: ThreadOpening) {
       const { unitId } = params;
       opened += 1;
       // What the thread was opened on, kept because the directory a thread opens
@@ -45,18 +56,18 @@ export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] } 
       return { unit_id: unitId, thread_id, model: 'fake', effort: 'low', started_at: new Date().toISOString() };
     },
 
-    async resumeThread(s, params) {
+    async resumeThread(s: FakeSession, params: ThreadOpening & { threadId: string }) {
       const { threadId } = params;
       s.opens = [...(s.opens ?? []), params];
       s.resumed = [...(s.resumed ?? []), threadId];
       return { thread: { id: threadId }, status: { type: 'idle' } };
     },
 
-    async turn(s, params) {
+    async turn(s: FakeSession, params: TurnParams) {
       turns += 1;
       s.turns.push(params);
       const produced = await onTurn(s, params, turns);
-      const result = typeof produced === 'string' ? { status: produced } : produced;
+      const result: TurnResult = typeof produced === 'string' ? { status: produced } : produced;
       return {
         thread_id: params.threadId,
         turn_id: result.turn_id ?? `turn-${turns}`,
@@ -75,7 +86,7 @@ export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] } 
 
     async listToolServerStatus() { return statuses(); },
 
-    onToolServerStatus(s, handler) {
+    onToolServerStatus(s: FakeSession, handler: (status?: unknown) => void) {
       s.statusHandlers.push(handler);
       return () => { s.statusHandlers = s.statusHandlers.filter((h) => h !== handler); };
     }

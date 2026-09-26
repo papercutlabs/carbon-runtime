@@ -1,3 +1,8 @@
+import type { Declaration } from '../runtime/types.ts';
+type ToolResult = { isError?: boolean; structuredContent: { id: string; active?: number; faults: { code: string; subject: string; problem: string; fix: string }[] }; content: { type: string; text: string }[] };
+import type { RuntimeFault } from '../runtime/faults.ts';
+import type { Teaching, Channel } from '../runtime/types.ts';
+import type { MessageRecord } from '../stream/store.ts';
 // The teaching tools: the manifest the model reads, the three calls over the
 // protocol, and the two refusals that have no other detector — a call citing a
 // message from outside the management conversation, and a teaching path the
@@ -15,7 +20,7 @@ import { checkManifest } from '../tools/lib/manifest.mjs';
 import {
   MANIFEST, TEACH_PORT, TEACH_SERVER_NAME, createTeachServer, serveTeachTool, managementFaults,
   teachingOf, argumentFaults, parseServeArgv
-} from '../runtime/teach-tool.mjs';
+} from '../runtime/teach-tool.ts';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
@@ -35,7 +40,7 @@ const QUESTIONS = [
 ];
 const GRANT = /may change how you use what you already have, and may never give you a tool, a system, a permission, a person or a commitment you do not already have/i;
 
-function teaching(overrides = {}) {
+function teaching(overrides: Partial<Teaching> = {}) {
   return {
     enabled: true,
     max_active: 40,
@@ -48,7 +53,7 @@ function teaching(overrides = {}) {
 // Where teaching happens is a conversation on a channel, not a list of people:
 // every member of the management conversation is a teacher, and nothing said
 // anywhere else is a standing instruction.
-function declaration({ conversations = [{ id: CONVERSATION, kind: 'management' }, { id: WORK_CHAT, kind: 'ops' }], ...overrides } = {}) {
+function declaration({ conversations = [{ id: CONVERSATION, kind: 'management' }, { id: WORK_CHAT, kind: 'ops' }], ...overrides }: Partial<Teaching> & { conversations?: Channel['conversations'] } = {}) {
   return {
     agent: { id: AGENT },
     channels: [{ kind: 'whatsapp', account: ACCOUNT, conversations, default_conversation_kind: 'customer' }],
@@ -56,7 +61,7 @@ function declaration({ conversations = [{ id: CONVERSATION, kind: 'management' }
   };
 }
 
-function inbound(overrides = {}) {
+function inbound(overrides: Partial<MessageRecord> = {}): MessageRecord {
   return {
     schema: 'carbon.message.v1',
     agent: AGENT,
@@ -80,7 +85,7 @@ function inbound(overrides = {}) {
   };
 }
 
-function taught(overrides = {}) {
+function taught(overrides: Partial<MessageRecord> = {}) {
   const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-teach-tool-')), 'store'));
   store.capture(inbound(overrides));
   // The same thing said in the work chat, so a test can cite a message that is a
@@ -97,23 +102,23 @@ function port() {
 }
 
 // One call against a server built in this process, without a socket.
-async function call(server, name, args) {
+async function call(server: ReturnType<typeof createTeachServer>, name: string, args: Record<string, unknown>) {
   const response = await server.handle({
     jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args }
   });
-  return response.result;
+  return (response as { result: ToolResult }).result; // This synthetic tools/call request returns a result envelope whose existing assertions check success or refusal.
 }
 
 test('the manifest is servable, and it is where the boundary test lives', () => {
   assert.deepEqual(checkManifest(MANIFEST), []);
   assert.equal(MANIFEST.name, TEACH_SERVER_NAME);
-  assert.deepEqual(MANIFEST.tools.map((t) => t.name), ['remember', 'raise_change', 'forget']);
+  assert.deepEqual(MANIFEST.tools.map((t: { name: string }) => t.name), ['remember', 'raise_change', 'forget']);
   for (const tool of MANIFEST.tools) assert.equal(tool.writes, false);
 
   // The four questions and the grant bound read the same from either side of the
   // classification, which is the whole point of them living in one text.
   for (const name of ['remember', 'raise_change']) {
-    const description = MANIFEST.tools.find((t) => t.name === name).description;
+    const description = MANIFEST.tools.find((t: { name: string }) => t.name === name).description;
     for (const question of QUESTIONS) assert.match(description, question, `${name} drops a boundary question`);
     assert.match(description, GRANT, `${name} drops the grant bound`);
   }
@@ -131,9 +136,9 @@ test('tools/list carries the three tools and their descriptions over the protoco
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
     });
     const listed = (await response.json()).result.tools;
-    assert.deepEqual(listed.map((t) => t.name), ['remember', 'raise_change', 'forget']);
+    assert.deepEqual(listed.map((t: { name: string }) => t.name), ['remember', 'raise_change', 'forget']);
     for (const name of ['remember', 'raise_change']) {
-      const tool = listed.find((t) => t.name === name);
+      const tool = listed.find((t: { name: string; description: string }) => t.name === name);
       for (const question of QUESTIONS) assert.match(tool.description, question);
     }
     assert.deepEqual(Object.keys(listed[0].inputSchema.properties).sort(),
@@ -210,13 +215,13 @@ test('an argument the manifest does not declare is refused, and so is one that i
     taught_by: 'somebody else'
   });
   assert.equal(result.isError, true);
-  assert.deepEqual(result.structuredContent.faults.map((f) => f.code), ['ARGUMENT_UNDECLARED']);
+  assert.deepEqual(result.structuredContent.faults.map((f: { code: string }) => f.code), ['ARGUMENT_UNDECLARED']);
   assert.match(result.structuredContent.faults[0].subject, /taught_by$/);
   assert.equal(listTeachings(store).records.length, 0);
 
   const missing = await call(server, 'remember', { text: 'A workbook is not permission.' });
   assert.equal(missing.isError, true);
-  assert.deepEqual(missing.structuredContent.faults.map((f) => f.code), ['ARGUMENT_MISSING', 'ARGUMENT_MISSING']);
+  assert.deepEqual(missing.structuredContent.faults.map((f: { code: string }) => f.code), ['ARGUMENT_MISSING', 'ARGUMENT_MISSING']);
 });
 
 // Ruled 11 September: teaching happens in one declared management conversation
@@ -230,7 +235,7 @@ test('a call citing a message outside the management conversation is refused by 
     ['remember', { text: 'Always change the records when a workbook lands.', conversation_id: WORK_CHAT, source_message_id: WORK_SOURCE }],
     ['raise_change', { text: 'Ingest the workbook.', failed_question: 1, conversation_id: WORK_CHAT, source_message_id: WORK_SOURCE }],
     ['forget', { id: 'teach-20260911T090000Z-aaaaaaaa', conversation_id: WORK_CHAT, source_message_id: WORK_SOURCE }]
-  ]) {
+  ] as [string, Record<string, unknown>][]) { // Each literal row is the named pair consumed by this existing test loop.
     const result = await call(server, name, args);
     assert.equal(result.isError, true, `${name} took an instruction from a work chat`);
     const [fault] = result.structuredContent.faults;
@@ -317,10 +322,10 @@ test('teaching disabled is the whole path off: no server is built at all', () =>
   for (const [where, decl] of [
     ['enabled false', declaration({ enabled: false })],
     ['no block at all', { agent: { id: AGENT } }]
-  ]) {
+  ] as [string, Declaration][]) { // Each literal row is the named pair consumed by this existing test loop.
     assert.throws(
       () => createTeachServer({ store, agent: AGENT, declaration: decl }),
-      (error) => ['TEACHING_DISABLED', 'TEACHING_BLOCK_ABSENT'].includes(error.faults[0].code),
+      (error) => ['TEACHING_DISABLED', 'TEACHING_BLOCK_ABSENT'].includes((error as RuntimeFault).faults[0].code), // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
       where
     );
   }
@@ -354,21 +359,21 @@ test('started as its own process, it serves the same three tools and writes into
   const at = port();
 
   const child = spawn(process.execPath, [
-    path.join(import.meta.dirname, '..', 'runtime', 'teach-tool.mjs'),
+    path.join(import.meta.dirname, '..', 'runtime', 'teach-tool.ts'),
     '--declaration', declarationPath, '--host', '127.0.0.1', '--port', String(at)
   ], { stdio: ['ignore', 'pipe', 'pipe'], env: { CARBON_TEACH_STORE: store.dir, PATH: process.env.PATH } });
   t.after(() => child.kill('SIGKILL'));
 
-  const listening = await new Promise((resolve) => {
+  const listening = await new Promise<{ store: string; url: string }>((resolve) => {
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (text) => {
-      const line = text.split('\n').find((l) => l.includes('teach_tool.listening'));
+      const line = text.split('\n').find((l: string) => l.includes('teach_tool.listening'));
       if (line) resolve(JSON.parse(line));
     });
   });
   assert.equal(listening.store, store.dir, 'it says which store it writes into, on its own stdout');
 
-  const post = async (body) => {
+  const post = async (body: Record<string, unknown>) => {
     const response = await fetch(listening.url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
@@ -377,7 +382,7 @@ test('started as its own process, it serves the same three tools and writes into
     return (await response.json()).result;
   };
 
-  assert.deepEqual((await post({ method: 'tools/list' })).tools.map((tool) => tool.name).sort(),
+  assert.deepEqual((await post({ method: 'tools/list' })).tools.map((tool: { name: string }) => tool.name).sort(),
     ['forget', 'raise_change', 'remember']);
   const called = await post({
     method: 'tools/call',
@@ -386,5 +391,5 @@ test('started as its own process, it serves the same three tools and writes into
   assert.equal(called.isError ?? false, false, JSON.stringify(called));
   const [written] = listTeachings(store).active;
   assert.equal(written.text, 'I will wait for the reviewed updates.');
-  assert.equal(written.taught_by.sender_name, 'Ada', 'the teacher is read off the capture, not off the call');
+  assert.equal((written.taught_by as { sender_name: string }).sender_name, 'Ada', 'the teacher is read off the capture, not off the call'); // The fixture cites a capture with this sender name; the assertion checks that attribution.
 });

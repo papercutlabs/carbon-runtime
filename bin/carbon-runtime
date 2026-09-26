@@ -8,11 +8,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.mjs';
-import { run, placesUnder, readDeclaration } from '../runtime/index.mjs';
-import { REPLY_PORT } from '../runtime/reply-tool.mjs';
-import { TEACH_PORT } from '../runtime/teach-tool.mjs';
-import { registeredKinds } from '../runtime/registry.mjs';
+import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.ts';
+import { run, placesUnder, readDeclaration } from '../runtime/index.ts';
+import { REPLY_PORT } from '../runtime/reply-tool.ts';
+import { TEACH_PORT } from '../runtime/teach-tool.ts';
+import { registeredKinds } from '../runtime/registry.ts';
 import * as codex from '../harness/codex/index.mjs';
 
 const HELP = `carbon-runtime — run one client agent: the harness, the adapters and the release loop
