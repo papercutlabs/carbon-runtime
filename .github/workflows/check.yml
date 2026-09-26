@@ -105,7 +105,7 @@ jobs:
       # WhatsApp channel that could not start.
       - name: the release tarball builds, and carries its dependency
         run: |
-          node tools/release.mjs --out "$RUNNER_TEMP/dist"
+          node tools/release.ts --out "$RUNNER_TEMP/dist"
           ls "$RUNNER_TEMP"/dist/carbon-runtime-*.tar.gz.sha256
           mkdir -p "$RUNNER_TEMP/unpacked"
           tar -xzf "$RUNNER_TEMP"/dist/carbon-runtime-*.tar.gz -C "$RUNNER_TEMP/unpacked"
