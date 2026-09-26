@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { Store } from '../stream/store.ts';
-import { listTeachings } from '../stream/teachings.mjs';
+import { listTeachings } from '../stream/teachings.ts';
 import { checkManifest } from '../tools/lib/manifest.mjs';
 import {
   MANIFEST, TEACH_PORT, TEACH_SERVER_NAME, createTeachServer, serveTeachTool, managementFaults,
