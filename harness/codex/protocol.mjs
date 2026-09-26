@@ -9,7 +9,7 @@
 // unhandled server request is answered with a method-not-found error rather than
 // dropped.
 
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 
 export const PARSE_LIMIT_BYTES = 64 * 1024 * 1024;
 

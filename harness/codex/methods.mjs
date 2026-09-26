@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 
 export const HERE = path.dirname(new URL(import.meta.url).pathname);
 export const PINNED_SCHEMA_DIR = path.join(HERE, 'schema');
