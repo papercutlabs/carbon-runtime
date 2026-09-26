@@ -1,7 +1,7 @@
 {
   "known": {
     "SHAPE_COMPLEXITY adapters/email/index.ts payload": 1,
-    "SHAPE_COMPLEXITY adapters/fixture/index.mjs payload": 1,
+    "SHAPE_COMPLEXITY adapters/fixture/index.ts payload": 1,
     "SHAPE_COMPLEXITY adapters/telegram/index.ts payload": 1,
     "SHAPE_COMPLEXITY adapters/whatsapp/content.mjs read": 1,
     "SHAPE_COMPLEXITY adapters/whatsapp/index.mjs payload": 1,

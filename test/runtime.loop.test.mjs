@@ -18,7 +18,7 @@ import { replyHandler } from '../runtime/reply-tool.mjs';
 import { serveTeachTool } from '../runtime/teach-tool.mjs';
 import { listTeachings, remember } from '../stream/teachings.mjs';
 import { fakeHarness } from './fake-harness.mjs';
-import * as fixture from '../adapters/fixture/index.mjs';
+import * as fixture from '../adapters/fixture/index.ts';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
