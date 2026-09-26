@@ -1,5 +1,5 @@
 import type { Store } from '../stream/store.ts';
-import type { LedgerContext, LedgerItem, LidMap, ImportFields, ImportRecord, ImportCandidate, ImportIdentity, CaptureOptions, MessageIndex } from './types.ts';
+import type { LedgerContext, LedgerItem, ImportFields, ImportRecord, ImportCandidate, ImportIdentity, CaptureOptions, MessageIndex } from './types.ts';
 // The ledger import: a client's own message history out of a SQLite ledger.
 //
 // Some clients have no chat export. What they have is a running system that
@@ -109,7 +109,7 @@ import type { LedgerContext, LedgerItem, LidMap, ImportFields, ImportRecord, Imp
 // in the records.
 
 import { conversationKind } from '../adapters/whatsapp/jid.ts';
-import { readLidMap } from '../adapters/whatsapp/channel-state.mjs';
+import { readLidMap } from '../adapters/whatsapp/channel-state.ts';
 import { chatKeyFor } from './carbon-capture-whatsapp.ts';
 import { roleFor } from './ledger-mapping.ts';
 
@@ -148,7 +148,7 @@ export function consume() {}
 // linked-id form is stored under its phone key with a note saying so, because
 // inventing a linked id would be worse than two conversations a person can
 // still join later.
-function placeOf(context: LedgerContext, item: LedgerItem, lidMap: LidMap) {
+function placeOf(context: LedgerContext, item: LedgerItem, lidMap: unknown) {
   const { key, note } = chatKeyFor(item, lidMap);
   const conversation_id = `${context.account}:${key}`;
   return { key, note, conversation_id };
@@ -239,7 +239,7 @@ export function writeBatch(context: LedgerContext, items: LedgerItem[]) {
     if (!alreadyCaptured(context.store, entry.record)) options.raw = entry.raw;
     // capture validates the complete candidate before any write and returns
     // only schema-valid records. This assertion is confined to that validator
-    // call; payload consumers continue to see an unknown role.
+    // call; payload consumers continue to see unknown role and sender values.
     written.push(context.store.capture(entry.record as ImportRecord, options));
   }
   return written;

@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../stream/store.ts';
-import { learnPairs, writeConnectionState } from '../adapters/whatsapp/channel-state.mjs';
+import { learnPairs, writeConnectionState } from '../adapters/whatsapp/channel-state.ts';
 import { chatKeyFor, mimeOf } from '../import/carbon-capture-whatsapp.ts';
 import { buildExport, buildZip } from './zip-writer.ts';
 
@@ -307,4 +307,35 @@ test('the extension an export gives a file is what says what the bytes are', () 
   assert.equal(mimeOf('media/one.pdf'), 'application/pdf');
   assert.equal(mimeOf('media/one.opus'), 'audio/opus');
   assert.equal(mimeOf('media/one.unheard-of'), 'application/octet-stream');
+});
+
+test('persisted numeric and null chat-map values preserve import payloads and capture faults', async () => {
+  const { lidMapFile, readLidMap, lidFor } = await import('../adapters/whatsapp/channel-state.ts');
+  const capture = await import('../import/carbon-capture-whatsapp.ts');
+  const ledger = await import('../import/carbon-ledger-sqlite.ts');
+  const outbound = await import('../import/carbon-ledger-outbound.ts');
+  const { normaliseRow } = await import('../import/ledger-mapping.ts');
+  const { dir, storeDir } = scratch();
+  const store = Store.open(storeDir);
+  const context = { store, agent: AGENT, account: ACCOUNT };
+  const item = normaliseRow({ messages: { table: 'messages', timestamp: 'iso8601' } },
+    { platform_message_id: 'one', chat_key: PHONE, timestamp: '2025-04-02T11:00:00.000Z', body: 'hello' });
+  try {
+    for (const value of [17, null]) {
+      fs.writeFileSync(lidMapFile(store, ACCOUNT), JSON.stringify({ phone_to_lid: { [PHONE]: value }, lid_to_phone: {} }));
+      assert.equal(lidFor(store, ACCOUNT, PHONE), value);
+      const key = value ?? PHONE;
+      assert.equal(chatKeyFor({ chat_jid: PHONE }, readLidMap(store, ACCOUNT)).key, key);
+      assert.equal(capture.payload(context, [row('one', 'hello')]).entries[0].record.conversation_id, `${ACCOUNT}:${key}`);
+      const candidate = ledger.payload(context, [item]).entries[0].record;
+      assert.equal(candidate.sender_id, key);
+      assert.equal(outbound.locate(context, [{ ...item, kind: 'event', status: 'sent', answers_refs: [] }])[0].chat_key, key);
+      if (value === 17) assert.throws(() => ledger.writeBatch(context, [item]), /TYPE_WRONG/);
+      else assert.equal(ledger.writeBatch(context, [item])[0].record.sender_id, PHONE);
+    }
+    fs.writeFileSync(lidMapFile(store, ACCOUNT), JSON.stringify({ phone_to_lid: null, lid_to_phone: {} }));
+    assert.equal(chatKeyFor({ chat_jid: PHONE }, readLidMap(store, ACCOUNT)).key, PHONE);
+    assert.throws(() => lidFor(store, ACCOUNT, PHONE), TypeError);
+    assert.throws(() => learnPairs(store, ACCOUNT, [{ phone: PHONE, lid: LID }]), TypeError);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

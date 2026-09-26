@@ -1,3 +1,6 @@
+import type { Context, Fields, Item } from '../adapters/whatsapp/types.ts';
+import type { MessageRecord } from '../stream/store.ts';
+import type { StreamFault } from '../stream/store.ts';
 // What this channel does that the twenty-four cases do not name.
 //
 // The conformance check proves the adapter writes the one record shape. These
@@ -15,22 +18,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
-import * as adapter from '../adapters/whatsapp/index.mjs';
+import * as adapter from '../adapters/whatsapp/index.ts';
 import { canonicalChatKey, canonicalParticipant, normaliseJid, pairsIn } from '../adapters/whatsapp/jid.ts';
-import { readLidMap } from '../adapters/whatsapp/channel-state.mjs';
+import { readLidMap } from '../adapters/whatsapp/channel-state.ts';
 
 const FIXTURES = path.join(import.meta.dirname, '..', 'adapters', 'whatsapp', 'fixtures');
 
 const PHONE = '15550001111@s.whatsapp.net';
 const LID = '189234567890123@lid';
 
-function fixture(name) {
+// These checked-in fixtures are test inputs; payload output remains untrusted.
+function fixture<T = Item[]>(name: string): T {
   return JSON.parse(fs.readFileSync(path.join(FIXTURES, name), 'utf8'));
 }
 
-function context(overrides = {}) {
+function context<T extends Partial<Context>>(overrides: T): Context & T;
+function context(): Context;
+function context(overrides: Partial<Context> = {}): Context {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-whatsapp-'));
-  const { agent, account } = fixture('context.json');
+  const { agent, account } = fixture<{ agent: string; account: string }>('context.json');
   return {
     store: Store.open(path.join(dir, 'store')),
     agent,
@@ -44,8 +50,9 @@ function context(overrides = {}) {
 
 // Write one record straight into the store, for the tests that need something
 // already there.
-function put(context, record) {
-  return context.store.capture(record).record;
+function put(context: Context, record: Fields) {
+  // Store.capture validates these untrusted candidates at the existing boundary.
+  return context.store.capture(record as MessageRecord).record;
 }
 
 test('the canonical chat key is the linked-id form, whichever field the server put it in', () => {
@@ -81,7 +88,8 @@ test('the phone-to-linked-id map learns only from an event carrying both forms',
 
   const running = context();
   adapter.payload(running, fixture('inbound.json'));
-  const map = readLidMap(running.store, running.account);
+  // This test just wrote the two maps through payload.
+  const map = readLidMap(running.store, running.account) as { phone_to_lid: Fields; lid_to_phone: Fields };
   assert.equal(map.phone_to_lid[PHONE], LID);
   assert.equal(map.lid_to_phone[LID], PHONE);
 });
@@ -108,7 +116,8 @@ test('the second, higher-definition upload of a picture is skipped', () => {
   const { entries } = adapter.payload(running, items);
   assert.equal(entries.length, 1, 'the photograph was recorded twice');
   assert.equal(entries[0].record.platform_message_id, '3EB0H0000001');
-  assert.equal(entries[0].record.adapter_fields.hd_variant_skipped, true);
+  assert.equal(// The fixture includes the HD flag; this assertion reads that specific output.
+    (entries[0].record.adapter_fields as Fields).hd_variant_skipped, true);
   assert.equal(entries[0].record.body, 'The damaged corner.');
 });
 
@@ -127,19 +136,22 @@ test('an album settles for its quiet window and then arrives as one set', () => 
 
   const { entries } = adapter.payload(settled, items);
   assert.equal(entries.length, 3);
-  assert.equal(new Set(entries.map((e) => e.record.adapter_fields.album_id)).size, 1);
-  assert.deepEqual(entries.map((e) => e.record.adapter_fields.album_index), [0, 1, 2]);
+  // These album fixtures carry adapter fields; no wrong_type override is present.
+  assert.equal(new Set(entries.map((e) => (e.record.adapter_fields as Fields).album_id)).size, 1);
+  assert.deepEqual(entries.map((e) => (e.record.adapter_fields as Fields).album_index), [0, 1, 2]);
 });
 
 test('a message from this device is the operator, and it holds the agent', () => {
   const running = context();
   const { entries } = adapter.payload(running, fixture('operator.json'));
-  const record = entries[0].record;
+  // This operator fixture constructs a hold; no wrong_type override is present.
+  const record = entries[0].record as MessageRecord & { hold: NonNullable<MessageRecord['hold']> };
   assert.equal(record.role, 'operator');
   assert.equal(record.hold.release_after_ms, adapter.HOLD_MS);
 
   const declared = context({ channel: { hold: { release_after_ms: 60_000 } } });
-  const held = adapter.payload(declared, fixture('operator.json')).entries[0].record;
+  // The same operator fixture is used with a declared hold duration.
+  const held = adapter.payload(declared, fixture('operator.json')).entries[0].record as MessageRecord & { hold: NonNullable<MessageRecord['hold']> };
   assert.equal(held.hold.release_after_ms, 60_000);
 
   // And the hold is real: the store refuses to release the conversation.
@@ -185,7 +197,7 @@ test("the agent's own reply coming back down the socket is not an operator", () 
 
 test('a reply longer than the channel accepts goes out in pieces, and every piece is named', () => {
   const running = context();
-  const [request] = fixture('outbound.json');
+  const [request] = fixture<{ text: string; request_id: string }[]>('outbound.json');
   const record = {
     conversation_id: `${running.account}:${LID}`,
     body: request.text,
@@ -214,7 +226,7 @@ test('a send whose acceptance nobody knows is unknown, and only a refused one fa
   assert.equal(adapter.outcomeOf({ output: { statusCode: 428 } }, 2), 'unknown');
 });
 
-// A send with no socket handed over now asks live.mjs for the connection the
+// A send with no socket handed over now asks live.ts for the connection the
 // poll opened, so the refusal names what is actually missing: this channel
 // declares no authentication directory, and without one there is no connection
 // to open and nothing to send on.
@@ -226,21 +238,22 @@ test('a live send is refused when there is nothing to send on', async () => {
       body: 'short',
       delivery: { request_id: 'req-0002' }
     }),
-    (error) => error.faults[0].code === 'CHANNEL_AUTH_DIR_ABSENT'
+    // The refusal under test is StreamFault; retain the original property assertion.
+    (error: unknown) => (error as StreamFault).faults[0].code === 'CHANNEL_AUTH_DIR_ABSENT'
   );
 });
 
 test('a live send stops at the first refusal and keeps the pieces that went out', async () => {
   const running = context({ dry_run: false });
-  const outbox = [];
+  const outbox: string[] = [];
   const socket = {
-    sendMessage: async (chat, { text }) => {
+    sendMessage: async (chat: string, { text }: { text: string }) => {
       outbox.push(text);
       if (outbox.length === 2) throw Object.assign(new Error('timed out'), { output: { statusCode: 408 } });
       return { key: { id: `3EB0X${outbox.length}` } };
     }
   };
-  const [request] = fixture('outbound.json');
+  const [request] = fixture<{ text: string; request_id: string }[]>('outbound.json');
   const result = await adapter.send({ ...running, socket, channel: { max_message_chars: 500 } }, {
     conversation_id: `${running.account}:${LID}`,
     body: request.text,
@@ -267,7 +280,8 @@ test('a message with no chat is refused rather than written somewhere', () => {
   const running = context();
   assert.throws(
     () => adapter.payload(running, [{ position: '1', event: { key: { id: 'x' }, message: { conversation: 'hello' } } }]),
-    (error) => error.faults[0].code === 'CHAT_KEY_ABSENT'
+    // The refusal under test is StreamFault; retain the original property assertion.
+    (error: unknown) => (error as StreamFault).faults[0].code === 'CHAT_KEY_ABSENT'
   );
 });
 
@@ -281,8 +295,8 @@ test('the participant of a group message keeps the linked-id rule', () => {
 
 test('the signal is the presence update the library already has, and nothing when there is no connection', async () => {
   const running = context({ dry_run: false });
-  const presence = [];
-  const socket = { sendPresenceUpdate: async (state, jid) => { presence.push({ state, jid }); } };
+  const presence: { state: string; jid: string }[] = [];
+  const socket = { sendPresenceUpdate: async (state: string, jid: string) => { presence.push({ state, jid }); } };
   const record = { conversation_id: `${running.account}:${LID}` };
 
   await adapter.typing({ ...running, socket }, record, 'composing');
@@ -296,4 +310,75 @@ test('the signal is the presence update the library already has, and nothing whe
   // throw, because a signal about a reply may never cost the reply.
   await adapter.typing(running, record, 'composing');
   assert.equal(presence.length, 2);
+});
+
+test('malformed message leaves remain unvalidated until capture and send ids stay untrusted', async () => {
+  const { read, association, albumOf } = await import('../adapters/whatsapp/content.ts');
+  const message = { extendedTextMessage: { text: 7 } };
+  assert.equal(read(message).text, 7);
+  assert.equal(association({ messageContextInfo: { messageAssociation: 7 } }), 7);
+  assert.deepEqual(albumOf({ messageContextInfo: { messageAssociation: {
+    associationType: 1, parentMessageKey: { id: 'album' }, messageIndex: { raw: 2 }
+  } } }), { album_id: 'album', index: { raw: 2 } });
+  const running = context();
+  const item = { position: '1', event: { key: { remoteJid: PHONE, id: 'bad' }, message } };
+  const candidate = adapter.payload(running, [item]).entries[0].record;
+  assert.equal(candidate.body, 7);
+  assert.throws(() => put(running, candidate), /TYPE_WRONG/);
+  const override = adapter.payload(running, [{ ...item, wrong_type: { conversation_id: 7 } }]).entries[0].record;
+  assert.equal(override.conversation_id, 7);
+  assert.throws(() => adapter.matchesDelivery(running, item, { chunk_ids: [] }), TypeError);
+  const media = read({ imageMessage: { caption: false, mimetype: 9, fileLength: '12' } });
+  assert.equal(media.text, false);
+  assert.deepEqual(media.media, { field: 'imageMessage', mime: 9, bytes: 12, file_name: null });
+  const result = await adapter.send({ ...running, dry_run: false, socket: {
+    sendMessage: async () => ({ key: { id: 19 } })
+  } }, { conversation_id: `${running.account}:${LID}`, body: 'short', delivery: { request_id: 'numeric-id' } });
+  assert.deepEqual(result, { status: 'sent', chunk_ids: [19] });
+});
+
+test('unvalidated WhatsApp and import outputs cannot promise strings or provider credential schemas', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const root = path.resolve(import.meta.dirname, '..');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-whatsapp-type-boundary-'));
+  const probe = path.join(dir, 'probe.ts');
+  const config = path.join(dir, 'tsconfig.json');
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module' }));
+  fs.writeFileSync(config, JSON.stringify({ extends: path.join(root, 'tsconfig.json'),
+    compilerOptions: { typeRoots: [path.join(root, 'node_modules', '@types')] }, files: [probe], include: [] }));
+  const lines = [
+    `import * as content from ${JSON.stringify(path.join(root, 'adapters/whatsapp/content.ts'))};`,
+    `import * as adapter from ${JSON.stringify(path.join(root, 'adapters/whatsapp/index.ts'))};`,
+    `import { makeTransactionalAuthState } from ${JSON.stringify(path.join(root, 'adapters/whatsapp/auth-state.ts'))};`,
+    `import { readLidMap } from ${JSON.stringify(path.join(root, 'adapters/whatsapp/channel-state.ts'))};`,
+    `import { chatKeyFor } from ${JSON.stringify(path.join(root, 'import/carbon-capture-whatsapp.ts'))};`,
+    `import * as ledger from ${JSON.stringify(path.join(root, 'import/carbon-ledger-sqlite.ts'))};`,
+    `import type { Context } from ${JSON.stringify(path.join(root, 'adapters/whatsapp/types.ts'))};`,
+    'declare const context: Context;'
+  ];
+  const unsafe = [
+    'content.read({}).text.toUpperCase();',
+    'content.read({}).media?.mime.toUpperCase();',
+    'content.association({}).associationType.toFixed();',
+    'adapter.payload(context, []).entries[0].record.body.toUpperCase();',
+    'adapter.payload(context, []).entries[0].record.conversation_id.toUpperCase();',
+    "({} as ReturnType<typeof makeTransactionalAuthState>).state.creds.registered = true;",
+    'readLidMap(context.store, context.account).phone_to_lid.x.toUpperCase();',
+    'chatKeyFor({}).key.toUpperCase();',
+    "({} as ReturnType<typeof ledger.payload>).entries[0].record.sender_id.toUpperCase();",
+    'adapter.send({ ...context, dry_run: true }, { conversation_id: "x", delivery: { request_id: "y" } }).chunk_ids[0].toUpperCase();'
+  ];
+  const check = (body: string[]) => {
+    fs.writeFileSync(probe, [...lines, ...body].join('\n'));
+    return spawnSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '--project', config, '--pretty', 'false'], { encoding: 'utf8' });
+  };
+  try {
+    const bad = check(unsafe);
+    assert.notEqual(bad.status, 0);
+    for (let i = 0; i < unsafe.length; i++) {
+      assert.match(bad.stdout, new RegExp(`probe\\.ts\\(${lines.length + i + 1},\\d+\\): error TS(?:2339|2571|18046):`), unsafe[i] + '\n' + bad.stdout);
+    }
+    const good = check(['const text: unknown = content.read({}).text;', 'const key: unknown = chatKeyFor({}).key;']);
+    assert.equal(good.status, 0, good.stdout + good.stderr);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

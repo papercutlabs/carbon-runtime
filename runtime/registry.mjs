@@ -20,7 +20,7 @@ export const REGISTRY = {
   // without a network and without a credential
   fixture: 'adapters/fixture/index.ts',
   email: 'adapters/email/index.ts',
-  whatsapp: 'adapters/whatsapp/index.mjs',
+  whatsapp: 'adapters/whatsapp/index.ts',
   telegram: 'adapters/telegram/index.mjs'
 };
 

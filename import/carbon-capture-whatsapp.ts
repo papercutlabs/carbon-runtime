@@ -1,5 +1,5 @@
-import type { Store, MessageRecord } from '../stream/store.ts';
-import type { CaptureRow, ImportContext, LidMap, Fields, ImportRecord, CaptureOptions } from './types.ts';
+import type { Store } from '../stream/store.ts';
+import type { CaptureRow, ImportContext, Fields, ImportRecord, ImportCandidate, ImportIdentity, CaptureOptions } from './types.ts';
 // The history import.
 //
 // A client's own WhatsApp history is another producer into the same store. It is
@@ -21,7 +21,7 @@ import type { CaptureRow, ImportContext, LidMap, Fields, ImportRecord, CaptureOp
 // `bin/carbon-import` uses, so what the check proves is what the command does.
 
 import { conversationKind, isPhoneJid, normaliseJid } from '../adapters/whatsapp/jid.ts';
-import { readLidMap } from '../adapters/whatsapp/channel-state.mjs';
+import { readLidMap } from '../adapters/whatsapp/channel-state.ts';
 
 export const capabilities = ['import'];
 
@@ -53,10 +53,11 @@ export function mimeOf(filename: unknown) {
 // conversation the live adapter already writes; not found, the row is stored
 // under the phone key with a note saying so, because inventing a linked id would
 // be worse than two conversations a person can still join later.
-export function chatKeyFor(row: Pick<CaptureRow, 'chat_jid'>, lidMap?: LidMap | null) {
+export function chatKeyFor(row: Pick<CaptureRow, 'chat_jid'>, lidMap?: unknown) {
   const jid = normaliseJid(String(row.chat_jid ?? ''));
   if (!isPhoneJid(jid)) return { key: jid, note: null };
-  const lid = lidMap?.phone_to_lid?.[jid] ?? null;
+  // Access view only: parsed map containers and values are not validated here.
+  const lid = (lidMap as { phone_to_lid?: Record<string, unknown> } | null)?.phone_to_lid?.[jid] ?? null;
   if (lid) return { key: lid, note: null };
   return {
     key: jid,
@@ -100,7 +101,7 @@ export function payload(context: ImportContext, items: CaptureRow[]) {
     const at = String(row.timestamp ?? '');
     const from_me = row.from_me === true;
 
-    const record: ImportRecord = {
+    const record: ImportCandidate = {
       schema: 'carbon.message.v1',
       agent: context.agent,
       source: SOURCE,
@@ -119,7 +120,7 @@ export function payload(context: ImportContext, items: CaptureRow[]) {
       sender_id: from_me ? context.account : normaliseJid(String(row.sender_jid ?? chat)),
       received_at: at,
       // The store validates this unchanged external body and reports malformed values.
-      body: (row.text ?? '') as string,
+      body: row.text ?? '',
       attachments: [],
       historical: true,
       disposition: 'captured'
@@ -176,12 +177,13 @@ export function writeBatch(context: ImportContext, rows: CaptureRow[]) {
     const options: CaptureOptions = { disposition: record.disposition };
     if (!alreadyCaptured(context.store, record)) options.raw = entry.raw;
 
-    written.push(context.store.capture(record, options));
+    // Store.capture validates the candidate before capture effects.
+    written.push(context.store.capture(record as ImportRecord, options));
   }
   return written;
 }
 
-function alreadyCaptured(store: Store, record: MessageRecord) {
+function alreadyCaptured(store: Store, record: ImportIdentity) {
   try {
     return store.read(record.conversation_id, record.message_id, record.revision) !== null;
   } catch {

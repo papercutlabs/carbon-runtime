@@ -12,8 +12,8 @@
 
 import fs from 'node:fs';
 import { fault, report } from '../stream/faults.ts';
-import { isPaired } from '../adapters/whatsapp/auth-state.mjs';
-import { authState, library } from '../adapters/whatsapp/socket.mjs';
+import { isPaired } from '../adapters/whatsapp/auth-state.ts';
+import { authState, library } from '../adapters/whatsapp/socket.ts';
 
 const HELP = `carbon-whatsapp — pair one device with a WhatsApp account, and drive it in a proof
 

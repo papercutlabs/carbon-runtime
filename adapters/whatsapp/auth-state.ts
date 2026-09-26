@@ -27,17 +27,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// These are operations supplied by the pinned provider, not a credential schema.
+// JSON values and the protocol rebuild result stay unknown; either provider
+// operation may reject malformed persisted data just as it did before typing.
+export type AuthOperations = {
+  initAuthCreds: () => unknown;
+  BufferJSON: {
+    replacer?: (key: string, value: unknown) => unknown;
+    reviver?: (key: string, value: unknown) => unknown;
+  };
+  proto: { Message: { AppStateSyncKeyData: { fromObject: (value: unknown) => unknown } } };
+};
+
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
 let tempCounter = 0;
 
-function fsyncDir(dir) {
+function fsyncDir(dir: string) {
   const fd = fs.openSync(dir, 'r');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
-export function writeFileTransactionally(file, data) {
+export function writeFileTransactionally(file: string, data: string | Uint8Array) {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
   const temp = path.join(dir, `.temp-${process.pid}-${tempCounter++}`);
@@ -55,7 +67,7 @@ export function writeFileTransactionally(file, data) {
 // A key file's name comes from an identifier the server chose, so it is not
 // allowed to be a path. Every character outside the safe set becomes an
 // underscore, and a name that would still be a dot segment is refused.
-export function keyFileName(type, id) {
+export function keyFileName(type: string, id: string) {
   const safe = `${type}-${id}`.replace(/[^A-Za-z0-9_-]/g, '_');
   if (safe.length === 0 || safe === '.' || safe === '..') {
     throw new Error(`${type}-${id} does not name a file`);
@@ -67,12 +79,12 @@ export function keyFileName(type, id) {
 //
 // `initAuthCreds`, `BufferJSON` and `proto` are the library's; they are
 // arguments so that this file loads without it.
-export function makeTransactionalAuthState(dir, { initAuthCreds, BufferJSON, proto }) {
+export function makeTransactionalAuthState(dir: string, { initAuthCreds, BufferJSON, proto }: AuthOperations) {
   fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
 
-  const at = (name) => path.join(dir, name);
+  const at = (name: string) => path.join(dir, name);
 
-  const readData = (name) => {
+  const readData = (name: string): unknown => {
     try {
       return JSON.parse(fs.readFileSync(at(name), 'utf8'), BufferJSON.reviver);
     } catch {
@@ -80,7 +92,7 @@ export function makeTransactionalAuthState(dir, { initAuthCreds, BufferJSON, pro
     }
   };
 
-  const writeData = (name, data) => {
+  const writeData = (name: string, data: unknown) => {
     writeFileTransactionally(at(name), JSON.stringify(data, BufferJSON.replacer, 2));
   };
 
@@ -88,7 +100,7 @@ export function makeTransactionalAuthState(dir, { initAuthCreds, BufferJSON, pro
   // of a client's and it is not history: it is a one-time key whose whole
   // purpose was to be used once, and keeping it would make decryption wrong
   // rather than more complete.
-  const removeData = (name) => {
+  const removeData = (name: string) => {
     try { fs.rmSync(at(name)); } catch { /* it was already gone */ }
   };
 
@@ -98,8 +110,8 @@ export function makeTransactionalAuthState(dir, { initAuthCreds, BufferJSON, pro
     state: {
       creds,
       keys: {
-        get: (type, ids) => {
-          const found = {};
+        get: (type: string, ids: string[]) => {
+          const found: Record<string, unknown> = {};
           for (const id of ids) {
             let value = readData(keyFileName(type, id));
             if (type === 'app-state-sync-key' && value) {
@@ -109,7 +121,7 @@ export function makeTransactionalAuthState(dir, { initAuthCreds, BufferJSON, pro
           }
           return found;
         },
-        set: (data) => {
+        set: (data: Record<string, Record<string, unknown>>) => {
           for (const type of Object.keys(data)) {
             for (const id of Object.keys(data[type])) {
               const value = data[type][id];
@@ -127,10 +139,11 @@ export function makeTransactionalAuthState(dir, { initAuthCreds, BufferJSON, pro
 
 // Whether this directory already holds a paired device. Read without loading the
 // credentials themselves: only the fact.
-export function isPaired(dir) {
+export function isPaired(dir: string) {
   try {
-    const creds = JSON.parse(fs.readFileSync(path.join(dir, 'creds.json'), 'utf8'));
-    return creds?.registered === true;
+    const creds: unknown = JSON.parse(fs.readFileSync(path.join(dir, 'creds.json'), 'utf8'));
+    // Property access only: arbitrary parsed values are not credentials.
+    return (creds as { registered?: unknown } | null)?.registered === true;
   } catch {
     return false;
   }

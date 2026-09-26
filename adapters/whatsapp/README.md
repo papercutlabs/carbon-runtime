@@ -14,18 +14,18 @@ node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/wha
 
 | file | what it is |
 |---|---|
-| `index.mjs` | the adapter: the five operations, and every rule about what a message becomes |
+| `index.ts` | the adapter: the five operations, and every rule about what a message becomes |
 | `jid.ts` | chat keys: the canonical form, and the map from the phone form to it |
-| `content.mjs` | reading one message: the envelopes, the kinds, the edit, the album, the second upload |
-| `channel-state.mjs` | the connection state, the chat-key map and the latch, as files under the store |
-| `latch.mjs` | the terminal latch: what stops the unit when the device is unlinked |
-| `auth-state.mjs` | the authentication state, written transactionally |
-| `socket.mjs` | the only file that loads the library, and the only one that opens a connection |
-| `live.mjs` | the connection as the release loop sees it: one per account, the buffer of what arrived on it, and the socket a reply goes out on |
+| `content.ts` | reading one message: the envelopes, the kinds, the edit, the album, the second upload |
+| `channel-state.ts` | the connection state, the chat-key map and the latch, as files under the store |
+| `latch.ts` | the terminal latch: what stops the unit when the device is unlinked |
+| `auth-state.ts` | the authentication state, written transactionally |
+| `socket.ts` | the only file that loads the library, and the only one that opens a connection |
+| `live.ts` | the connection as the release loop sees it: one per account, the buffer of what arrived on it, and the socket a reply goes out on |
 | `fixtures/` | recorded events: what the conformance check runs, and what the tests read |
 | `../../bin/carbon-whatsapp` | `pair`, run once by a person, and `send`, which drives a second device in a proof |
 
-`index.mjs` imports no library and opens no connection, so every rule below is
+`index.ts` imports no library and opens no connection, so every rule below is
 tested against recorded events with no network in the test.
 
 ## The library, and the version
