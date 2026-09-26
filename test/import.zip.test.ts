@@ -8,10 +8,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
-import { crc32, entries, entryKind, open, readEntry, ZipFault } from '../import/zip.mjs';
-import { buildExport, buildZip } from './zip-writer.mjs';
+import { crc32, entries, entryKind, open, readEntry, ZipFault } from '../import/zip.ts';
+import { buildExport, buildZip } from './zip-writer.ts';
 
-function faultCodes(run) {
+function faultCodes(run: () => unknown) {
   try {
     run();
   } catch (error) {
@@ -114,6 +114,7 @@ test('an entry is read from where its own local header says the bytes start', ()
     { name: 'messages.json', data: '[]' }
   ]);
   const found = entries(zip).find((entry) => entry.name === 'media/one.txt');
-  assert.equal(readEntry(zip, found).toString('utf8'), 'first');
+  assert.equal(// The test zip above declares this exact entry.
+    readEntry(zip, found!).toString('utf8'), 'first');
   assert.equal(zlib.inflateRawSync(zlib.deflateRawSync(Buffer.from('first'))).toString('utf8'), 'first');
 });

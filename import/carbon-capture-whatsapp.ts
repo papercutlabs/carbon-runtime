@@ -1,3 +1,5 @@
+import type { Store, MessageRecord } from '../stream/store.ts';
+import type { CaptureRow, ImportContext, LidMap, Fields, ImportRecord, CaptureOptions } from './types.ts';
 // The history import.
 //
 // A client's own WhatsApp history is another producer into the same store. It is
@@ -36,9 +38,10 @@ const MIME_BY_EXTENSION = new Map([
   ['pdf', 'application/pdf'], ['txt', 'text/plain']
 ]);
 
-export function mimeOf(filename) {
+export function mimeOf(filename: unknown) {
   const extension = String(filename ?? '').split('.').pop()?.toLowerCase();
-  return MIME_BY_EXTENSION.get(extension) ?? 'application/octet-stream';
+  // String.split always returns at least one element.
+  return MIME_BY_EXTENSION.get(extension!) ?? 'application/octet-stream';
 }
 
 // The chat this row belongs to, as the live adapter would key it.
@@ -50,7 +53,7 @@ export function mimeOf(filename) {
 // conversation the live adapter already writes; not found, the row is stored
 // under the phone key with a note saying so, because inventing a linked id would
 // be worse than two conversations a person can still join later.
-export function chatKeyFor(row, lidMap) {
+export function chatKeyFor(row: Pick<CaptureRow, 'chat_jid'>, lidMap?: LidMap | null) {
   const jid = normaliseJid(String(row.chat_jid ?? ''));
   if (!isPhoneJid(jid)) return { key: jid, note: null };
   const lid = lidMap?.phone_to_lid?.[jid] ?? null;
@@ -61,7 +64,7 @@ export function chatKeyFor(row, lidMap) {
   };
 }
 
-function lidMapFor(context) {
+function lidMapFor(context: ImportContext) {
   if (context.lid_map) return context.lid_map;
   try {
     return readLidMap(context.store, context.account);
@@ -76,7 +79,7 @@ function lidMapFor(context) {
 // the order the export holds. It advances no cursor, because the cursors belong
 // to the live adapter and moving them would make the live adapter skip messages
 // it has not read.
-export function listPending(context) {
+export function listPending(context: ImportContext) {
   return context.items ?? [];
 }
 
@@ -86,7 +89,7 @@ export function consume() {}
 
 // ---- 3. turn a batch into the payload ----------------------------------------
 
-export function payload(context, items) {
+export function payload(context: ImportContext, items: CaptureRow[]) {
   const lidMap = lidMapFor(context);
   const entries = [];
 
@@ -97,7 +100,7 @@ export function payload(context, items) {
     const at = String(row.timestamp ?? '');
     const from_me = row.from_me === true;
 
-    const record = {
+    const record: ImportRecord = {
       schema: 'carbon.message.v1',
       agent: context.agent,
       source: SOURCE,
@@ -115,7 +118,8 @@ export function payload(context, items) {
       role: from_me ? 'operator' : 'contact',
       sender_id: from_me ? context.account : normaliseJid(String(row.sender_jid ?? chat)),
       received_at: at,
-      body: row.text ?? '',
+      // The store validates this unchanged external body and reports malformed values.
+      body: (row.text ?? '') as string,
       attachments: [],
       historical: true,
       disposition: 'captured'
@@ -129,7 +133,7 @@ export function payload(context, items) {
     // handling a conversation now; an operator's message from last spring is not
     // that, and writing one would hold every conversation the client ever
     // answered.
-    const fields = {};
+    const fields: Fields = {};
     if (typeof row.chat_name === 'string' && row.chat_name.length > 0) fields.chat_name = row.chat_name;
     if (typeof row.message_type === 'string' && row.message_type.length > 0) fields.message_type = row.message_type;
     if (note) fields.chat_key_note = note;
@@ -151,7 +155,7 @@ export function payload(context, items) {
 // record can name them, then the record. This is the same order the conformance
 // check writes in, and the same store library, so an imported record is written
 // exactly as a live one is.
-export function writeBatch(context, rows) {
+export function writeBatch(context: ImportContext, rows: CaptureRow[]) {
   const { entries } = payload(context, rows);
   const written = [];
   for (const entry of entries) {
@@ -169,7 +173,7 @@ export function writeBatch(context, rows) {
     // export read again. Without this, running the import twice would leave
     // every raw payload written twice, and "a re-run changes no capture byte"
     // would be false.
-    const options = { disposition: record.disposition };
+    const options: CaptureOptions = { disposition: record.disposition };
     if (!alreadyCaptured(context.store, record)) options.raw = entry.raw;
 
     written.push(context.store.capture(record, options));
@@ -177,7 +181,7 @@ export function writeBatch(context, rows) {
   return written;
 }
 
-function alreadyCaptured(store, record) {
+function alreadyCaptured(store: Store, record: MessageRecord) {
   try {
     return store.read(record.conversation_id, record.message_id, record.revision) !== null;
   } catch {

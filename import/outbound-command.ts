@@ -1,3 +1,10 @@
+import type { MessageRecord } from '../stream/store.ts';
+import type { Fault } from '../stream/faults.ts';
+import type { NamedOutbound, OutboundMapping, OutboundItem, OutboundContext, ImportFields } from './types.ts';
+import type { LineCounts, TurnCounts } from './outbound-sources.ts';
+import type { joinOutbound } from './outbound-link.ts';
+type ReadCounts = { events?: LineCounts; audit?: LineCounts; turns?: TurnCounts };
+type CountState = { store: Store; counts: ReturnType<typeof emptyCounts>; conversations: Set<string>; earliest: string | null; latest: string | null };
 // `carbon-import ledger-outbound` — the command around the outbound import.
 //
 // It is here rather than in `bin/` because it is the same size as the import it
@@ -9,12 +16,12 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { fault, report } from '../stream/faults.ts';
 import { Store, StreamFault } from '../stream/store.ts';
-import { SOURCE, payload, resolvedAnswers, writeEntries } from './carbon-ledger-outbound.mjs';
-import { outboundFaults, toleranceMs } from './outbound-mapping.mjs';
+import { SOURCE, payload, resolvedAnswers, writeEntries } from './carbon-ledger-outbound.ts';
+import { outboundFaults, toleranceMs } from './outbound-mapping.ts';
 import {
   emptyLineCounts, emptyTurnCounts, readDirectory, readLines, readTurns, sourceFaults
-} from './outbound-sources.mjs';
-import { resolveAccount } from './store-account.mjs';
+} from './outbound-sources.ts';
+import { resolveAccount } from './store-account.ts';
 
 export const OUTBOUND_HELP = `carbon-import ledger-outbound — import what a client's agent itself sent
 
@@ -27,7 +34,7 @@ Usage:
   --mapping <file>   the JSON mapping. Its outbound section names the three
                      places the agent's sends were recorded and the names
                      inside them; its shape is documented at the top of
-                     import/outbound-mapping.mjs.
+                     import/outbound-mapping.ts.
   --store <dir>      the agent's store directory
   --events <file>    a JSON-lines file the channel appended, one line per event
   --audit <dir>      a directory of JSON-lines files a send authority appended
@@ -68,25 +75,29 @@ Every argument is explicit and nothing is guessed. Every fault is one JSON line
 of {code, subject, problem, fix}, all faults from one run are reported together,
 and any fault exits non-zero.`;
 
-function loadMapping(file) {
-  let mapping;
+function loadMapping(file: string) {
+  let mapping: unknown;
   try {
     mapping = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     return { mapping: null, faults: [fault('MAPPING_UNREADABLE', file,
-      (error.message ?? String(error)).split('\n')[0],
+      // Preserve the existing error-message read and fallback.
+      ((error as { message?: string }).message ?? String(error)).split('\n')[0],
       'pass the path of a JSON mapping file')] };
   }
   const faults = outboundFaults(mapping, file);
-  return { mapping: faults.length > 0 ? null : mapping, faults };
+  // The existing validator checked source descriptions; optional field behavior
+  // remains with the original consumers instead of new validation here.
+  return { mapping: faults.length > 0 ? null : mapping as OutboundMapping, faults };
 }
 
-function openTurns(file) {
+function openTurns(file: string) {
   try {
     return { db: new DatabaseSync(file, { readOnly: true }), faults: [] };
   } catch (error) {
     return { db: null, faults: [fault('TURNS_UNREADABLE', file,
-      (error.message ?? String(error)).split('\n')[0],
+      // Preserve the existing error-message read and fallback.
+      ((error as { message?: string }).message ?? String(error)).split('\n')[0],
       'pass a SQLite database this user can read')] };
   }
 }
@@ -94,33 +105,38 @@ function openTurns(file) {
 // Every source the caller named, read into one list of items. The sources are
 // read before anything is written, because the join that decides what a record
 // says needs all three in hand.
-function readSources(named, mapping, read) {
+function readSources(named: NamedOutbound, mapping: OutboundMapping, read: ReadCounts) {
   const outbound = mapping.outbound;
   const media = mapping.media ?? null;
-  const items = [];
+  const items: OutboundItem[] = [];
   if (named['--events'] !== null) {
     read.events = emptyLineCounts();
     read.events.files = 1;
-    items.push(...readLines(named['--events'], 'event', outbound.events, media, read.events));
+    // sourceFaults has required a matching section for this named source.
+    items.push(...readLines(named['--events'], 'event', outbound.events!, media, read.events));
   }
   if (named['--audit'] !== null) {
     read.audit = emptyLineCounts();
-    items.push(...readDirectory(named['--audit'], 'audit', outbound.audit, media, read.audit));
+    // sourceFaults has required a matching section for this named source.
+    items.push(...readDirectory(named['--audit'], 'audit', outbound.audit!, media, read.audit));
   }
   if (named['--turns'] === null) return items;
   const opened = openTurns(named['--turns']);
   if (opened.faults.length > 0) throw new StreamFault(opened.faults);
   read.turns = emptyTurnCounts();
   try {
-    items.push(...readTurns(opened.db, outbound.turns, read.turns));
+    // An empty open fault list means db exists; sourceFaults checked the section.
+    items.push(...readTurns(opened.db!, outbound.turns!, read.turns));
   } finally {
-    opened.db.close();
+    // The successful open above owns this database through the finally block.
+    opened.db!.close();
   }
   return items;
 }
 
-function countMedia(counts, record) {
-  for (const one of record.adapter_fields?.media ?? []) {
+function countMedia(counts: ReturnType<typeof emptyCounts>, record: MessageRecord) {
+  // Preserve the existing assumed media shape on merged outbound records.
+  for (const one of (record.adapter_fields?.media as ImportFields['media']) ?? []) {
     counts.attachments_referenced++;
     if (one.present === true) counts.attachments_present++;
     else if (one.present === false) counts.attachments_absent++;
@@ -133,9 +149,12 @@ function emptyCounts() {
     records_written: 0,
     records_merged_into_an_existing_capture: 0,
     sends_whose_message_id_an_earlier_import_already_wrote: 0,
-    by_earlier_source: {},
-    by_role: {},
-    by_identified_by: {},
+    // These initially empty dictionaries count source, role and identification strings.
+    by_earlier_source: {} as Record<string, number>,
+    // String-keyed role counter populated by countRecord.
+    by_role: {} as Record<string, number>,
+    // String-keyed identification counter populated by countRecord.
+    by_identified_by: {} as Record<string, number>,
     reply_links: 0,
     answers_named: 0,
     answers_resolving_to_a_record_in_the_store: 0,
@@ -146,7 +165,7 @@ function emptyCounts() {
   };
 }
 
-function countRecord(state, result) {
+function countRecord(state: CountState, result: { record: MessageRecord; merged: boolean }) {
   const record = result.record;
   const counts = state.counts;
   counts.records_written++;
@@ -162,10 +181,12 @@ function countRecord(state, result) {
     return;
   }
   counts.by_role[record.role] = (counts.by_role[record.role] ?? 0) + 1;
-  const how = record.adapter_fields?.identified_by ?? 'unknown';
+  // Existing outbound fields are read after store merging without coercion.
+  const how = (record.adapter_fields?.identified_by as string | undefined) ?? 'unknown';
   counts.by_identified_by[how] = (counts.by_identified_by[how] ?? 0) + 1;
   if (record.reply_to) counts.reply_links++;
-  counts.answers_named += (record.adapter_fields?.answers ?? []).length;
+  // Preserve the original array consumption of retained outbound fields.
+  counts.answers_named += ((record.adapter_fields?.answers as string[] | undefined) ?? []).length;
   counts.answers_resolving_to_a_record_in_the_store += resolvedAnswers(state.store, record);
   const at = record.sent_at ?? record.received_at;
   if (at) {
@@ -175,7 +196,7 @@ function countRecord(state, result) {
   countMedia(counts, record);
 }
 
-function summary(context, state, read, joined, started) {
+function summary(context: OutboundContext & { mapping: OutboundMapping }, state: CountState, read: ReadCounts, joined: ReturnType<typeof joinOutbound>['counts'], started: number) {
   return {
     agent: context.agent,
     account: context.account,
@@ -193,10 +214,11 @@ function summary(context, state, read, joined, started) {
   };
 }
 
-function outboundMain(named) {
+function outboundMain(named: NamedOutbound) {
   const read = loadMapping(named['--mapping']);
   if (read.faults.length > 0) return { faults: read.faults, summary: null };
-  const mapping = read.mapping;
+  // loadMapping returns a mapping whenever its fault list is empty.
+  const mapping = read.mapping!;
 
   const agent = named['--agent'] ?? (typeof mapping.agent === 'string' ? mapping.agent : null);
   if (agent === null) {
@@ -212,23 +234,25 @@ function outboundMain(named) {
     named['--account'] ?? (typeof mapping.account === 'string' ? mapping.account : null));
   if (resolved.faults.length > 0) return { faults: resolved.faults, summary: null };
 
-  const context = { store, agent, account: resolved.account, mapping, tolerance_ms: toleranceMs(mapping) };
+  const context = { store, agent, // resolveAccount returns an account whenever its fault list is empty.
+    account: resolved.account!, mapping, tolerance_ms: toleranceMs(mapping) };
   const started = Date.now();
   const sources = {};
   const items = readSources(named, mapping, sources);
   const { entries, counts: joined } = payload(context, items);
-  const state = { store, counts: emptyCounts(), conversations: new Set(), earliest: null, latest: null };
+  const state: CountState = { store, counts: emptyCounts(), conversations: new Set(), earliest: null, latest: null };
   for (const result of writeEntries(context, entries)) countRecord(state, result);
   return { faults: [], summary: summary(context, state, sources, joined, started) };
 }
 
-export function runOutbound(named) {
+export function runOutbound(named: NamedOutbound) {
   let result;
   try {
     result = outboundMain(named);
   } catch (error) {
     report(error instanceof StreamFault ? error.faults : [fault('IMPORT_FAILED', named['--mapping'],
-      (error.message ?? String(error)).split('\n')[0],
+      // Preserve the existing error-message read and fallback.
+      ((error as { message?: string }).message ?? String(error)).split('\n')[0],
       'read the fault above; nothing after this point was written')]);
     return 1;
   }

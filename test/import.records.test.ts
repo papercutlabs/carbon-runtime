@@ -1,3 +1,7 @@
+import type { MessageRecord, Attachment, StreamFault } from '../stream/store.ts';
+import type { ImportFields } from '../import/types.ts';
+// These tests own their stores and write only the attachment/field shape asserted below.
+type FixtureRecord = MessageRecord<Attachment> & { adapter_fields?: ImportFields & { chat_key_note?: string } };
 // The history import, end to end through the command.
 //
 // What matters about an import is not that it writes records; it is what it does
@@ -15,8 +19,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../stream/store.ts';
 import { learnPairs, writeConnectionState } from '../adapters/whatsapp/channel-state.mjs';
-import { chatKeyFor, mimeOf } from '../import/carbon-capture-whatsapp.mjs';
-import { buildExport, buildZip } from './zip-writer.mjs';
+import { chatKeyFor, mimeOf } from '../import/carbon-capture-whatsapp.ts';
+import { buildExport, buildZip } from './zip-writer.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const COMMAND = path.join(ROOT, 'bin', 'carbon-import');
@@ -31,7 +35,7 @@ function scratch() {
   return { dir, storeDir: path.join(dir, 'store') };
 }
 
-function row(id, text, extra = {}) {
+function row(id: string, text: string, extra: { chat_jid?: string; from_me?: boolean; message_type?: string; timestamp?: string; has_media?: boolean; media_filename?: string } = {}) {
   return {
     chat_jid: extra.chat_jid ?? PHONE,
     chat_name: 'Ada',
@@ -47,7 +51,7 @@ function row(id, text, extra = {}) {
   };
 }
 
-function runImport(storeDir, zipPath, extra = []) {
+function runImport(storeDir: string, zipPath: string, extra: string[] = []) {
   try {
     return {
       code: 0,
@@ -56,11 +60,12 @@ function runImport(storeDir, zipPath, extra = []) {
       ], { encoding: 'utf8' })
     };
   } catch (error) {
-    return { code: error.status, out: (error.stdout ?? '') + (error.stderr ?? '') };
+    // execFileSync reports failed commands with status and captured text.
+    return { code: (error as { status: number }).status, out: ((error as { stdout?: string }).stdout ?? '') + ((error as { stderr?: string }).stderr ?? '') };
   }
 }
 
-function writeExport(dir, rows, media = {}) {
+function writeExport(dir: string, rows: unknown, media: Record<string, string | Buffer> = {}) {
   const file = path.join(dir, 'wa-export.zip');
   fs.writeFileSync(file, buildExport(rows, media));
   return file;
@@ -68,10 +73,10 @@ function writeExport(dir, rows, media = {}) {
 
 // Every capture file with its digest, so "changed no byte" is a comparison and
 // not a claim.
-function captureDigests(storeDir) {
+function captureDigests(storeDir: string) {
   const root = path.join(storeDir, 'captures');
-  const found = {};
-  const walk = (at) => {
+  const found: Record<string, string> = {};
+  const walk = (at: string) => {
     for (const name of fs.readdirSync(at)) {
       const full = path.join(at, name);
       if (fs.statSync(full).isDirectory()) walk(full);
@@ -97,7 +102,7 @@ test('every row becomes one historical record, and nothing is released', () => {
   assert.equal(summary.records_written, 3);
   assert.equal(summary.released, 0);
 
-  const store = new Store(storeDir);
+  const store = new Store<FixtureRecord>(storeDir);
   const written = store.rebuild();
   assert.equal(written.length, rows.length, 'N records for an export of N rows');
   for (const record of written) {
@@ -107,7 +112,8 @@ test('every row becomes one historical record, and nothing is released', () => {
     assert.equal(record.release, undefined);
     assert.throws(
       () => store.release(record, { released_at: 'now', thread_id: 't', turn_id: 'u' }),
-      (error) => error.faults[0].code === 'HISTORICAL_NEVER_RELEASES'
+      (error) => // release is expected to raise the structured historical-record fault.
+      (error as StreamFault).faults[0].code === 'HISTORICAL_NEVER_RELEASES'
     );
   }
   // And the live adapter's cursors were not moved, so it will not skip anything.
@@ -119,7 +125,7 @@ test('every field is a rename, and what the schema does not name is carried besi
   const rows = [row('false_c_9001', 'The invoice again.', { message_type: 'chat' })];
   assert.equal(runImport(storeDir, writeExport(dir, rows), ['--account', ACCOUNT]).code, 0);
 
-  const [record] = new Store(storeDir).rebuild();
+  const [record] = new Store<FixtureRecord>(storeDir).rebuild();
   assert.equal(record.conversation_id, `${ACCOUNT}:${PHONE}`);
   assert.equal(record.message_id, `${ACCOUNT}:${PHONE}:false_c_9001`);
   assert.equal(record.platform_message_id, 'false_c_9001');
@@ -131,8 +137,9 @@ test('every field is a rename, and what the schema does not name is carried besi
   assert.equal(record.conversation_kind, 'direct');
   assert.equal(record.direction, 'inbound');
   assert.equal(record.role, 'contact');
-  assert.equal(record.adapter_fields.chat_name, 'Ada');
-  assert.equal(record.adapter_fields.message_type, 'chat');
+  // This row supplies the optional display fields checked below.
+  assert.equal(record.adapter_fields!.chat_name, 'Ada');
+  assert.equal(record.adapter_fields!.message_type, 'chat');
   // A history import sets no hold: an operator's message from last spring must
   // not stop the agent today.
   assert.equal(record.hold, undefined);
@@ -147,7 +154,7 @@ test('media in the archive lands beside its record, under its own digest', () =>
   assert.equal(runImport(storeDir, writeExport(dir, rows, { 'media/false_c_9001.jpg': picture }),
     ['--account', ACCOUNT]).code, 0);
 
-  const store = new Store(storeDir);
+  const store = new Store<FixtureRecord>(storeDir);
   const [record] = store.rebuild();
   assert.equal(record.attachments.length, 1);
   assert.equal(record.attachments[0].mime, 'image/jpeg');
@@ -163,9 +170,10 @@ test('a row whose media the archive does not carry says so, and is written anywa
   const result = runImport(storeDir, writeExport(dir, rows), ['--account', ACCOUNT]);
   assert.equal(result.code, 0, result.out);
   assert.equal(JSON.parse(result.out).media_the_export_did_not_carry, 1);
-  const [record] = new Store(storeDir).rebuild();
+  const [record] = new Store<FixtureRecord>(storeDir).rebuild();
   assert.deepEqual(record.attachments, []);
-  assert.match(record.adapter_fields.media_missing, /media/);
+  // This fixture declares media without a file, so the missing-media field is expected.
+  assert.match(record.adapter_fields!.media_missing!, /media/);
 });
 
 test('a re-run changes no capture byte', () => {
@@ -182,12 +190,12 @@ test('a re-run changes no capture byte', () => {
   assert.equal(second.code, 0, second.out);
   assert.equal(JSON.parse(second.out).records_merged_into_an_existing_capture, 2);
   assert.deepEqual(captureDigests(storeDir), before, 'a second run rewrote a capture');
-  assert.equal(new Store(storeDir).rebuild().length, 2, 'a second run wrote the records again');
+  assert.equal(new Store<FixtureRecord>(storeDir).rebuild().length, 2, 'a second run wrote the records again');
 });
 
 test('a phone-keyed export joins the conversations the live adapter keyed by linked id', () => {
   const { dir, storeDir } = scratch();
-  const store = Store.open(storeDir);
+  const store = Store.open<FixtureRecord>(storeDir);
   learnPairs(store, ACCOUNT, [{ phone: PHONE, lid: LID }]);
 
   assert.deepEqual(chatKeyFor({ chat_jid: PHONE }, { phone_to_lid: { [PHONE]: LID } }), { key: LID, note: null });
@@ -197,25 +205,27 @@ test('a phone-keyed export joins the conversations the live adapter keyed by lin
 
   const [record] = store.rebuild();
   assert.equal(record.conversation_id, `${ACCOUNT}:${LID}`, 'the export did not join the live conversation');
-  assert.equal(record.adapter_fields.chat_key_note, undefined);
+  // The row carries display fields even when the successful linked-id lookup needs no note.
+  assert.equal(record.adapter_fields!.chat_key_note, undefined);
 });
 
 test('a chat with no known linked-id form is kept under its phone key, and says so', () => {
   const { dir, storeDir } = scratch();
   const rows = [row('false_c_9001', 'A chat the agent has never seen live.')];
   assert.equal(runImport(storeDir, writeExport(dir, rows), ['--account', ACCOUNT]).code, 0);
-  const [record] = new Store(storeDir).rebuild();
+  const [record] = new Store<FixtureRecord>(storeDir).rebuild();
   assert.equal(record.conversation_id, `${ACCOUNT}:${PHONE}`);
-  assert.match(record.adapter_fields.chat_key_note, /phone number/);
+  // The phone-only fixture must carry the note this assertion checks.
+  assert.match(record.adapter_fields!.chat_key_note!, /phone number/);
 });
 
 test('where a live capture already exists, it wins on every field and only gains attachments', () => {
   const { dir, storeDir } = scratch();
-  const store = Store.open(storeDir);
+  const store = Store.open<FixtureRecord>(storeDir);
   const conversation_id = `${ACCOUNT}:${LID}`;
   learnPairs(store, ACCOUNT, [{ phone: PHONE, lid: LID }]);
 
-  const live = {
+  const live: FixtureRecord = {
     schema: 'carbon.message.v1',
     agent: AGENT,
     source: 'whatsapp',
@@ -242,7 +252,8 @@ test('where a live capture already exists, it wins on every field and only gains
   assert.equal(runImport(storeDir, writeExport(dir, rows, { 'media/one.jpg': 'a photograph' }),
     ['--account', ACCOUNT]).code, 0);
 
-  const kept = store.read(conversation_id, live.message_id, 0);
+  // The fixture captured this record before importing the duplicate.
+  const kept = store.read(conversation_id, live.message_id, 0)!;
   assert.equal(kept.body, 'what the live adapter captured', 'the import overwrote a live capture');
   assert.equal(kept.historical, false, 'the import made a live capture historical');
   assert.equal(kept.source, 'whatsapp');
@@ -258,7 +269,7 @@ test('the account is read from the store when the store names one, and asked for
   assert.equal(refused.code, 1);
   assert.match(refused.out, /ACCOUNT_UNDETERMINED/);
 
-  writeConnectionState(Store.open(storeDir), ACCOUNT, 'open');
+  writeConnectionState(Store.open<FixtureRecord>(storeDir), ACCOUNT, 'open');
   const found = runImport(storeDir, zip);
   assert.equal(found.code, 0, found.out);
   assert.equal(JSON.parse(found.out).account, ACCOUNT);
@@ -276,7 +287,7 @@ test('an archive carrying an entry outside media imports nothing at all', () => 
   const result = runImport(storeDir, file, ['--account', ACCOUNT]);
   assert.equal(result.code, 1);
   assert.match(result.out, /ZIP_ENTRY_OUTSIDE_MEDIA/);
-  assert.equal(fs.existsSync(path.join(storeDir, 'captures')) ? new Store(storeDir).rebuild().length : 0, 0);
+  assert.equal(fs.existsSync(path.join(storeDir, 'captures')) ? new Store<FixtureRecord>(storeDir).rebuild().length : 0, 0);
 });
 
 test('every argument is explicit, and the manual is the help', () => {

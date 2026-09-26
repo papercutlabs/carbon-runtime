@@ -1,3 +1,7 @@
+import type { DatabaseSync } from 'node:sqlite';
+import type { SourceKind, SourceSection, TurnSection, MediaRoot, OutboundItem, NamedSources, OutboundMapping } from './types.ts';
+export type LineCounts = ReturnType<typeof emptyLineCounts>;
+export type TurnCounts = ReturnType<typeof emptyTurnCounts>;
 // Reading the three places an agent's own sends were recorded.
 //
 // Two of them are JSON lines a running process appended — one line per thing
@@ -7,14 +11,14 @@
 // read through one SELECT the mapping wrote and nothing else.
 //
 // Every file here is opened read-only and never written, and the names of what
-// is inside come from `outbound-mapping.mjs`, so nothing in this module knows a
+// is inside come from `outbound-mapping.ts`, so nothing in this module knows a
 // client either.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fault } from '../stream/faults.ts';
 import { StreamFault } from '../stream/store.ts';
-import { itemFrom, selects, turnItem, turnRowFaults, valueAt } from './outbound-mapping.mjs';
+import { itemFrom, selects, turnItem, turnRowFaults, valueAt } from './outbound-mapping.ts';
 
 const LINE_SUFFIX = '.jsonl';
 const CHUNK = 1 << 20;
@@ -23,7 +27,7 @@ const CHUNK = 1 << 20;
 // read without holding it. It is read synchronously because the command around
 // it is: one import is one thing happening, and an await here would make every
 // caller of it asynchronous for no gain.
-function eachLine(file, take) {
+function eachLine(file: string, take: (line: string) => void) {
   const fd = fs.openSync(file, 'r');
   const buffer = Buffer.allocUnsafe(CHUNK);
   let rest = '';
@@ -44,10 +48,10 @@ function eachLine(file, take) {
 // One line becomes an item, or it becomes a count of why it did not. A line
 // nothing can parse is counted rather than thrown: a half-written last line is
 // what an append-only file looks like while the process that owns it is running.
-function takeLine(line, kind, section, media, counts, items) {
+function takeLine(line: string, kind: SourceKind, section: SourceSection, media: MediaRoot | null, counts: LineCounts, items: OutboundItem[]) {
   if (line.trim().length === 0) return;
   counts.lines++;
-  let parsed;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
@@ -63,8 +67,8 @@ function takeLine(line, kind, section, media, counts, items) {
   items.push(item);
 }
 
-export function readLines(file, kind, section, media, counts) {
-  const items = [];
+export function readLines(file: string, kind: SourceKind, section: SourceSection, media: MediaRoot | null, counts: LineCounts) {
+  const items: OutboundItem[] = [];
   eachLine(file, (line) => takeLine(line, kind, section, media, counts, items));
   return items;
 }
@@ -76,8 +80,8 @@ export function emptyLineCounts() {
 // A directory of daily files is one source. They are read in name order so two
 // runs read them in the same order, and a file that is not one of these lines is
 // not opened at all.
-export function readDirectory(dir, kind, section, media, counts) {
-  const items = [];
+export function readDirectory(dir: string, kind: SourceKind, section: SourceSection, media: MediaRoot | null, counts: LineCounts) {
+  const items: OutboundItem[] = [];
   for (const name of fs.readdirSync(dir).sort()) {
     if (!name.endsWith(LINE_SUFFIX)) continue;
     counts.files++;
@@ -90,8 +94,8 @@ export function readDirectory(dir, kind, section, media, counts) {
 // against the names the query had to produce, so a query that named none of them
 // is refused before a record is written rather than after half a history is in
 // the store.
-export function readTurns(db, section, counts) {
-  const items = [];
+export function readTurns(db: DatabaseSync, section: TurnSection, counts: TurnCounts) {
+  const items: OutboundItem[] = [];
   let checked = false;
   for (const row of db.prepare(section.sql).iterate()) {
     counts.rows++;
@@ -115,10 +119,10 @@ export function emptyTurnCounts() {
 // A source named on the command line that is not there is a fault, and a source
 // the mapping does not describe is a fault too: an import that quietly read two
 // of the three places would report a history with a hole in it.
-export function sourceFaults(named, mapping) {
+export function sourceFaults(named: NamedSources, mapping: Partial<OutboundMapping> | null | undefined) {
   const outbound = mapping?.outbound ?? {};
   const faults = [];
-  const wanted = [['--events', 'events', 'file'], ['--audit', 'audit', 'directory'], ['--turns', 'turns', 'file']];
+  const wanted: [keyof NamedSources, 'events' | 'audit' | 'turns', string][] = [['--events', 'events', 'file'], ['--audit', 'audit', 'directory'], ['--turns', 'turns', 'file']];
   for (const [argument, section, kind] of wanted) {
     const given = named[argument];
     if (given === null) continue;
