@@ -8,10 +8,10 @@ Copied verbatim, as whole files, with no edit of any kind:
 
   harness/codex/**        minus verifications/
   lib/faults.ts          the fault shape harness/codex/ imports
-  tools/lib/mcp.mjs       the MCP server scaffold the reply tool is served by
-  tools/lib/fault.mjs     what mcp.mjs imports
-  tools/lib/args.mjs      what mcp.mjs imports
-  tools/lib/manifest.mjs  what mcp.mjs imports
+  tools/lib/mcp.ts       the MCP server scaffold the reply tool is served by
+  tools/lib/fault.ts     what mcp.ts imports
+  tools/lib/args.ts      what mcp.ts imports
+  tools/lib/manifest.ts  what mcp.ts imports
 
 Why a copy and not a dependency. The runtime process is the one thing a systemd
 unit starts on a box, and it spawns the harness as its direct child, so the

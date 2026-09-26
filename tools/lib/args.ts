@@ -6,13 +6,27 @@
 // {type: "object", properties: {<name>: {type, enum?, items?, description}},
 //  required: [...], additionalProperties: false}.
 
-import { fault, refuseAll } from './fault.mjs';
+import { fault, refuseAll } from './fault.ts';
 
 const TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'array', 'null']);
 
+// Untrusted JSON Schema fields this module reads by name. Not a passed-validation type.
+type SchemaObject = {
+  type?: unknown;
+  additionalProperties?: unknown;
+  properties?: unknown;
+  required?: unknown;
+};
+type SchemaProperty = {
+  default?: unknown;
+  type?: unknown;
+  description?: unknown;
+  enum?: unknown;
+};
+
 // Checked once, when the server loads. A bad schema is the author's fault and is
 // found before any caller sees the tool.
-export function checkSchema(schema, at = 'arguments') {
+export function checkSchema(schema: unknown, at = 'arguments') {
   const faults = [];
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
     faults.push(fault('SCHEMA_NOT_AN_OBJECT', at,
@@ -20,17 +34,18 @@ export function checkSchema(schema, at = 'arguments') {
       'write {"type": "object", "properties": {...}, "required": [...], "additionalProperties": false}'));
     return faults;
   }
-  if (schema.type !== 'object') {
+  const rec = schema as SchemaObject;
+  if (rec.type !== 'object') {
     faults.push(fault('SCHEMA_NOT_AN_OBJECT_TYPE', `${at}.type`,
       'the top level of a tool argument schema is an object',
       'set "type": "object"'));
   }
-  if (schema.additionalProperties !== false) {
+  if (rec.additionalProperties !== false) {
     faults.push(fault('SCHEMA_ACCEPTS_UNDECLARED_ARGUMENTS', `${at}.additionalProperties`,
       'an argument nobody declared is an argument nobody checked',
       'set "additionalProperties": false'));
   }
-  const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+  const properties = rec.properties && typeof rec.properties === 'object' ? rec.properties as Record<string, unknown> : {};
   for (const [name, property] of Object.entries(properties)) {
     const where = `${at}.properties.${name}`;
     if (!property || typeof property !== 'object') {
@@ -39,25 +54,26 @@ export function checkSchema(schema, at = 'arguments') {
         'write {"type": "string", "description": "..."}'));
       continue;
     }
-    if ('default' in property) {
+    const spec = property as SchemaProperty;
+    if ('default' in spec) {
       faults.push(fault('IMPLICIT_ARGUMENT', where,
         `${name} carries a default, so a caller who says nothing gets a value it never chose and cannot see`,
         'remove the default and require the argument, or split the two behaviours into two tools'));
     }
-    const declared = Array.isArray(property.type) ? property.type : [property.type];
+    const declared = Array.isArray(spec.type) ? spec.type : [spec.type];
     if (declared.length === 0 || !declared.every((t) => typeof t === 'string' && TYPES.has(t))) {
       faults.push(fault('SCHEMA_PROPERTY_TYPE_MISSING', `${where}.type`,
         'a property declares a JSON type, or a list of them where a value is genuinely either',
         `use one of ${[...TYPES].join(', ')}`));
     }
-    if (typeof property.description !== 'string' || property.description.trim() === '') {
+    if (typeof spec.description !== 'string' || spec.description.trim() === '') {
       faults.push(fault('SCHEMA_PROPERTY_UNDESCRIBED', `${where}.description`,
         'a caller reads the description to know what the value means and what shape it takes',
         'write one sentence saying what it is, with an example value'));
     }
   }
-  for (const name of Array.isArray(schema.required) ? schema.required : []) {
-    if (!(name in properties)) {
+  for (const name of Array.isArray(rec.required) ? rec.required as unknown[] : []) {
+    if (!(name as PropertyKey in properties)) {
       faults.push(fault('SCHEMA_REQUIRES_UNDECLARED', `${at}.required`,
         `${name} is required and not declared in properties`,
         'declare it, or drop it from required'));
@@ -66,14 +82,15 @@ export function checkSchema(schema, at = 'arguments') {
   return faults;
 }
 
-function typeOf(value) {
+function typeOf(value: unknown) {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
-  if (Number.isInteger(value)) return 'integer';
+  // Number.isInteger is typed for number; untrusted values are still classified at runtime.
+  if (Number.isInteger(value as number)) return 'integer';
   return typeof value;
 }
 
-function typeOk(declared, value) {
+function typeOk(declared: unknown, value: unknown) {
   const wanted = Array.isArray(declared) ? declared : [declared];
   const actual = typeOf(value);
   return wanted.some((type) => {
@@ -83,13 +100,13 @@ function typeOk(declared, value) {
   });
 }
 
-function typeWords(declared) {
+function typeWords(declared: unknown) {
   return (Array.isArray(declared) ? declared : [declared]).join(' or ');
 }
 
 // Checked on every call. Reports every fault at once, so one correction fixes
 // the call rather than revealing the next fault a round trip later.
-export function parseArguments(schema, given, at = 'arguments') {
+export function parseArguments(schema: unknown, given: unknown, at = 'arguments') {
   const faults = [];
   const value = given === undefined || given === null ? {} : given;
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -97,10 +114,13 @@ export function parseArguments(schema, given, at = 'arguments') {
       'arguments are given as a JSON object of named values',
       'call the tool with {"<name>": <value>, ...}')]);
   }
-  const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
-  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  // After the object check, leftover fields stay untrusted named values.
+  const rec = value as Record<string, unknown>;
+  const schemaRec = schema as SchemaObject;
+  const properties = schemaRec.properties && typeof schemaRec.properties === 'object' ? schemaRec.properties as Record<string, unknown> : {};
+  const required = new Set(Array.isArray(schemaRec.required) ? schemaRec.required as unknown[] : []);
 
-  for (const name of Object.keys(value)) {
+  for (const name of Object.keys(rec)) {
     if (!(name in properties)) {
       faults.push(fault('ARGUMENT_UNDECLARED', `${at}.${name}`,
         `this tool has no argument named ${name}`,
@@ -108,32 +128,33 @@ export function parseArguments(schema, given, at = 'arguments') {
     }
   }
   for (const name of required) {
-    if (!(name in value) || value[name] === undefined) {
-      const property = properties[name] || {};
+    if (!((name as PropertyKey) in rec) || rec[name as string] === undefined) {
+      const property = (properties[name as string] || {}) as SchemaProperty;
       faults.push(fault('ARGUMENT_MISSING', `${at}.${name}`,
         `${name} is required and nothing was passed; it is never guessed`,
         property.description ? `pass ${name}: ${property.description}` : `pass ${name}`));
     }
   }
   for (const [name, property] of Object.entries(properties)) {
-    if (!(name in value) || value[name] === undefined) continue;
-    const v = value[name];
-    if (!typeOk(property.type, v)) {
+    if (!(name in rec) || rec[name] === undefined) continue;
+    const v = rec[name];
+    const spec = (property || {}) as SchemaProperty;
+    if (!typeOk(spec.type, v)) {
       faults.push(fault('ARGUMENT_WRONG_TYPE', `${at}.${name}`,
-        `${name} is ${typeOf(v)} and this tool takes ${typeWords(property.type)}`,
-        `pass ${name} as ${typeWords(property.type)}`));
+        `${name} is ${typeOf(v)} and this tool takes ${typeWords(spec.type)}`,
+        `pass ${name} as ${typeWords(spec.type)}`));
       continue;
     }
-    if (Array.isArray(property.enum) && !property.enum.includes(v)) {
+    if (Array.isArray(spec.enum) && !spec.enum.includes(v)) {
       faults.push(fault('ARGUMENT_NOT_PERMITTED', `${at}.${name}`,
         `${JSON.stringify(v)} is not one of the values ${name} takes`,
-        `pass one of ${property.enum.map((e) => JSON.stringify(e)).join(', ')}`));
+        `pass one of ${spec.enum.map((e) => JSON.stringify(e)).join(', ')}`));
     }
   }
   refuseAll(faults);
 
   // Only what was declared and passed. Nothing is filled in.
-  const out = {};
-  for (const name of Object.keys(properties)) if (name in value) out[name] = value[name];
+  const out: Record<string, unknown> = {};
+  for (const name of Object.keys(properties)) if (name in rec) out[name] = rec[name];
   return out;
 }

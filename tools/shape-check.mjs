@@ -487,11 +487,11 @@ export function layerOf(rel) {
 // and one-direction rules step over them and the copy rule owns them instead.
 export const VENDORED = [
   'lib/faults.ts',
-  'tools/lib/fault.mjs',
-  'tools/lib/args.mjs',
-  'tools/lib/manifest.mjs',
-  'tools/lib/mcp.mjs',
-  'tools/lib/help.mjs',
+  'tools/lib/fault.ts',
+  'tools/lib/args.ts',
+  'tools/lib/manifest.ts',
+  'tools/lib/mcp.ts',
+  'tools/lib/help.ts',
   'tools/shape-check.mjs',
   'schema/carbon.message.v1.json'
 ];
@@ -1100,7 +1100,7 @@ function untestedSubcommands(root, modules, out, notes) {
   notes.push(`SHAPE_UNTESTED_SUBCOMMAND: ${counted} subcommands read off bin/`);
 }
 
-const FAULT_LIBRARIES = new Set(['lib/faults.ts', 'stream/faults.ts', 'tools/lib/fault.mjs', 'runtime/faults.ts', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
+const FAULT_LIBRARIES = new Set(['lib/faults.ts', 'stream/faults.ts', 'tools/lib/fault.ts', 'runtime/faults.ts', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
 
 function errorPaths(modules, out) {
   for (const module of modules.values()) {

@@ -16,7 +16,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { Store } from '../stream/store.ts';
 import { listTeachings } from '../stream/teachings.ts';
-import { checkManifest } from '../tools/lib/manifest.mjs';
+import { checkManifest } from '../tools/lib/manifest.ts';
 import {
   MANIFEST, TEACH_PORT, TEACH_SERVER_NAME, createTeachServer, serveTeachTool, managementFaults,
   teachingOf, argumentFaults, parseServeArgv

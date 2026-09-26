@@ -50,10 +50,10 @@ type HandlerOptions = { store: Store; agent: string; teaching: Teaching; managem
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { createServer } from '../tools/lib/mcp.mjs';
-import { readManifest } from '../tools/lib/manifest.mjs';
-import { renderHelp } from '../tools/lib/help.mjs';
-import { ToolFault, fault as toolFault } from '../tools/lib/fault.mjs';
+import { createServer } from '../tools/lib/mcp.ts';
+import { readManifest } from '../tools/lib/manifest.ts';
+import { renderHelp } from '../tools/lib/help.ts';
+import { ToolFault, fault as toolFault } from '../tools/lib/fault.ts';
 import { Store, StreamFault } from '../stream/store.ts';
 import { remember, raiseChange, forget } from '../stream/teachings.ts';
 import { fault, report, RuntimeFault, EXIT } from './faults.ts';
@@ -277,8 +277,7 @@ export function parseServeArgv(argv: string[]) {
 // text the harness puts in front of the model.
 async function main(argv: string[]) {
   if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
-    // The vendored JS helper iterates string usage lines, but its empty default infers never[].
-    console.log((renderHelp as (manifest: unknown, options: { serverUsage: string[] }) => string)(MANIFEST, {
+    console.log(renderHelp(MANIFEST, {
       serverUsage: [
         'served by the carbon runtime on loopback beside the reply tool, in the same process',
         `node runtime/teach-tool.ts --declaration <file> --host <host> --port <n>    serve it as its own process, with CARBON_TEACH_STORE naming the store (the runtime's own port is ${TEACH_PORT})`,
