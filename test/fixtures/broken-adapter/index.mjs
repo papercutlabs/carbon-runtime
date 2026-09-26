@@ -4,7 +4,7 @@
 // records and case 1 fails by name. It declares inbound alone, so the outbound
 // and import cases never run against it.
 
-import * as fixture from '../../../adapters/fixture/index.mjs';
+import * as fixture from '../../../adapters/fixture/index.ts';
 
 export const capabilities = ['inbound'];
 

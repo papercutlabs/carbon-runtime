@@ -21,7 +21,7 @@ import {
 import { readChannelState } from '../runtime/channel-state.mjs';
 import { replyHandler } from '../runtime/reply-tool.mjs';
 import { fakeHarness } from './fake-harness.mjs';
-import * as fixture from '../adapters/fixture/index.mjs';
+import * as fixture from '../adapters/fixture/index.ts';
 import * as email from '../adapters/email/index.ts';
 
 const AGENT = 'test-agent';
