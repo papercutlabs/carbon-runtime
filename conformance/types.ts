@@ -28,7 +28,7 @@ export type ConformanceCase = {
   run(context: CaseContext): void;
 };
 
-export type IngestContext<C, I, R extends MessageRecord> = C & {
-  store: Pick<Store<R>, 'putAttachment' | 'capture' | 'park'>;
+export type IngestContext<C, I> = C & {
+  store: Pick<Store, 'putAttachment' | 'capture' | 'park'>;
   adapter: { payload: (context: C, items: I[]) => Payload };
 };

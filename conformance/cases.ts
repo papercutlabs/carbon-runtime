@@ -50,14 +50,14 @@ function tree(dir: string) {
 // Put an adapter's batch through the store, exactly as the runtime does: the
 // attachments first, so the record can name them, then capture, then whatever
 // the adapter could not understand, parked where it landed.
-export function ingest<C, I, R extends MessageRecord>(context: IngestContext<C, I, R>, items: I[]) {
+export function ingest<C, I>(context: IngestContext<C, I>, items: I[]) {
   const { entries, parked } = context.adapter.payload(context, items);
   const written = [];
   for (const entry of entries) {
     let record = entry.record;
     const attachments = [];
     // The payload's attachments remain raw. This view only performs the original iteration; a non-iterable still throws.
-    for (const wanted of (entry.attachments ?? []) as Iterable<unknown>) {
+    for (const wanted of entry.attachments as Iterable<unknown> ?? []) {
       // Property views keep raw values unknown and preserve inherited fields and null-access failures.
       if ((wanted as { download_failed?: unknown }).download_failed === true) {
         attachments.push({
@@ -70,23 +70,23 @@ export function ingest<C, I, R extends MessageRecord>(context: IngestContext<C, 
       } else {
         attachments.push(context.store.putAttachment(
           // The store resolves identity and writes metadata; these operation-only views add no validation.
-          record as Parameters<Store<R>['putAttachment']>[0],
+          record as Parameters<Store['putAttachment']>[0],
           // Buffer.from still receives the original bytes and performs its own overload/type checks.
           Buffer.from((wanted as { bytes: Uint8Array }).bytes),
-          wanted as Parameters<Store<R>['putAttachment']>[2]));
+          wanted as Parameters<Store['putAttachment']>[2]));
       }
     }
     record = { ...record as object, attachments }; // Spread keeps primitive/null behavior.
-    // The candidate and options reach the existing validating store call unchanged; only its result carries R.
-    written.push(context.store.capture(record as R, {
+    // Store validates the common schema here; raw inputs cannot establish a specialized record type.
+    written.push(context.store.capture(record as MessageRecord, {
       raw: entry.raw as string | undefined,
       cursor: entry.cursor as { kind: 'message' | 'revision'; position: string } | undefined,
-      disposition: (record as { disposition: R['disposition'] }).disposition
+      disposition: (record as { disposition: MessageRecord['disposition'] }).disposition
     }));
   }
   for (const item of parked) {
     // park validates through capture; no raw record, reason or cursor is declared validated before this call.
-    written.push(context.store.park(item.record as R, item.reason as string, { raw: item.raw as string | undefined,
+    written.push(context.store.park(item.record as MessageRecord, item.reason as string, { raw: item.raw as string | undefined,
       cursor: item.cursor as { kind: 'message' | 'revision'; position: string } | undefined }));
   }
   return written;
