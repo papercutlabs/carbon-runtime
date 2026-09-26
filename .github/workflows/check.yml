@@ -47,7 +47,7 @@ jobs:
           '
 
       - name: node --test
-        run: node --test "test/*.test.mjs" "test/*.test.ts"
+        run: npm test
 
       # Is this still the shape it says it is. Every rule carries its own reason;
       # `node tools/shape-check.mjs --help` prints them. Four rules need both
