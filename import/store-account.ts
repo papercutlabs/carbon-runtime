@@ -1,3 +1,4 @@
+import type { Store } from '../stream/store.ts';
 // Which account a history belongs to.
 //
 // An import writes into a store an agent is already using, and every record it
@@ -16,7 +17,7 @@ import { fault } from '../stream/faults.ts';
 // The WhatsApp accounts this store already knows about, read from the channel
 // state the live adapter writes. One account is an answer; none or several is a
 // question for the caller, who passes --account.
-function accountsIn(store) {
+function accountsIn(store: Store) {
   const dir = store.under('channels');
   if (!fs.existsSync(dir)) return [];
   const found = [];
@@ -34,7 +35,7 @@ function accountsIn(store) {
   return found;
 }
 
-export function resolveAccount(store, given) {
+export function resolveAccount(store: Store, given: string | null) {
   if (given !== null) return { account: given, faults: [] };
   const known = accountsIn(store);
   if (known.length === 1) return { account: known[0], faults: [] };
