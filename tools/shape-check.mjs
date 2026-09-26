@@ -53,7 +53,7 @@ import { fault, report } from '../lib/faults.mjs';
 
 export const RULES = {
   SHAPE_ONE_DEPENDENCY: {
-    why: 'the runtime ships as a tarball onto a box with no registry, so its only runtime dependency is the exactly pinned @whiskeysockets/baileys; TypeScript is pinned as the sole development dependency, and carbon-core has no runtime dependency.'
+    why: 'the runtime ships as a tarball onto a box with no registry, so its only runtime dependency is the exactly pinned @whiskeysockets/baileys and its sole development dependency is pinned TypeScript; carbon-core has no runtime dependency and exactly pinned TypeScript and Node declarations for development.'
   },
   SHAPE_CLIENT_IDENTIFIER: {
     why: 'a client identifier in the core makes the universal layer client-specific, and one in the public half publishes it; both are refused by the scans that already exist.'
@@ -584,7 +584,12 @@ function corePackage(pkg, out) {
       'carbon-core has no runtime dependencies',
       'keep runtime dependencies out of the private package'));
   }
-  pinnedTypeScript(pkg, out);
+  const dev = pkg.devDependencies ?? {};
+  if (Object.keys(dev).length !== 2 || !isExactPin(dev.typescript) || !isExactPin(dev['@types/node'])) {
+    out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json devDependencies',
+      'carbon-core requires exactly pinned TypeScript and Node declarations as its only development dependencies',
+      'keep only typescript and @types/node in devDependencies and pin both exact versions'));
+  }
   if (pkg.scripts?.typecheck !== 'tsc --noEmit') {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json scripts.typecheck',
       'carbon-core has no typecheck command for the normal checks to run',
