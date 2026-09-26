@@ -89,26 +89,31 @@ Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
   ${EXIT.LOCK_HELD}  another runtime is alive and holds an adapter's lock
   ${EXIT.LATCHED}  the terminal latch: a person decides, and carbon install clears it`;
 
-const BOOLEAN_FLAGS: string[] = [];
+const BOOLEAN_FLAGS = [] as const;
 const FLAGS = ['agent-dir', 'declaration', 'store', 'codex-home', 'checkout', 'work', 'binary',
-  'harness-root', 'reply-port', 'teach-port', 'items', 'passes'];
+  'harness-root', 'reply-port', 'teach-port', 'items', 'passes'] as const;
+
+type FlagName = (typeof FLAGS)[number];
+type BooleanFlagName = (typeof BOOLEAN_FLAGS)[number];
+// FLAGS values are argv strings; BOOLEAN_FLAGS (currently none) are booleans. No runtime String().
+type ParsedArgs = Partial<Record<FlagName, string>> & Partial<Record<BooleanFlagName, boolean>>;
 
 function parse(argv: string[]) {
-  const args: Record<string, string | boolean> = {};
+  const args: ParsedArgs = {};
   const faults = [];
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i].startsWith('--') ? argv[i].slice(2) : null;
-    if (name && BOOLEAN_FLAGS.includes(name)) {
-      args[name] = true;
+    if (name && (BOOLEAN_FLAGS as readonly string[]).includes(name)) {
+      (args as Record<string, string | boolean>)[name] = true;
       continue;
     }
-    if (name && FLAGS.includes(name)) {
+    if (name && (FLAGS as readonly string[]).includes(name)) {
       const value = argv[++i];
       if (value === undefined) {
         faults.push(fault('ARGUMENT_WITHOUT_VALUE', argv[i - 1], 'this argument was given with no value', 'give it a value'));
         continue;
       }
-      args[name] = value;
+      args[name as FlagName] = value;
       continue;
     }
     faults.push(fault('UNKNOWN_ARGUMENT', argv[i], 'not an argument of carbon-runtime run', 'run carbon-runtime --help'));
@@ -116,16 +121,16 @@ function parse(argv: string[]) {
   return { args, faults };
 }
 
-function places(args: Record<string, string | boolean>, faults: ReturnType<typeof fault>[]) {
+function places(args: ParsedArgs, faults: ReturnType<typeof fault>[]) {
   if (args['agent-dir']) {
-    for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'work', 'harness-root']) {
+    for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'work', 'harness-root'] as const) {
       if (args[name]) {
         faults.push(fault('ARGUMENTS_CONFLICT', `--${name}`,
           '--agent-dir says where everything is, so a second path for the same thing is two answers to one question',
           'pass --agent-dir alone, or pass every path explicitly'));
       }
     }
-    const under = placesUnder(path.resolve(String(args['agent-dir'])));
+    const under = placesUnder(path.resolve(args['agent-dir']));
     return {
       declarationPath: under.declaration,
       storeDir: under.store,
@@ -135,7 +140,7 @@ function places(args: Record<string, string | boolean>, faults: ReturnType<typeo
       harnessRoot: under.harnessRoot
     };
   }
-  for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'work']) {
+  for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'work'] as const) {
     if (!args[name]) {
       faults.push(fault('MISSING_ARGUMENT', `--${name}`,
         'a run without --agent-dir names every path itself, and this one is missing',
@@ -143,12 +148,12 @@ function places(args: Record<string, string | boolean>, faults: ReturnType<typeo
     }
   }
   return {
-    declarationPath: args.declaration ? path.resolve(String(args.declaration)) : null,
-    storeDir: args.store ? path.resolve(String(args.store)) : null,
-    codexHome: args['codex-home'] ? path.resolve(String(args['codex-home'])) : null,
-    checkout: args.checkout ? path.resolve(String(args.checkout)) : null,
-    work: args.work ? path.resolve(String(args.work)) : null,
-    harnessRoot: args['harness-root'] ? path.resolve(String(args['harness-root'])) : null
+    declarationPath: args.declaration ? path.resolve(args.declaration) : null,
+    storeDir: args.store ? path.resolve(args.store) : null,
+    codexHome: args['codex-home'] ? path.resolve(args['codex-home']) : null,
+    checkout: args.checkout ? path.resolve(args.checkout) : null,
+    work: args.work ? path.resolve(args.work) : null,
+    harnessRoot: args['harness-root'] ? path.resolve(args['harness-root']) : null
   };
 }
 
@@ -176,7 +181,7 @@ async function main(argv: string[]) {
 
   // Faults above refused a missing declaration path; JSON itself remains unvalidated.
   const declaration = readDeclaration(where.declarationPath!) as Declaration;
-  const itemsFile = args.items ? path.resolve(String(args.items)) : null;
+  const itemsFile = args.items ? path.resolve(args.items) : null;
   const readItems = () => {
     if (!itemsFile || !fs.existsSync(itemsFile)) return [];
     return JSON.parse(fs.readFileSync(itemsFile, 'utf8'));
@@ -194,7 +199,7 @@ async function main(argv: string[]) {
     checkout: where.checkout!,
     work: where.work!,
     harnessRoot: where.harnessRoot!,
-    binary: args.binary ? path.resolve(String(args.binary)) : null,
+    binary: args.binary ? path.resolve(args.binary) : null,
     replyPort: args['reply-port'] ? Number(args['reply-port']) : REPLY_PORT,
     teachPort: args['teach-port'] ? Number(args['teach-port']) : TEACH_PORT,
     passes: args.passes ? Number(args.passes) : Infinity,

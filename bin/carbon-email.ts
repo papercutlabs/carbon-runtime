@@ -230,10 +230,12 @@ async function smoke(values: Record<string, string | undefined>) {
       text_sha256: crypto.createHash('sha256').update(text, 'utf8').digest('hex')
     }
   };
-  // Smoke writes a fresh pending reply; the fenced branch is not this path.
-  const written = store.reply(record as EmailRecord) as { fenced: null; record: OutboundEmailRecord; file: string };
-  console.log(`      pending on disk: ${store.relative(written.file)}`);
-  const outcome = adapter.send({ ...context, recipients: [values['send-to']!] }, written.record);
+  // store.reply's ReplyOutcome also returns { fenced: 'sent', ... } when request_id
+  // was already sent. Smoke does not exclude that branch; a colliding id fails at
+  // .file/.record the same way the original untyped access did.
+  const written = store.reply(record as EmailRecord);
+  console.log(`      pending on disk: ${store.relative((written as { file: string }).file)}`);
+  const outcome = adapter.send({ ...context, recipients: [values['send-to']!] }, (written as { record: OutboundEmailRecord }).record);
   if (outcome.status === 'sent') store.markSent(request_id, outcome.chunk_ids);
   else if (outcome.status === 'unknown') store.markUnknown(request_id);
   else store.markFailed(request_id);

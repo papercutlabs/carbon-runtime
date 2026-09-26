@@ -16,10 +16,12 @@ import { authState, library } from '../adapters/whatsapp/socket.ts';
 import type { ProviderSocket } from '../adapters/whatsapp/socket.ts';
 
 // Pair/send use baileys operations beyond the adapter's ProviderSocket view.
-type CliSocket = ProviderSocket & {
+// Omit SendSocket's Promise<unknown> sendMessage so the Baileys return
+// (Promise<WAMessage | undefined> per messages-send.d.ts) is not intersected away.
+type CliSocket = Omit<ProviderSocket, 'sendMessage'> & {
   requestPairingCode(phone: string): Promise<string>;
   end(reason?: undefined): void;
-  sendMessage(chat: string, content: { text: string }): Promise<{ key?: { id?: unknown; remoteJid?: unknown } }>;
+  sendMessage(chat: string, content: { text: string }): Promise<{ key?: { id?: unknown; remoteJid?: unknown } } | undefined>;
 };
 
 const HELP = `carbon-whatsapp — pair one device with a WhatsApp account, and drive it in a proof
@@ -250,8 +252,8 @@ async function send(authDir: string, to: string, text: string) {
       if (connection === 'open' && !sending) {
         sending = true;
         try {
-          // sendMessage's accepted message key fields are what the proof prints.
-          const result = await socket.sendMessage(`${to}@s.whatsapp.net`, { text }) as { key?: { id?: unknown; remoteJid?: unknown } };
+          // sendMessage may return undefined; optional chaining below matches the original.
+          const result = await socket.sendMessage(`${to}@s.whatsapp.net`, { text });
           // The connection is closed rather than dropped, and the credentials are
           // given a moment to settle first. A device that connects, sends and has
           // its socket torn down in the same second is a device the server has

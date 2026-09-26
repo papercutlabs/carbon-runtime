@@ -152,7 +152,9 @@ async function main(argv: string[]) {
   }
   return new Promise<number>((resolve) => {
     child.on('error', (error: Error) => {
-      report([fault('TOOL_SERVER_DID_NOT_START', server.command ?? command, error.message,
+      // Subject is the declaration's optional command field, as in the original JS
+      // (may be undefined). Do not fall back to the Node binary path.
+      report([fault('TOOL_SERVER_DID_NOT_START', server.command as string, error.message,
         'check the path in the declaration and that the checkout this box carries holds it')]);
       resolve(EXIT.FAULT);
     });
@@ -175,10 +177,11 @@ main(process.argv).then((code) => { process.exitCode = code; }).catch((error: un
     process.exitCode = error.exitCode;
     return;
   }
-  // Unexpected throws keep their runtime message/stack fields when present.
-  const err = error as { message?: string; stack?: string };
-  report([fault('TOOL_SERVER_LAUNCHER_THREW', 'carbon-tool-server', err.message ?? String(error),
+  // Optional access preserved: a null/undefined rejection must still report
+  // TOOL_SERVER_LAUNCHER_THREW rather than throw inside this catch.
+  const err = error as { message?: string; stack?: string } | null | undefined;
+  report([fault('TOOL_SERVER_LAUNCHER_THREW', 'carbon-tool-server', err?.message ?? String(error),
     'this is a fault the launcher does not name; the stack is on stderr')]);
-  process.stderr.write(`${err.stack ?? error}\n`);
+  process.stderr.write(`${err?.stack ?? error}\n`);
   process.exitCode = EXIT.FAULT;
 });

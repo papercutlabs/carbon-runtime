@@ -134,3 +134,65 @@ import './carbon-email.ts';
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- PA-318 entry-point correction regressions (findings 1–3) -----------------
+
+test('TOOL_SERVER_DID_NOT_START keeps the declaration command as subject when it is missing', () => {
+  // Synthetic before/after of the fault-subject expression, without providers.
+  const server = { command: undefined as string | undefined };
+  const nodeBinary = process.execPath;
+  const after = server.command;
+  const beforeFallback = server.command ?? nodeBinary;
+  assert.equal(after, undefined);
+  assert.equal(beforeFallback, nodeBinary);
+  assert.notEqual(after, beforeFallback);
+
+  const source = fs.readFileSync(path.join(ROOT, 'bin/carbon-tool-server.ts'), 'utf8');
+  assert.match(source, /fault\('TOOL_SERVER_DID_NOT_START',\s*server\.command/);
+  assert.doesNotMatch(source, /fault\('TOOL_SERVER_DID_NOT_START',\s*server\.command\s*\?\?/);
+});
+
+test('TOOL_SERVER_LAUNCHER_THREW tolerates null and undefined rejections', () => {
+  for (const error of [null, undefined] as const) {
+    const err = error as { message?: string; stack?: string } | null | undefined;
+    // After: optional access reports the fault instead of throwing in the catch.
+    const message = err?.message ?? String(error);
+    const stack = err?.stack ?? error;
+    assert.equal(message, String(error));
+    assert.equal(stack, error);
+    // Before: a non-null object cast then direct .message throws on null/undefined.
+    assert.throws(() => {
+      const bad = error as unknown as { message?: string };
+      return bad.message ?? String(error);
+    }, TypeError);
+  }
+  const source = fs.readFileSync(path.join(ROOT, 'bin/carbon-tool-server.ts'), 'utf8');
+  assert.match(source, /err\?\.message \?\? String\(error\)/);
+  assert.match(source, /err\?\.stack \?\? error/);
+});
+
+test('carbon-runtime resolves path arguments without String() coercion', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'bin/carbon-runtime.ts'), 'utf8');
+  assert.doesNotMatch(source, /path\.resolve\(String\(/);
+  assert.match(source, /path\.resolve\(args\['agent-dir'\]\)/);
+  assert.match(source, /path\.resolve\(args\.declaration\)/);
+  assert.match(source, /path\.resolve\(args\.binary\)/);
+});
+
+test('email smoke does not assert store.reply always returns fenced:null', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'bin/carbon-email.ts'), 'utf8');
+  assert.doesNotMatch(source, /as \{ fenced: null/);
+  // Store contract still admits the fenced-sent branch (honest uncertainty).
+  const storeSource = fs.readFileSync(path.join(ROOT, 'stream/store.ts'), 'utf8');
+  assert.match(storeSource, /fenced: 'sent'/);
+  assert.match(storeSource, /fenced: null/);
+});
+
+test('whatsapp sendMessage contract admits undefined like the pinned Baileys declaration', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'bin/carbon-whatsapp.ts'), 'utf8');
+  assert.match(source, /Promise<\{ key\?: \{ id\?: unknown; remoteJid\?: unknown \} \} \| undefined>/);
+  const baileys = fs.readFileSync(
+    path.join(ROOT, 'node_modules/@whiskeysockets/baileys/lib/Socket/messages-send.d.ts'),
+    'utf8');
+  assert.match(baileys, /Promise<WAMessage \| undefined>/);
+});
