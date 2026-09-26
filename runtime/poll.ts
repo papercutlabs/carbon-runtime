@@ -139,7 +139,7 @@ export function recordPollFailure(store: Store, account: string, kind: string, {
 // The fault a held channel reports, in the shape doctor and the log both read.
 export function holdFault(channel: Channel, poll: unknown) {
   // Field assertions describe only these interpolations, not validated poll state.
-  return fault('CHANNEL_POLL_HOLD', `${channel!.kind}:${channel!.account}`,
+  return fault('CHANNEL_POLL_HOLD', `${channel.kind}:${channel.account}`,
     `${(poll as { consecutive_failures?: unknown }).consecutive_failures} polls of this channel have failed in a row; the last said: ${(poll as { last_fault?: { problem?: unknown } }).last_fault?.problem ?? 'no reason was recorded'}`,
     'fix what the channel is failing on; the next poll that works clears the hold by itself, and no restart is needed');
 }
@@ -153,11 +153,11 @@ export function pollFault(channel: Channel, error: unknown): { code: string; sub
   const named = fields?.faults?.[0] ?? fields?.fault ?? null;
   if (named) {
     // fault stores fix verbatim; this operation assertion does not narrow our return.
-    return fault('CHANNEL_POLL_FAILED', `${channel!.kind}:${channel!.account}`,
+    return fault('CHANNEL_POLL_FAILED', `${channel.kind}:${channel.account}`,
       `${named.code}: ${named.problem}`,
       named.fix as string ?? 'read the adapter\'s fault above; the runtime keeps polling until the declared count is reached');
   }
-  return fault('CHANNEL_POLL_FAILED', `${channel!.kind}:${channel!.account}`, // A numeric declared interval above means the channel was present.
+  return fault('CHANNEL_POLL_FAILED', `${channel.kind}:${channel.account}`,
     fields?.message ?? String(error),
     'read the fault above; the runtime keeps polling until the declared count is reached');
 }

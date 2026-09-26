@@ -554,8 +554,7 @@ export class ReleaseLoop<S = Session> {
   // and cannot be resumed, so resuming it is an error where starting again is
   // free.
   async threadFor(unitId: string): Promise<unknown> {
-    if (this.threads.has(unitId)) // has above establishes this cached thread.
-    return this.threads.get(unitId)!;
+    if (this.threads.has(unitId)) return this.threads.get(unitId);
     // Thread state is not schema-validated. These local operation fields preserve its old use.
     const existing = this.store.readThread(unitId) as { thread_id?: unknown; completed_turns: number } | null;
     const opening = {

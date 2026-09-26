@@ -361,7 +361,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     while (done < passes) {
       if (childExit) break;
       for (const loop of loops) {
-        if (dueAt.get(loop)! > now()) continue;
+        if (dueAt.get(loop)! > now()) continue; // dueAt contains every loop and entries are never removed.
         try {
           await loop.pass(items(loop.channel));
         } catch (error) {
