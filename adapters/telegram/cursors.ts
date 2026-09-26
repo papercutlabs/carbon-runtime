@@ -1,3 +1,4 @@
+import type { Store } from '../../stream/store.ts';
 // The two positions this channel counts in, kept apart from the rules and apart
 // from the network, because both of the other files here need them and neither
 // should have to import the other to get them.
@@ -18,25 +19,25 @@
 
 // Zero-padded, because a cursor is compared as a string and a chat reaches six
 // figures of messages without trying.
-export function positionOf(messageId) {
+export function positionOf(messageId: unknown) {
   return String(messageId).padStart(12, '0');
 }
 
-export function offsetPositionOf(updateId) {
+export function offsetPositionOf(updateId: unknown) {
   return String(updateId).padStart(16, '0');
 }
 
 // Where the offset lives: one cursor for the account's update stream, under a
 // conversation id no chat can collide with, because a chat id is an integer and
 // this is not.
-export function updatesConversation(account) {
+export function updatesConversation(account: unknown) {
   return `${account}:updates`;
 }
 
 // The offset the next call asks for: one past the highest update this store has
 // written. Null when nothing has ever been consumed, which asks the server for
 // whatever it is still holding.
-export function nextOffset(store, account) {
+export function nextOffset(store: Pick<Store, 'cursors'>, account: unknown) {
   const held = store.cursors(updatesConversation(account)).message;
   if (held === null || held === undefined) return null;
   const at = Number(held);

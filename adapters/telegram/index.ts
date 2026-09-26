@@ -1,3 +1,4 @@
+import type { Fields, Context, Channel, Item, Candidate, Entry, Parked, Media, Reply, Transport } from './types.ts';
 // The Telegram adapter: one bot in, one bot out.
 //
 // It declares inbound and outbound, so the conformance check runs sixteen of the
@@ -5,8 +6,8 @@
 // adapter imports nothing.
 //
 // This file is the adapter contract and nothing else. It opens no connection,
-// reads no file and imports nothing that does: api.mjs is the only file here
-// that touches a network, live.mjs is the only one that keeps state between
+// reads no file and imports nothing that does: api.ts is the only file here
+// that touches a network, live.ts is the only one that keeps state between
 // passes, and every rule below is therefore tested against recorded updates with
 // no network in the test.
 //
@@ -30,7 +31,7 @@
 //    mailbox or a paired phone, and it is the fact this adapter is shaped around:
 //    the declaration names the chats the agent answers, a message from any other
 //    chat is captured and never answered, and `send` refuses a reply to one.
-// 4. **Every item of an album is its own record.** See content.mjs for why, and
+// 4. **Every item of an album is its own record.** See content.ts for why, and
 //    for what the other chat adapter here does instead.
 // 5. **The operator is a sender id the declaration names.** Telegram gives no
 //    "this came from my own device" the way a paired phone does, because the bot
@@ -42,38 +43,31 @@
 //    the chat.
 //
 // The whole list of edge cases this adapter was built against is README.md.
-
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { fault } from '../../stream/faults.ts';
 import { StreamFault } from '../../stream/store.ts';
-import { albumOf, bodyOf, conversationKind, mediaOf, messageOf, readable, senderOf, serviceKindOf } from './content.mjs';
-import { TelegramFault, call, readToken } from './api.mjs';
-import { nextOffset, offsetPositionOf, positionOf, updatesConversation } from './cursors.mjs';
-import { ALBUM_QUIET_MS, arrivals, stop, transportFor } from './live.mjs';
-
+import { albumOf, bodyOf, conversationKind, mediaOf, messageOf, readable, senderOf, serviceKindOf } from './content.ts';
+import { TelegramFault, call, readToken } from './api.ts';
+import { nextOffset, offsetPositionOf, positionOf, updatesConversation } from './cursors.ts';
+import { ALBUM_QUIET_MS, arrivals, stop, transportFor } from './live.ts';
 export const capabilities = ['inbound', 'outbound'];
-
 export const SOURCE = 'telegram';
-
 // The Bot API refuses a `text` longer than this outright, with a 400 and no
 // partial send. The declaration governs; this is what the adapter uses when it is
 // run without one, as the conformance check runs it.
 export const MAX_MESSAGE_CHARS = 4096;
-
 // How long the agent stops when the operator writes in a chat. The declaration
 // governs; this is the value used without one, and it is a day because that is
 // how long it took an earlier platform to learn that a shorter one puts the agent
 // back into a conversation a person is still handling.
 export const HOLD_MS = 24 * 60 * 60 * 1000;
-
 // This channel is drained, not fetched: a background long poll sits at the
 // server and what it has already collected is handed over when the loop asks, so
 // there is no request rate here to limit and no floor to declare. The interval is
 // still the declaration's, because it decides how long a message waits before the
 // loop looks at it.
 export const POLL_INTERVAL_FLOOR_MS = 0;
-
 export const DEFAULTS = {
   allowed_chat_ids: 'any',
   operator_sender_ids: [],
@@ -84,7 +78,6 @@ export const DEFAULTS = {
   album_quiet_ms: ALBUM_QUIET_MS,
   hold: { release_after_ms: HOLD_MS }
 };
-
 // ---- the declaration --------------------------------------------------------
 
 // On a box the runtime passes the channel's declaration block as context.channel,
@@ -92,7 +85,7 @@ export const DEFAULTS = {
 // conformance check passes no declaration at all, so an adapter's fixtures
 // directory may carry channel.json and the check's fixture loading hands it here.
 // Nothing else reads it.
-export function channelOf(context) {
+export function channelOf(context: Pick<Context, 'channel' | 'fixtures'>) {
   const declared = context.channel ?? context.fixtures?.['channel.json'] ?? {};
   return {
     ...DEFAULTS,
@@ -104,25 +97,25 @@ export function channelOf(context) {
 // Whether this agent answers in this chat. "any" is a deliberate word and not an
 // empty list: a bot answers whoever writes to it only where somebody has written
 // that down.
-export function answersIn(channel, chatId) {
+export function answersIn(channel: Pick<Channel, 'allowed_chat_ids'>, chatId: unknown) {
   const allowed = channel.allowed_chat_ids;
   if (allowed === 'any') return true;
   if (!Array.isArray(allowed)) return false;
   return allowed.map(String).includes(String(chatId));
 }
 
-export function isOperator(channel, senderId) {
+export function isOperator(channel: Channel, senderId: unknown) {
   return (channel.operator_sender_ids ?? []).map(String).includes(String(senderId));
 }
 
 // ---- identifiers ------------------------------------------------------------
 
-// The two positions this channel counts in are cursors.mjs's, and they are there
+// The two positions this channel counts in are cursors.ts's, and they are there
 // rather than here because the poll needs them too and neither file should have
 // to import the other to get them.
 export { positionOf, offsetPositionOf, updatesConversation, nextOffset };
 
-function sha256(text) {
+function sha256(text: string | null | undefined) {
   return crypto.createHash('sha256').update(text ?? '', 'utf8').digest('hex');
 }
 
@@ -131,32 +124,32 @@ function sha256(text) {
 // An item is what the poller produced and what a fixture holds:
 //   { conversation, position, received_at, update, attachments?, extra? }
 // where `update` is the Bot API's own Update object, unchanged.
-function chatOf(item) {
+function chatOf(item: Item) {
   const { message } = messageOf(item?.update);
-  const chat = message?.chat;
+  const chat = (message as Fields | null | undefined)?.chat as Fields | null | undefined;
   if (chat === null || chat === undefined || chat.id === undefined) {
-    throw new StreamFault([fault('CHAT_ABSENT', String(item?.update?.update_id ?? 'an update'),
+    throw new StreamFault([fault('CHAT_ABSENT', String((item?.update as Fields | null | undefined)?.update_id ?? 'an update'),
       'the update names no chat, so there is no conversation to write it under',
       'ask the server only for the update types this adapter reads; anything else is dropped at the poll')]);
   }
   return chat;
 }
 
-export function conversationIdOf(context, item) {
+export function conversationIdOf(context: Pick<Context, 'account'>, item: Item) {
   return `${context.account}:${chatOf(item).id}`;
 }
 
-export function kindOf(item) {
+export function kindOf(item: Item) {
   return messageOf(item?.update).edited ? 'revision' : 'message';
 }
 
 // ---- 1. list what is pending past the cursors --------------------------------
 
-export function listPending(context) {
+export function listPending(context: Context) {
   return (context.items ?? []).filter((item) => pastCursors(context, item));
 }
 
-function pastCursors(context, item) {
+function pastCursors(context: Context, item: Item) {
   let conversation;
   try {
     conversation = conversationIdOf(context, item);
@@ -181,7 +174,7 @@ function pastCursors(context, item) {
   // edit already written carries the moment it was made, and one that is not
   // there is pending however the positions fall.
   if (kind !== 'revision') return false;
-  const editedAt = messageOf(item.update).message?.edit_date;
+  const editedAt = (messageOf(item.update).message as Fields | null)?.edit_date;
   return !context.store.recordsIn(conversation)
     .some((record) => record.adapter_fields?.edit_date === editedAt);
 }
@@ -193,15 +186,16 @@ function pastCursors(context, item) {
 // move after the capture is on disk, which is the whole durability of this
 // channel: an offset the server has seen is a message the server will not send
 // again.
-export function consume(context, item) {
+export function consume(context: Context, item: Item) {
   let conversation = null;
   try {
     conversation = conversationIdOf(context, item);
   } catch { /* an update with no chat still has to move the offset, or it is met forever */ }
   if (conversation !== null) {
-    context.store.advanceCursor(conversation, kindOf(item), item.position);
+    context.store.advanceCursor(conversation, kindOf(item), // advanceCursor owns the existing conversion/refusal of a null position.
+      item.position as string);
   }
-  const updateId = item?.update?.update_id;
+  const updateId = (item?.update as Fields | null | undefined)?.update_id;
   if (updateId !== undefined) {
     context.store.advanceCursor(updatesConversation(context.account), 'message', offsetPositionOf(updateId));
   }
@@ -209,14 +203,14 @@ export function consume(context, item) {
 
 // ---- 3. turn a batch into the payload ----------------------------------------
 
-export function payload(context, items) {
+export function payload(context: Context, items: Item[]) {
   const channel = channelOf(context);
-  const entries = [];
-  const parked = [];
-  const revisions = new Map();
+  const entries: Entry[] = [];
+  const parked: Parked[] = [];
+  const revisions = new Map<string, number>();
 
   for (const item of items) {
-    const cursor = { kind: kindOf(item), position: item.position };
+    const cursor: Entry['cursor'] = { kind: kindOf(item), position: item.position };
     const raw = item.raw ?? JSON.stringify(item.update ?? item);
     const read = messageOf(item.update);
 
@@ -225,8 +219,8 @@ export function payload(context, items) {
     if (read.message === null) {
       parked.push({
         record: smallestRecord(context, item, `${context.account}:unreadable`,
-          `${context.account}:unreadable:update-${item.update?.update_id ?? 'unknown'}`,
-          String(item.update?.update_id ?? 'unknown')),
+          `${context.account}:unreadable:update-${(item.update as Fields | null | undefined)?.update_id ?? 'unknown'}`,
+          String((item.update as Fields | null | undefined)?.update_id ?? 'unknown')),
         raw,
         cursor,
         reason: `the update is a ${read.unknown} this adapter does not read`
@@ -234,7 +228,8 @@ export function payload(context, items) {
       continue;
     }
 
-    const message = read.message;
+    // A property view keeps every unvalidated provider field unknown.
+    const message = read.message as Fields;
     const chat = chatOf(item);
     const conversation_id = `${context.account}:${chat.id}`;
     const platform_message_id = String(message.message_id);
@@ -258,7 +253,7 @@ export function payload(context, items) {
       revisions.set(platform_message_id, counted + 1);
     }
 
-    const record = {
+    const record: Candidate = {
       schema: 'carbon.message.v1',
       agent: context.agent,
       source: SOURCE,
@@ -284,8 +279,8 @@ export function payload(context, items) {
     const sentAt = typeof message.date === 'number' ? new Date(message.date * 1000).toISOString() : null;
     if (sentAt) record.sent_at = sentAt;
     if (sender.name !== undefined) record.sender_name = sender.name;
-    if (message.reply_to_message?.message_id !== undefined) {
-      record.reply_to = String(message.reply_to_message.message_id);
+    if ((message.reply_to_message as Fields | null)?.message_id !== undefined) {
+      record.reply_to = String((message.reply_to_message as Fields).message_id);
     }
 
     // A person answering in the chat is signal, not noise: the agent stops while
@@ -300,7 +295,7 @@ export function payload(context, items) {
 
     // Only what is exceptional is carried, so a field a newer adapter puts on an
     // item reaches the record untouched.
-    const fields = { ...(item.extra ?? {}) };
+    const fields: Fields = { ...(item.extra ?? {}) };
     if (album) fields.media_group_id = album;
     if (read.edited && message.edit_date !== undefined) fields.edit_date = message.edit_date;
     if (read.channel_post) fields.channel_post = true;
@@ -333,7 +328,7 @@ export function payload(context, items) {
 }
 
 // The smallest record that still names the conversation and the message.
-function smallestRecord(context, item, conversation_id, message_id, platform_message_id) {
+function smallestRecord(context: Context, item: Item, conversation_id: string, message_id: string, platform_message_id: string) {
   return {
     schema: 'carbon.message.v1',
     agent: context.agent,
@@ -355,7 +350,7 @@ function smallestRecord(context, item, conversation_id, message_id, platform_mes
   };
 }
 
-function countRevisions(context, conversation_id, platform_message_id) {
+function countRevisions(context: Context, conversation_id: string, platform_message_id: string) {
   try {
     return context.store.recordsIn(conversation_id)
       .filter((record) => record.platform_message_id === String(platform_message_id)).length;
@@ -370,7 +365,7 @@ function countRevisions(context, conversation_id, platform_message_id) {
 // testable with no network. Where the message carries media and the item carries
 // none, the record says the download failed and is released anyway, because the
 // words of a message with a picture are usually the part that matters.
-function attachmentsFor(item, media) {
+function attachmentsFor(item: Item, media: Media | null): unknown[] {
   if (Array.isArray(item.attachments)) return item.attachments;
   if (!media) return [];
   return [{
@@ -385,10 +380,10 @@ function attachmentsFor(item, media) {
 
 // ---- 4. say whether an item is the one a delivery record names ---------------
 
-export function matchesDelivery(context, item, delivery) {
+export function matchesDelivery(context: Context, item: Item, delivery: { chunk_ids?: string[]; text_sha256?: string } | null | undefined) {
   const { message } = messageOf(item?.update);
   if (message === null) return false;
-  if ((delivery?.chunk_ids ?? []).includes(String(message.message_id))) return true;
+  if ((delivery?.chunk_ids ?? []).includes(String((message as Fields).message_id))) return true;
   return sha256(bodyOf(message)) === delivery?.text_sha256;
 }
 
@@ -398,7 +393,7 @@ export function matchesDelivery(context, item, delivery) {
 // written back, so a person reading the store can find each piece in the chat.
 // The cut is at a paragraph, then a sentence, then a word, and only at a
 // character when a single word is longer than a whole message.
-export function splitBody(body, max = MAX_MESSAGE_CHARS) {
+export function splitBody(body: string | null | undefined, max = MAX_MESSAGE_CHARS) {
   const text = body ?? '';
   if (text.length <= max) return [text];
   const chunks = [];
@@ -421,7 +416,7 @@ export function splitBody(body, max = MAX_MESSAGE_CHARS) {
 // something to hang under. The record names it when the model did; otherwise it
 // is the newest thing captured in the conversation, which is what a person
 // replying in a chat would be answering.
-export function replyTarget(context, record) {
+export function replyTarget(context: Context, record: Pick<Reply, 'conversation_id' | 'reply_to'>) {
   const inbound = context.store.recordsIn(record.conversation_id)
     .filter((held) => held.direction === 'inbound' && held.disposition !== 'parked');
   if (inbound.length === 0) return null;
@@ -434,7 +429,7 @@ export function replyTarget(context, record) {
     .at(-1);
 }
 
-export function chatIdOf(context, record) {
+export function chatIdOf(context: Pick<Context, 'account'>, record: Pick<Reply, 'conversation_id'>) {
   return record.conversation_id.slice(String(context.account).length + 1);
 }
 
@@ -442,7 +437,7 @@ export function chatIdOf(context, record) {
 // answers synchronously. A live send cannot: it returns a promise, and the
 // runtime awaits it. Awaiting the synchronous answer is also correct, so one
 // caller works for both.
-export function send(context, record) {
+export function send(context: Context, record: Reply) {
   const channel = channelOf(context);
   const chat = chatIdOf(context, record);
   if (!answersIn(channel, chat)) {
@@ -461,9 +456,9 @@ export function send(context, record) {
   return sendLive(context, record, channel, chat, chunks);
 }
 
-async function sendLive(context, record, channel, chat, chunks) {
+async function sendLive(context: Context, record: Reply, channel: Channel, chat: string, chunks: string[]) {
   const transport = context.transport ?? transportFor(context);
-  const chunk_ids = [];
+  const chunk_ids: string[] = [];
 
   // Threading: in a group a bare message is one of many and a reply hangs under
   // the message it answers, which is how a person reading the chat can tell what
@@ -471,10 +466,12 @@ async function sendLive(context, record, channel, chat, chunks) {
   // thread and the quoted block is noise, so only the first chunk of a group
   // reply carries it.
   const target = record.conversation_kind === 'direct' ? null : replyTarget(context, record);
-  const replyTo = target === null ? null : Number(target.platform_message_id);
+  // A nonempty inbound array always has a last element; replyTarget returns
+  // null for the empty case before reaching Array.at.
+  const replyTo = target === null ? null : Number(target!.platform_message_id);
 
   for (const [index, chunk] of chunks.entries()) {
-    const params = { chat_id: chat, text: chunk };
+    const params: { chat_id: string; text: string; reply_parameters?: { message_id: number; allow_sending_without_reply: boolean } } = { chat_id: chat, text: chunk };
     if (index === 0 && replyTo !== null && Number.isFinite(replyTo)) {
       params.reply_parameters = { message_id: replyTo, allow_sending_without_reply: true };
     }
@@ -484,7 +481,7 @@ async function sendLive(context, record, channel, chat, chunks) {
     } catch (error) {
       return { status: outcomeOf(error, chunk_ids.length), chunk_ids };
     }
-    chunk_ids.push(String(sent?.message_id ?? ''));
+    chunk_ids.push(String((sent as Fields | null | undefined)?.message_id ?? ''));
   }
 
   // An attachment the model put on the reply. It goes as a document rather than
@@ -499,13 +496,13 @@ async function sendLive(context, record, channel, chat, chunks) {
     } catch (error) {
       return { status: outcomeOf(error, chunk_ids.length), chunk_ids };
     }
-    chunk_ids.push(String(sent?.message_id ?? ''));
+    chunk_ids.push(String((sent as Fields | null | undefined)?.message_id ?? ''));
   }
 
   return { status: 'sent', chunk_ids };
 }
 
-async function sendAttachment(context, transport, chat, attachment) {
+async function sendAttachment(context: Context, transport: Transport, chat: string, attachment: NonNullable<Reply['attachments']>[number]) {
   const bytes = fs.readFileSync(context.store.under(attachment.file));
   const form = new FormData();
   form.append('chat_id', String(chat));
@@ -519,8 +516,9 @@ async function sendAttachment(context, transport, chat, attachment) {
 // the digest is the fallback for a record that has none; a PDF whose name lacks
 // .pdf is given one, because a part typed application/pdf under a bare name
 // went out as a generic file.
-function documentNameOf(attachment) {
-  const name = attachment.filename ?? attachment.file.split('/').pop();
+function documentNameOf(attachment: NonNullable<Reply['attachments']>[number]) {
+  // Splitting even an empty string produces one element.
+  const name = attachment.filename ?? attachment.file.split('/').pop()!;
   const bare = attachment.mime === 'application/pdf' && !/\.pdf$/i.test(name);
   return bare ? `${name}.pdf` : name;
 }
@@ -528,17 +526,17 @@ function documentNameOf(attachment) {
 // The one method that is not JSON. A document is multipart, because the Bot API
 // takes the bytes in the request rather than a url it would have to fetch from
 // this box, which the host contract gives it no way to do.
-async function callForm(transport, method, form) {
+async function callForm(transport: Transport, method: string, form: FormData): Promise<unknown> {
   const { token, apiHost = 'api.telegram.org' } = transport;
   const response = await fetch(`https://${apiHost}/bot${token}/${method}`, { method: 'POST', body: form });
-  const body = await response.json().catch(() => null);
-  if (body?.ok !== true) {
+  const body: unknown = await response.json().catch(() => null);
+  if ((body as Fields | null)?.ok !== true) {
     throw new TelegramFault([fault('BOT_API_REFUSED', method,
-      `the Bot API answered ${body?.error_code ?? response.status}`,
+      `the Bot API answered ${(body as Fields | null)?.error_code ?? response.status}`,
       'read the record\'s attachment; the reply text went out and the file did not')],
-    { errorCode: body?.error_code ?? response.status });
+    { errorCode: (body as Fields | null)?.error_code ?? response.status });
   }
-  return body.result;
+  return (body as Fields).result;
 }
 
 // What a failed send means. Doubt resolves to unknown and never to failed,
@@ -550,7 +548,7 @@ async function callForm(transport, method, form) {
 // was refused, so nothing went out and the send failed. Anything else — a
 // timeout, a reset, a DNS failure — happened where nobody can see whether the
 // server acted, and is unknown.
-export function outcomeOf(error, sentSoFar = 0) {
+export function outcomeOf(error: unknown, sentSoFar = 0) {
   if (sentSoFar > 0) return 'unknown';
   if (error instanceof TelegramFault && error.faults?.[0]?.code === 'BOT_API_REFUSED') return 'failed';
   return 'unknown';
@@ -559,9 +557,9 @@ export function outcomeOf(error, sentSoFar = 0) {
 // ---- 6. go to the channel ----------------------------------------------------
 
 // The long poll is opened on the first pass and kept, and what arrives on it is
-// held until the loop asks. Everything about that is live.mjs's; this file still
+// held until the loop asks. Everything about that is live.ts's; this file still
 // opens nothing itself.
-export async function poll(context) {
+export async function poll(context: Context) {
   return { items: await arrivals({ ...context, channel: channelOf(context) }) };
 }
 
@@ -571,7 +569,7 @@ export async function poll(context) {
 // every chat shows when the other side is working. The runtime repeats it: this
 // action lasts about five seconds on the server and one call is worse than
 // useless on a turn that takes a minute.
-export async function typing(context, record, state) {
+export async function typing(context: Context, record: Pick<Reply, 'conversation_id'>, state: string) {
   // The Bot API has no stop action. The indicator expires on its own and the
   // arriving reply clears it, so `paused` is a call this channel does not make;
   // the empty branch is the answer, not an omission.
