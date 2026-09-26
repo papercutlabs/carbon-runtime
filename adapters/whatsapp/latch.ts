@@ -38,6 +38,8 @@ import { componentFaults, encodeComponent } from '../../stream/encode.ts';
 
 export const EXIT_TERMINAL_AUTH = 78;
 
+import type { Store } from '../../stream/store.ts';
+
 const DIR_MODE = 0o700;
 
 // The disconnect codes that mean the device is gone. Every other code — the
@@ -48,7 +50,7 @@ const TERMINAL_CODES = new Map([
   [403, 'the server reports this account as forbidden to this device']
 ]);
 
-export function latchFile(store, account) {
+export function latchFile(store: Store, account: string) {
   const faults = componentFaults('account', account);
   if (faults.length > 0) throw new StreamFault(faults);
   const dir = store.under('channels', encodeComponent(account));
@@ -61,10 +63,11 @@ export function latchFile(store, account) {
 // terminal. The shape read here is the library's: a Boom error carrying
 // `output.statusCode`, with the same number also reachable as `statusCode` and,
 // on some paths, as `data.reason`.
-export function terminalReason(error) {
+export function terminalReason(error: unknown) {
   if (!error) return null;
   const code = Number(
-    error?.output?.statusCode ?? error?.statusCode ?? error?.data?.statusCode ?? NaN
+    // Access views preserve property reads and Number coercion; no error schema is promised.
+    (error as { output?: { statusCode?: unknown } })?.output?.statusCode ?? (error as { statusCode?: unknown })?.statusCode ?? (error as { data?: { statusCode?: unknown } })?.data?.statusCode ?? NaN
   );
   if (!TERMINAL_CODES.has(code)) return null;
   return { code, reason: TERMINAL_CODES.get(code) };
@@ -73,7 +76,7 @@ export function terminalReason(error) {
 // Write the latch. The authentication directory is named and never touched: the
 // path is recorded so a person knows which directory holds the state that must
 // be preserved, and nothing in this module opens it.
-export function writeLatch(store, account, { code, reason, auth_dir = null, at = new Date().toISOString() }) {
+export function writeLatch(store: Store, account: string, { code, reason, auth_dir = null, at = new Date().toISOString() }: { code: unknown; reason: unknown; auth_dir?: unknown; at?: unknown }) {
   const latched = {
     account,
     latched_at: at,
@@ -86,14 +89,14 @@ export function writeLatch(store, account, { code, reason, auth_dir = null, at =
   return latched;
 }
 
-export function readLatch(store, account) {
+export function readLatch(store: Store, account: string): unknown {
   const file = latchFile(store, account);
   if (!fs.existsSync(file)) return null;
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
 // Cleared by install, once a person has re-paired.
-export function clearLatch(store, account) {
+export function clearLatch(store: Store, account: string) {
   const file = latchFile(store, account);
   if (!fs.existsSync(file)) return false;
   fs.rmSync(file);
@@ -104,8 +107,9 @@ export function clearLatch(store, account) {
 // than a note: the process refuses before it opens a socket, so a unit that has
 // been restarted by hand, or by a person who did not read the latch, stops again
 // with the same exit code and the same reason.
-export function latchFaults(store, account) {
-  const latched = readLatch(store, account);
+export function latchFaults(store: Store, account: string) {
+  // Access view only; this file has never validated persisted latch data.
+  const latched = readLatch(store, account) as { reason?: unknown; latched_at?: unknown } | null;
   if (!latched) return [];
   return [fault('CHANNEL_LATCHED', account,
     `${latched.reason}, latched at ${latched.latched_at}`,

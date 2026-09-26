@@ -11,7 +11,7 @@
 //
 //   RestartPreventExitStatus=78
 //
-// The file's path and shape are the ones adapters/whatsapp/latch.mjs already
+// The file's path and shape are the ones adapters/whatsapp/latch.ts already
 // writes, `channels/<account>/<kind>.latch.json` under the store, so install has
 // one rule for clearing a latch whoever wrote it, and so this module's start
 // check finds an adapter's own latch as well as its own.

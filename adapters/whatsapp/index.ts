@@ -1,3 +1,4 @@
+import type { Context, Item, Fields, Entry, Parked, Outbound, SendResult } from './types.ts';
 // The WhatsApp adapter.
 //
 // It speaks to WhatsApp through an unofficial library that pairs as a linked
@@ -6,7 +7,7 @@
 //
 // This file is the adapter contract and nothing else. It holds no socket, opens
 // no connection and imports no library: it turns recorded events into records
-// and turns a reply into chunks. The socket lives in socket.mjs, which is the
+// and turns a reply into chunks. The socket lives in socket.ts, which is the
 // only file here that loads the library, so every rule below is testable against
 // recorded events with no network in the test.
 //
@@ -19,10 +20,10 @@ import { fault } from '../../stream/faults.ts';
 import { StreamFault } from '../../stream/store.ts';
 import {
   canonicalChatKey, canonicalParticipant, conversationKind, pairsIn
-} from './jid.mjs';
-import { albumOf, editOf, isHdChild, read, revokeOf } from './content.mjs';
-import { learnPairs } from './channel-state.mjs';
-import { arrivals, openSocketFor, socketFor } from './live.mjs';
+} from './jid.ts';
+import { albumOf, editOf, isHdChild, read, revokeOf } from './content.ts';
+import { learnPairs } from './channel-state.ts';
+import { arrivals, openSocketFor, socketFor } from './live.ts';
 
 export const capabilities = ['inbound', 'outbound'];
 
@@ -55,23 +56,25 @@ export const POLL_INTERVAL_FLOOR_MS = 0;
 // ---- 6. go to the channel ----------------------------------------------------
 
 // The connection is opened on the first poll and kept, and what arrives on it is
-// buffered until the loop asks. Everything about that is live.mjs's; this file
+// buffered until the loop asks. Everything about that is live.ts's; this file
 // still holds no socket and opens nothing itself.
-export async function poll(context) {
+export async function poll(context: Context) {
   return { items: await arrivals(context) };
 }
 
 // ---- identity ---------------------------------------------------------------
 
-function keyOf(item) {
-  return item?.event?.key ?? {};
+function keyOf(item: Item) {
+  // Property access only: keys have unknown leaves and no provider-schema claim.
+  return ((item?.event as { key?: unknown } | null)?.key ?? {}) as Fields;
 }
 
-function messageOf(item) {
-  return item?.event?.message ?? {};
+function messageOf(item: Item) {
+  // Access view only; the message remains unknown.
+  return (item?.event as { message?: unknown } | null)?.message ?? {};
 }
 
-export function chatKeyOf(item) {
+export function chatKeyOf(item: Item) {
   const chat = canonicalChatKey(keyOf(item));
   if (!chat) {
     throw new StreamFault([fault('CHAT_KEY_ABSENT', item?.position ?? 'an event',
@@ -81,30 +84,32 @@ export function chatKeyOf(item) {
   return chat;
 }
 
-export function conversationIdOf(context, item) {
+export function conversationIdOf(context: Context, item: Item) {
   return `${context.account}:${chatKeyOf(item)}`;
 }
 
-function arrivalMs(item) {
+function arrivalMs(item: Item) {
   if (typeof item.received_at === 'string') {
     const parsed = Date.parse(item.received_at);
     if (!Number.isNaN(parsed)) return parsed;
   }
-  const stamp = Number(item?.event?.messageTimestamp ?? 0);
+  const stamp = // Property access followed by the original Number coercion.
+    Number((item?.event as { messageTimestamp?: unknown } | null)?.messageTimestamp ?? 0);
   return Number.isFinite(stamp) && stamp > 0 ? stamp * 1000 : 0;
 }
 
-function sentAt(item) {
+function sentAt(item: Item) {
   const at = arrivalMs(item);
   return at > 0 ? new Date(at).toISOString() : null;
 }
 
-function kindOf(item) {
+function kindOf(item: Item) {
   return editOf(messageOf(item)) ? 'revision' : 'message';
 }
 
-function sha256(text) {
-  return crypto.createHash('sha256').update(text ?? '', 'utf8').digest('hex');
+function sha256(text: unknown) {
+  // Existing hash operation accepts strings and throws for malformed text.
+  return crypto.createHash('sha256').update((text ?? '') as string, 'utf8').digest('hex');
 }
 
 // ---- 1. list what is pending past the cursors --------------------------------
@@ -113,7 +118,7 @@ function sha256(text) {
 // already been read; and the album window, which holds a picture back until the
 // rest of its album has arrived, so a set of six photographs is one arrival and
 // not six.
-export function listPending(context) {
+export function listPending(context: Context) {
   const items = context.items ?? [];
   const quiet = context.channel?.album_quiet_ms ?? ALBUM_QUIET_MS;
   const now = context.now ?? Date.now();
@@ -133,7 +138,7 @@ export function listPending(context) {
   });
 }
 
-function pastCursors(context, item) {
+function pastCursors(context: Context, item: Item) {
   const conversation = conversationIdOf(context, item);
   const cursors = context.store.cursors(conversation);
   const kind = kindOf(item);
@@ -156,17 +161,19 @@ function pastCursors(context, item) {
 
 // ---- 2. consume one item -----------------------------------------------------
 
-export function consume(context, item) {
-  context.store.advanceCursor(conversationIdOf(context, item), kindOf(item), item.position);
+export function consume(context: Context, item: Item) {
+  context.store.advanceCursor(conversationIdOf(context, item), // advanceCursor applies String(position), including undefined; this assertion
+    // bridges its narrower signature without changing that existing coercion.
+    kindOf(item), item.position as string);
 }
 
 // ---- 3. turn a batch into the payload ----------------------------------------
 
-export function payload(context, items) {
-  const entries = [];
-  const parked = [];
-  const revisions = new Map();
-  const own = new Map();
+export function payload(context: Context, items: Item[]): { entries: Entry[]; parked: Parked[] } {
+  const entries: Entry[] = [];
+  const parked: Parked[] = [];
+  const revisions = new Map<unknown, number>();
+  const own = new Map<string, { ids: Set<unknown>; texts: Set<unknown> }>();
 
   for (const item of items) {
     const key = keyOf(item);
@@ -178,7 +185,7 @@ export function payload(context, items) {
 
     const conversation_id = conversationIdOf(context, item);
     const chat = chatKeyOf(item);
-    const cursor = { kind: kindOf(item), position: item.position };
+    const cursor: Entry['cursor'] = { kind: kindOf(item), position: item.position };
     const raw = item.raw ?? JSON.stringify(item.event ?? item);
 
     // The agent's own reply comes back down the socket as a message from this
@@ -201,7 +208,7 @@ export function payload(context, items) {
       revisions.set(platform_message_id, counted + 1);
     }
 
-    const record = {
+    const record: Fields = {
       schema: 'carbon.message.v1',
       agent: context.agent,
       source: SOURCE,
@@ -223,8 +230,10 @@ export function payload(context, items) {
 
     const sent_at = sentAt(item);
     if (sent_at) record.sent_at = sent_at;
-    if (typeof item.event?.pushName === 'string' && item.event.pushName.length > 0) {
-      record.sender_name = item.event.pushName;
+    // Property views preserve the existing string guard without trusting the event.
+    if (typeof (item.event as { pushName?: unknown } | null)?.pushName === 'string' && (item.event as { pushName: string }).pushName.length > 0) {
+      // The preceding typeof guard established this field for ordinary provider data.
+      record.sender_name = (item.event as { pushName: unknown }).pushName;
     }
 
     // An operator answering from their own phone is signal, not noise: the
@@ -240,12 +249,14 @@ export function payload(context, items) {
     // Only what is exceptional is carried here. A plain message from a contact
     // adds nothing, so a field a newer adapter puts on an item arrives at the
     // record untouched.
-    const fields = { ...(item.extra ?? {}) };
+    // Spread performs the same boxing of non-object extras; leaves stay unknown.
+    const fields: Fields = { ...((item.extra ?? {}) as object) };
     if (edit) fields.edit_key_id = key.id;
     if (revoke) fields.revoked_message_id = revoke.revoked;
     if (album) { fields.album_id = album.album_id; fields.album_index = album.index; }
     if (content.reaction_to) fields.reaction_to = content.reaction_to;
-    if (message?.associatedChildMessage) fields.hd_variant_skipped = true;
+    // Property access only: the truthy flag is not a schema check.
+    if ((message as Fields | null)?.associatedChildMessage) fields.hd_variant_skipped = true;
     if (content.media?.file_name) fields.file_name = content.media.file_name;
     if (Object.keys(fields).length > 0) record.adapter_fields = fields;
 
@@ -273,7 +284,7 @@ export function payload(context, items) {
   return { entries, parked };
 }
 
-function senderOf(context, item, chat) {
+function senderOf(context: Context, item: Item, chat: string) {
   const key = keyOf(item);
   if (key.fromMe === true) return context.account;
   // In a group every message is one participant's, and collapsing them onto the
@@ -283,7 +294,7 @@ function senderOf(context, item, chat) {
   return chat;
 }
 
-function countRevisions(context, conversation_id, platform_message_id) {
+function countRevisions(context: Context, conversation_id: string, platform_message_id: unknown) {
   try {
     return context.store.recordsIn(conversation_id)
       .filter((record) => record.platform_message_id === String(platform_message_id)).length;
@@ -297,20 +308,21 @@ function countRevisions(context, conversation_id, platform_message_id) {
 // is exact; or the text is the text an outbound record on this conversation
 // carries, which catches the echo that arrives in the moment between the send
 // and the chunk ids being written.
-function isOwnSend(context, cache, conversation_id, item) {
+function isOwnSend(context: Context, cache: Map<string, { ids: Set<unknown>; texts: Set<unknown> }>, conversation_id: string, item: Item) {
   if (!cache.has(conversation_id)) {
-    let ids = new Set();
-    let texts = new Set();
+    let ids = new Set<unknown>();
+    let texts = new Set<unknown>();
     try {
       for (const record of context.store.recordsIn(conversation_id)) {
         if (record.direction !== 'outbound' || !record.delivery) continue;
         for (const id of record.delivery.chunk_ids ?? []) ids.add(id);
         if (record.delivery.text_sha256) texts.add(record.delivery.text_sha256);
       }
-    } catch { ids = new Set(); texts = new Set(); }
+    } catch { ids = new Set<unknown>(); texts = new Set<unknown>(); }
     cache.set(conversation_id, { ids, texts });
   }
-  const { ids, texts } = cache.get(conversation_id);
+  // This invocation populated the cache above when the key was absent.
+  const { ids, texts } = cache.get(conversation_id)!;
   if (ids.has(keyOf(item).id)) return true;
   return texts.has(sha256(read(messageOf(item)).text ?? ''));
 }
@@ -321,8 +333,9 @@ function isOwnSend(context, cache, conversation_id, item) {
 // testable with no network. Where the message carries media and the item carries
 // none, the record says the download failed and is released anyway, because the
 // text of a message with a picture is usually the part that matters.
-function attachmentsFor(context, item, content) {
-  if (Array.isArray(item.attachments)) return item.attachments;
+function attachmentsFor(context: Context, item: Item, content: ReturnType<typeof read>): unknown[] {
+  // Array.isArray establishes only the container, not attachment elements.
+  if (Array.isArray(item.attachments)) return item.attachments as unknown[];
   if (!content.media) return [];
   return [{
     file: `unavailable/${keyOf(item).id}`,
@@ -335,7 +348,7 @@ function attachmentsFor(context, item, content) {
 
 // ---- 4. say whether an item is the one a delivery record names ---------------
 
-export function matchesDelivery(context, item, delivery) {
+export function matchesDelivery(context: Context, item: Item, delivery: { chunk_ids?: unknown[]; text_sha256?: unknown } | null) {
   if ((delivery?.chunk_ids ?? []).includes(keyOf(item).id)) return true;
   return sha256(read(messageOf(item)).text ?? '') === delivery?.text_sha256;
 }
@@ -346,7 +359,7 @@ export function matchesDelivery(context, item, delivery) {
 // written back, so a person reading the store can find each piece in the chat
 // and a contact replying to any one of them resolves to the reply that produced
 // it.
-export function splitBody(body, max = MAX_MESSAGE_CHARS) {
+export function splitBody(body: string | null | undefined, max = MAX_MESSAGE_CHARS) {
   const text = body ?? '';
   if (text.length <= max) return [text];
   const chunks = [];
@@ -368,7 +381,7 @@ export function splitBody(body, max = MAX_MESSAGE_CHARS) {
 // The chat this record belongs to, as the library wants it: the conversation id
 // is the account and the jid, so the jid is what is left once the account and its
 // separator come off.
-function chatJidOf(context, record) {
+function chatJidOf(context: Context, record: { conversation_id: string }) {
   return record.conversation_id.slice(context.account.length + 1);
 }
 
@@ -376,7 +389,10 @@ function chatJidOf(context, record) {
 // run answers synchronously. A live send cannot: it returns a promise, and the
 // runtime awaits it. Awaiting the synchronous answer is also correct, so one
 // caller works for both.
-export function send(context, record) {
+export function send(context: Context & { dry_run: true }, record: Outbound): SendResult;
+export function send(context: Context & { dry_run: false }, record: Outbound): Promise<SendResult>;
+export function send(context: Context, record: Outbound): SendResult | Promise<SendResult>;
+export function send(context: Context, record: Outbound): SendResult | Promise<SendResult> {
   const max = context.channel?.max_message_chars ?? MAX_MESSAGE_CHARS;
   const chunks = splitBody(record.body, max);
 
@@ -389,7 +405,7 @@ export function send(context, record) {
   return sendLive(context, record, chunks);
 }
 
-async function sendLive(context, record, chunks) {
+async function sendLive(context: Context, record: Outbound, chunks: string[]): Promise<SendResult> {
   // The caller may hand a socket over, which is what a test does. The runtime
   // does not: it polls this adapter, and the connection that poll opened is the
   // one the reply goes out on, because a reply on a second connection would
@@ -401,7 +417,7 @@ async function sendLive(context, record, chunks) {
       'start the channel before the reply loop, or run the send with dry_run')]);
   }
   const chat = chatJidOf(context, record);
-  const chunk_ids = [];
+  const chunk_ids: unknown[] = [];
   for (const chunk of chunks) {
     let result;
     try {
@@ -409,7 +425,8 @@ async function sendLive(context, record, chunks) {
     } catch (error) {
       return { status: outcomeOf(error, chunk_ids.length), chunk_ids };
     }
-    chunk_ids.push(result?.key?.id ?? null);
+    // Access view only: missing or malformed provider ids remain unknown.
+    chunk_ids.push((result as { key?: { id?: unknown } } | null)?.key?.id ?? null);
   }
   return { status: 'sent', chunk_ids };
 }
@@ -417,9 +434,10 @@ async function sendLive(context, record, chunks) {
 // What a failed send means. Doubt resolves to unknown and never to failed,
 // because a failed send may be retried and an unknown one may not: claiming a
 // send failed when nobody knows is how a contact gets the same message twice.
-export function outcomeOf(error, sentSoFar = 0) {
+export function outcomeOf(error: unknown, sentSoFar = 0) {
   if (sentSoFar > 0) return 'unknown';
-  const code = Number(error?.output?.statusCode ?? error?.statusCode ?? NaN);
+  // Preserve optional property reads and Number coercion, without an error schema.
+  const code = Number((error as { output?: { statusCode?: unknown } } | null)?.output?.statusCode ?? (error as { statusCode?: unknown } | null)?.statusCode ?? NaN);
   // The connection was closed before anything went out; nothing was sent.
   if (code === 428 || code === 440) return 'failed';
   return 'unknown';
@@ -430,7 +448,7 @@ export function outcomeOf(error, sentSoFar = 0) {
 // The presence update WhatsApp already has for this, passed straight through:
 // the library's own states are the two the runtime asks for. This is not typing
 // pacing and does not slow a send down; it says a turn is genuinely running.
-export async function typing(context, record, state) {
+export async function typing(context: Context, record: { conversation_id: string }, state: unknown) {
   if (context.dry_run) return;
   // The caller may hand a socket over, which is what a test does. Otherwise this
   // is whatever connection the poll already opened: a presence update never

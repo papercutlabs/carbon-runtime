@@ -1,6 +1,8 @@
+import type { Context, Item } from './types.ts';
+import type { ProviderSocket } from './socket.ts';
 // The live connection, as the release loop sees it.
 //
-// index.mjs holds every rule and no connection; socket.mjs holds the connection
+// index.ts holds every rule and no connection; socket.ts holds the connection
 // and no rule. Between them there was nothing, so an installed agent with a
 // whatsapp channel opened no socket, was handed no items and answered nothing,
 // however well both halves worked on their own. This file is that missing
@@ -18,19 +20,20 @@
 
 import { fault } from '../../stream/faults.ts';
 import { StreamFault } from '../../stream/store.ts';
-import { openChannel } from './socket.mjs';
+import { openChannel } from './socket.ts';
 
 // How many arrivals are kept per account. An item this far back has been through
 // the cursors long ago; keeping it costs memory and buys nothing.
 export const RETAINED = 500;
 
-const channels = new Map();
+type ChannelEntry = { items: Item[]; socket: ProviderSocket | null; opening: Promise<ChannelEntry> | null };
+const channels = new Map<string, ChannelEntry>();
 
-function keyOf(context) {
+function keyOf(context: Context) {
   return `${context.agent}:${context.account}`;
 }
 
-function entryFor(context) {
+function entryFor(context: Context) {
   const key = keyOf(context);
   let entry = channels.get(key);
   if (!entry) {
@@ -50,8 +53,8 @@ export function forget() {
 // that is not terminal clears the socket and nothing else: the next poll opens
 // again, which makes the channel's own interval the reconnection interval and
 // leaves no timer in this process to lose on a restart. A terminal close is
-// socket.mjs's business: it latches, and the process stops.
-export async function connection(context) {
+// socket.ts's business: it latches, and the process stops.
+export async function connection(context: Context) {
   const entry = entryFor(context);
   if (entry.socket) return entry;
   if (entry.opening) return entry.opening;
@@ -87,7 +90,7 @@ export async function connection(context) {
 // What has arrived on this account. A connection that could not be opened is a
 // failed poll, which the runtime writes on the channel and holds on past the
 // declared count; it is not this adapter's business to end the process.
-export async function arrivals(context) {
+export async function arrivals(context: Context) {
   const entry = await connection(context);
   if (!entry.socket) {
     throw new StreamFault([fault('CHANNEL_NOT_CONNECTED', `whatsapp:${context.account}`,
@@ -101,12 +104,12 @@ export async function arrivals(context) {
 // name is deliberately unlike `socketFor` below, which does open one: a presence
 // update is not worth a connection, and the reply path is the one that owns
 // opening. A caller that got null here does nothing.
-export function openSocketFor(context) {
+export function openSocketFor(context: Context) {
   return channels.get(keyOf(context))?.socket ?? null;
 }
 
 // The socket a send goes out on, when the caller did not hand one over.
-export async function socketFor(context) {
+export async function socketFor(context: Context) {
   const entry = await connection(context);
   return entry.socket;
 }

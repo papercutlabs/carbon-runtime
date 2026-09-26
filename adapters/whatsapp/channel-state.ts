@@ -18,11 +18,13 @@ import path from 'node:path';
 import { writeAtomic, StreamFault } from '../../stream/store.ts';
 import { componentFaults, encodeComponent } from '../../stream/encode.ts';
 
+import type { Store } from '../../stream/store.ts';
+
 const DIR_MODE = 0o700;
 
 export const CONNECTION_STATES = ['open', 'close', 'connecting', 'unknown'];
 
-function accountDir(store, account) {
+function accountDir(store: Store, account: string) {
   const faults = componentFaults('account', account);
   if (faults.length > 0) throw new StreamFault(faults);
   const dir = store.under('channels', encodeComponent(account));
@@ -30,7 +32,7 @@ function accountDir(store, account) {
   return dir;
 }
 
-function readJson(file) {
+function readJson(file: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
@@ -44,22 +46,23 @@ function readJson(file) {
 // holds in memory and loses. A check from outside the box reads this file to
 // tell a channel that is connected from one that is merely running, which is
 // the whole point: "the process is up" is never the answer.
-export function channelFile(store, account) {
+export function channelFile(store: Store, account: string) {
   return path.join(accountDir(store, account), 'whatsapp.channel.json');
 }
 
-export function readChannel(store, account) {
+export function readChannel(store: Store, account: string) {
   return readJson(channelFile(store, account)) ?? {
     account,
     connection: { state: 'unknown', at: null, reason: null }
   };
 }
 
-export function writeConnectionState(store, account, state, { at = new Date().toISOString(), reason = null } = {}) {
+export function writeConnectionState(store: Store, account: string, state: string, { at = new Date().toISOString(), reason = null }: { at?: unknown; reason?: unknown } = {}) {
   if (!CONNECTION_STATES.includes(state)) {
     throw new Error(`${state} is not one of ${CONNECTION_STATES.join(', ')}`);
   }
-  const channel = { ...readChannel(store, account), account, connection: { state, at, reason } };
+  // Object spread retains the original handling of primitives and null.
+  const channel = { ...readChannel(store, account) as object, account, connection: { state, at, reason } };
   writeAtomic(channelFile(store, account), JSON.stringify(channel, null, 2) + '\n');
   return channel;
 }
@@ -71,17 +74,18 @@ export function writeConnectionState(store, account, state, { at = new Date().to
 // history import, which needs it to put an export's phone-keyed chats onto the
 // conversations the live adapter keyed by linked id. Nothing else consults it:
 // the canonical key of a live message comes from that message's own event.
-export function lidMapFile(store, account) {
+export function lidMapFile(store: Store, account: string) {
   return path.join(accountDir(store, account), 'whatsapp.lid-map.json');
 }
 
-export function readLidMap(store, account) {
+export function readLidMap(store: Store, account: string) {
   return readJson(lidMapFile(store, account)) ?? { phone_to_lid: {}, lid_to_phone: {}, updated_at: null };
 }
 
-export function learnPairs(store, account, pairs) {
+export function learnPairs(store: Store, account: string, pairs: { phone: string; lid: string }[]) {
   if (pairs.length === 0) return readLidMap(store, account);
-  const map = readLidMap(store, account);
+  // Access view only: malformed containers still throw; mapped values stay unknown.
+  const map = readLidMap(store, account) as { phone_to_lid: Record<string, unknown>; lid_to_phone: Record<string, unknown>; updated_at?: unknown };
   let changed = false;
   for (const { phone, lid } of pairs) {
     if (map.phone_to_lid[phone] !== lid) { map.phone_to_lid[phone] = lid; changed = true; }
@@ -93,6 +97,7 @@ export function learnPairs(store, account, pairs) {
   return map;
 }
 
-export function lidFor(store, account, phoneJid) {
-  return readLidMap(store, account).phone_to_lid[phoneJid] ?? null;
+export function lidFor(store: Store, account: string, phoneJid: string) {
+  // Access view only: this does not validate the parsed container or its values.
+  return (readLidMap(store, account) as { phone_to_lid: Record<string, unknown> }).phone_to_lid[phoneJid] ?? null;
 }

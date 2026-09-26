@@ -3,7 +3,7 @@
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 
 export type Fields = Record<string, unknown>;
-export type LidMap = { phone_to_lid: Record<string, string>; lid_to_phone?: Record<string, string> };
+export type LidMap = { phone_to_lid: Record<string, unknown>; lid_to_phone?: Record<string, unknown> };
 export type MediaRoot = { root?: unknown };
 export type MediaRef = { ref: string; path?: string; present: boolean | null };
 export type WantedAttachment = { bytes: Uint8Array; mime?: string; filename?: string };
@@ -40,7 +40,7 @@ export type LedgerItem = {
 };
 export type SourceKind = 'event' | 'turn' | 'audit';
 export type OutboundItem = LedgerItem & { kind: SourceKind; status: string | null; answers_refs: string[] };
-export type LocatedItem = OutboundItem & { chat_key: string; chat_key_note: string | null; conversation_id: string };
+export type LocatedItem = OutboundItem & { chat_key: unknown; chat_key_note: string | null; conversation_id: string };
 export type ImportContext<TItem = CaptureRow, TMapping = RoleMapping & { ledger?: unknown }> = {
   store: Store; agent: string; account: string; lid_map?: LidMap; items?: TItem[];
   mapping?: TMapping; tolerance_ms?: number;
@@ -51,8 +51,9 @@ export type ImportFields = Fields & {
   media?: MediaRef[]; media_missing?: string; answers?: string[]; identified_by?: string;
 };
 export type ImportRecord = MessageRecord<Attachment> & { adapter_fields?: ImportFields };
-// A payload is not yet a stored record: mapping-provided roles remain untrusted.
-export type ImportCandidate = { [K in keyof ImportRecord]: K extends 'role' ? unknown : ImportRecord[K] };
+// A payload is not yet a stored record: mapping-provided roles, persisted
+// chat-map sender values and external capture bodies remain untrusted.
+export type ImportCandidate = { [K in keyof ImportRecord]: K extends 'role' | 'sender_id' | 'body' ? unknown : ImportRecord[K] };
 export type ImportIdentity = Pick<ImportRecord, 'conversation_id' | 'message_id' | 'revision'>;
 export type ImportEntry = { record: ImportCandidate; raw: string; attachments: WantedAttachment[] };
 export type CaptureOptions = { disposition: MessageRecord['disposition']; raw?: string };

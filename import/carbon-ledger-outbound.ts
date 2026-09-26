@@ -37,7 +37,7 @@ type Parts = ReturnType<typeof partsOf>;
 // otherwise, as record identities the miner can look up.
 
 import crypto from 'node:crypto';
-import { conversationKind } from '../adapters/whatsapp/jid.mjs';
+import { conversationKind } from '../adapters/whatsapp/jid.ts';
 import { chatKeyFor } from './carbon-capture-whatsapp.ts';
 import { lidMapFor } from './carbon-ledger-sqlite.ts';
 import { roleFor } from './ledger-mapping.ts';

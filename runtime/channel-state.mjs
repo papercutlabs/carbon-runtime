@@ -8,7 +8,7 @@
 // own box, it must survive a restart, and a person reading the store to work out
 // why the agent went quiet needs it beside the captures.
 //
-// The file's name is the one adapters/whatsapp/channel-state.mjs already writes,
+// The file's name is the one adapters/whatsapp/channel-state.ts already writes,
 // and every writer here merges rather than replaces, so the runtime's poll block
 // and that adapter's connection block live in one file and neither erases the
 // other. That matters more than it looks: a check from outside the box asks one
