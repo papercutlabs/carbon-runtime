@@ -11,25 +11,39 @@ jobs:
         with:
           node-version: '22'
 
-      # The one dependency this repository has is the WhatsApp library, pinned
-      # exactly. Installing from the lockfile is what proves the pin resolves,
-      # and --ignore-scripts is what keeps a dependency's install script out of
-      # the build. The tests themselves load no dependency: the adapter's rules
-      # run against recorded events.
-      - name: install the one pinned dependency
+      # The one runtime dependency is the WhatsApp library, pinned exactly.
+      # TypeScript is installed for checking only. Installing from the lockfile
+      # proves both pins resolve, and --ignore-scripts keeps package hooks out.
+      - name: install pinned runtime and check dependencies
         run: npm ci --ignore-scripts
 
-      - name: the dependency is pinned exactly, and there is only one
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: runtime and development dependencies are pinned exactly
         run: |
           node -e '
-            const declared = require("./package.json").dependencies ?? {};
+            const pkg = require("./package.json");
+            const declared = pkg.dependencies ?? {};
             const names = Object.keys(declared);
             if (names.length !== 1 || names[0] !== "@whiskeysockets/baileys") {
-              throw new Error("this repository has exactly one dependency and it is the WhatsApp library");
+              throw new Error("this repository has exactly one runtime dependency and it is the WhatsApp library");
             }
-            if (!/^[0-9]/.test(declared[names[0]])) {
+            if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(declared[names[0]])) {
               throw new Error("the dependency is pinned to an exact version, with no range");
             }
+            const dev = pkg.devDependencies ?? {};
+            if (Object.keys(dev).length !== 1 || Object.keys(dev)[0] !== "typescript"
+                || !/^\d+\.\d+\.\d+$/.test(dev.typescript)) {
+              throw new Error("TypeScript is the only development dependency and is pinned exactly");
+            }
+          '
+
+      - name: test files are present
+        run: |
+          node -e '
+            const tests = require("node:fs").readdirSync("test").filter((name) => name.endsWith(".test.mjs"));
+            if (tests.length === 0) throw new Error("the node --test glob found no test modules");
           '
 
       - name: node --test

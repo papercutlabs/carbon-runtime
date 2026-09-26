@@ -287,7 +287,7 @@ per-function caps; the rest have no escape. `tools/shape-baseline.json` holds
 what was already in the tree the day the check landed — it prints on every run
 and it is the follow-up list, and anything new fails.
 
-1. Exactly one runtime dependency, `@whiskeysockets/baileys`, pinned to an exact version, and no development dependencies.
+1. Exactly one runtime dependency, `@whiskeysockets/baileys`, pinned exactly. TypeScript is the sole development dependency and is pinned exactly for typechecking.
 2. No client, internal, machine or person name anywhere in this public tree.
 3. Every copied file says where it came from, and the byte-for-byte comparison with its authority runs in the private half's workflow, which can check this repository out because this one is public. It cannot run here: fetching the private half from a public workflow would mean carrying a credential that reads it.
 4. An adapter imports only `stream/`, `lib/` and its own directory: never another adapter, never `runtime/`.
@@ -310,15 +310,16 @@ A box installs a pinned tarball, verified by its sha256, never a clone.
 from a clean checkout, holding what runs on a box and nothing else: no tests, no
 workflow, no tools. It publishes nothing.
 
-## The one dependency
+## The runtime dependency
 
-Node 22, ES modules, and exactly one dependency: `@whiskeysockets/baileys`,
-pinned to an exact version in `package.json` and `package-lock.json`, because
-WhatsApp has no other way in that this programme will use. The Telegram adapter
-is the counter-example that shows what the rule is for: its channel is JSON over
-HTTPS with no handshake and no session, `fetch` is in Node, and a client library
-would have been a second dependency and a second version to pin in exchange for
-nothing, so it has none. Nothing else here loads Baileys — the store library,
-the conformance check and the import have none — and the workflow fails if a
-second dependency appears or the pin grows a range.
+Node 22, ES modules, and exactly one runtime dependency:
+`@whiskeysockets/baileys`, pinned in `package.json` and
+`package-lock.json`, because WhatsApp has no other way in that this programme
+will use. TypeScript is the sole development dependency. The checks use it to
+typecheck; the release tarball does not carry it. The Telegram adapter is the
+counter-example that shows what the runtime rule is for: its channel is JSON
+over HTTPS with no handshake and no session, `fetch` is in Node, and a client
+library would be a second runtime dependency in exchange for nothing, so it has
+none. The workflow checks that Baileys remains the sole runtime dependency and
+that TypeScript remains the sole exactly pinned development dependency.
 Why that version, and what it does not fix, is in `adapters/whatsapp/README.md`.
