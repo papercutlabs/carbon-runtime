@@ -1,0 +1,328 @@
+// carbon-whatsapp — pair a device once.
+//
+// This channel has no API key. It has a device that a person links to an account
+// from the phone, once, and an authentication directory that is then a secret
+// the box owner owns. This command is how that link is made: it asks the server
+// for a pairing code and prints it, and the person types that code into their
+// phone under linked devices.
+//
+// It is run by hand, by a person, once per agent. It is not run by install, it
+// is not run by the unit, and nothing here retries.
+
+import fs from 'node:fs';
+import { fault, report } from '../stream/faults.ts';
+import { isPaired } from '../adapters/whatsapp/auth-state.ts';
+import { authState, library } from '../adapters/whatsapp/socket.ts';
+import type { ProviderSocket } from '../adapters/whatsapp/socket.ts';
+
+// Pair/send use baileys operations beyond the adapter's ProviderSocket view.
+type CliSocket = ProviderSocket & {
+  requestPairingCode(phone: string): Promise<string>;
+  end(reason?: undefined): void;
+  sendMessage(chat: string, content: { text: string }): Promise<{ key?: { id?: unknown; remoteJid?: unknown } }>;
+};
+
+const HELP = `carbon-whatsapp — pair one device with a WhatsApp account, and drive it in a proof
+
+Usage:
+  carbon-whatsapp pair --auth-dir <dir> --phone <number>
+  carbon-whatsapp send --auth-dir <dir> --to <number> --text <text>
+
+  --auth-dir <dir>   where the device's authentication state is written. It is
+                     created if it is not there, and it must be a directory only
+                     the agent user can read: everything in it is a credential.
+  --phone <number>   the number to pair with, in international form, digits only
+                     and no leading plus: 15550000000, not +1 555 000 0000.
+
+What happens.
+
+The command connects, asks the server for a pairing code and prints it. On the
+phone, under linked devices, "link with phone number instead", the person types
+that code. The server accepts the code, writes the credentials and then closes
+the stream asking for a restart, which is the ordinary end of a pairing and not a
+failure; the command reconnects once by itself, and exits when that connection
+opens. The phone shows the linked device at that moment and not before.
+
+The send subcommand.
+
+  --auth-dir <dir>   a directory carbon-whatsapp pair already paired. It is not
+                     an agent's directory: a proof drives a second device, and
+                     an agent's own authentication directory is the agent's.
+  --to <number>      who to send to, in the same international form.
+  --text <text>      one message, sent as it is written.
+
+It exists so that a proof of this channel can be run without a person holding a
+phone: the tester device sends, the agent answers, and both halves are watched by
+the run rather than reported by somebody. It connects, sends one message, prints
+the message id and exits. It writes nothing to any store and records nothing: it
+is not an adapter, and the agent's own store is written by the agent's runtime.
+
+Everything it writes is written transactionally: to a temporary name in the same
+directory, flushed, renamed over the target, and the directory flushed after. A
+stop at the wrong moment leaves the old file or the new one and never half of
+one. That reduces the risk of a state file written half way. It does not stop the
+server from unlinking the device, and nothing on this box can: that is what the
+terminal latch is for.
+
+Pairing once is the intent. A directory that already holds a paired device is
+refused, so a second run cannot quietly replace a working pairing with a new one
+and orphan the first.
+
+Every argument is explicit and nothing is guessed. Every fault is one JSON line
+of {code, subject, problem, fix}, and any fault exits non-zero.`;
+
+function parse(rest: string[]) {
+  const faults = [];
+  const named: Record<string, string | null> = { '--auth-dir': null, '--phone': null };
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] in named) named[rest[i]] = rest[++i] ?? null;
+    else {
+      faults.push(fault('UNKNOWN_ARGUMENT', rest[i],
+        'not an argument of carbon-whatsapp pair',
+        'run carbon-whatsapp --help'));
+    }
+  }
+  for (const name of Object.keys(named)) {
+    if (named[name] === null) {
+      faults.push(fault('MISSING_ARGUMENT', name,
+        'this argument has no default and is not guessed',
+        `pass ${name}`));
+    }
+  }
+  const phone = named['--phone'];
+  if (phone !== null && !/^[1-9][0-9]{7,14}$/.test(phone)) {
+    faults.push(fault('PHONE_NOT_INTERNATIONAL', phone,
+      'a number to pair with is written in international form, digits only, no plus and no spaces',
+      'pass --phone 15550000000'));
+  }
+  if (named['--auth-dir'] !== null && isPaired(named['--auth-dir'])) {
+    faults.push(fault('ALREADY_PAIRED', named['--auth-dir'],
+      'this directory already holds a paired device, and pairing again would orphan it',
+      'pair into an empty directory, or unlink the existing device from the phone first'));
+  }
+  return { named, faults };
+}
+
+// Two things about this exchange were learned by running it against a real
+// number on 10 September 2026, and both are why the code below is shaped as it
+// is rather than as the obvious version.
+//
+// 1. The code is asked for when the server offers a pairing opportunity, which
+//    the library reports as a `qr` on the connection update. Asking earlier, at
+//    `connecting`, is asking before the handshake has finished, and the server
+//    answers "Connection Closed" and then drops the connection: the first real
+//    run cost a pairing attempt to exactly that.
+// 2. Typing the code correctly ends with the server closing the stream and
+//    saying a restart is required. That is not a failure. The credentials are
+//    written and `registered` is true; the login only completes when the device
+//    connects again, and until it does the phone sits on "Logging in". So this
+//    command reconnects once, on its own, and calls the pairing done when that
+//    connection opens.
+async function pair(authDir: string, phone: string) {
+  fs.mkdirSync(authDir, { recursive: true, mode: 0o700 });
+  const { makeWASocket, fetchLatestBaileysVersion } = await library();
+  const { version } = await fetchLatestBaileysVersion();
+  // Pairing uses requestPairingCode; the adapter's ProviderSocket view does not name it.
+  const openSocket = makeWASocket as (options: { auth: unknown; version: number[] }) => CliSocket;
+  const asked = await connect(authDir, version, openSocket, phone);
+  if (asked !== 'registered') return asked;
+
+  // The second connection, which is what the phone is waiting for.
+  return connect(authDir, version, openSocket, null);
+}
+
+type ConnectionFields = {
+  connection?: unknown;
+  qr?: unknown;
+  lastDisconnect?: { error?: unknown };
+};
+
+// One connection. With a phone number it asks for the code and waits for the
+// registration; without one it waits for the connection to open. Returns 0, 1,
+// or 'registered' when the device registered and the server asked for a restart.
+async function connect(authDir: string, version: number[], makeWASocket: (options: { auth: unknown; version: number[] }) => CliSocket, phone: string | null) {
+  const { state, saveCreds } = await authState(authDir);
+  const socket = makeWASocket({ auth: state, version, printQRInTerminal: false } as { auth: typeof state; version: number[] });
+  socket.ev.on('creds.update', saveCreds);
+  // Pairing reads qr from connection.update; the adapter ConnectionUpdate type omits it.
+  const onConnection = socket.ev.on.bind(socket.ev) as (event: 'connection.update', handler: (update: ConnectionFields) => unknown) => unknown;
+
+  return new Promise<number | 'registered'>((resolve) => {
+    let asked = false;
+    onConnection('connection.update', async ({ connection, qr, lastDisconnect }) => {
+      if (phone && !asked && qr) {
+        asked = true;
+        try {
+          const code = await socket.requestPairingCode(phone);
+          console.log(JSON.stringify({
+            pairing_code: code,
+            what_now: 'on the phone: linked devices, link with phone number instead, then type this code'
+          }, null, 2));
+        } catch (error) {
+          report([fault('PAIRING_CODE_REFUSED', phone,
+            ((error as { message?: string }).message ?? String(error)).split('\n')[0],
+            'check the number is the one on the phone and try once more; do not loop')]);
+          resolve(1);
+        }
+        return;
+      }
+      if (connection === 'open') {
+        console.log(JSON.stringify({
+          paired: true,
+          auth_dir: authDir,
+          what_now: 'this directory is now a credential the box owner owns; nothing else reads it'
+        }, null, 2));
+        resolve(0);
+        return;
+      }
+      if (connection === 'close') {
+        if (phone && isPaired(authDir)) {
+          console.log(JSON.stringify({
+            registered: true,
+            what_now: 'the code was accepted and the server asked for a restart; reconnecting once to finish the login'
+          }, null, 2));
+          resolve('registered');
+          return;
+        }
+        // Provider disconnect errors stay unknown; message is read when present.
+        const disconnectMessage = (lastDisconnect?.error as { message?: string } | undefined)?.message;
+        report([fault('PAIRING_CLOSED', phone ?? authDir,
+          disconnectMessage ?? 'the connection closed before the pairing completed',
+          'run the command again and type the code before it expires')]);
+        resolve(1);
+      }
+    });
+  });
+}
+
+function parseSend(rest: string[]) {
+  const faults = [];
+  const named: Record<string, string | null> = { '--auth-dir': null, '--to': null, '--text': null };
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] in named) named[rest[i]] = rest[++i] ?? null;
+    else {
+      faults.push(fault('UNKNOWN_ARGUMENT', rest[i],
+        'not an argument of carbon-whatsapp send',
+        'run carbon-whatsapp --help'));
+    }
+  }
+  for (const name of Object.keys(named)) {
+    if (named[name] === null) {
+      faults.push(fault('MISSING_ARGUMENT', name,
+        'this argument has no default and is not guessed',
+        `pass ${name}`));
+    }
+  }
+  const to = named['--to'];
+  if (to !== null && !/^[1-9][0-9]{7,14}$/.test(to)) {
+    faults.push(fault('PHONE_NOT_INTERNATIONAL', to,
+      'a number to send to is written in international form, digits only, no plus and no spaces',
+      'pass --to 15550000000'));
+  }
+  if (named['--auth-dir'] !== null && !isPaired(named['--auth-dir'])) {
+    faults.push(fault('NOT_PAIRED', named['--auth-dir'],
+      'this directory holds no paired device, so there is nothing to send on',
+      'pair the device once with carbon-whatsapp pair'));
+  }
+  return { named, faults };
+}
+
+// How long the socket is held open after the send, so that whatever the server
+// says about it, and any credential update it triggers, arrives before the
+// connection is closed.
+const SETTLE_MS = 3000;
+
+// One message, on a device somebody already paired. Nothing is recorded and
+// nothing is retried: a proof that needs a second attempt runs the command
+// again, and a message that is not acknowledged is a fault, not a resend.
+async function send(authDir: string, to: string, text: string) {
+  const { makeWASocket, fetchLatestBaileysVersion } = await library();
+  const { state, saveCreds } = await authState(authDir);
+  const { version } = await fetchLatestBaileysVersion();
+  // Send uses end() after settle; the adapter's ProviderSocket view does not name it.
+  const socket = (makeWASocket as (options: { auth: unknown; version: number[] }) => CliSocket)({ auth: state, version, printQRInTerminal: false } as { auth: typeof state; version: number[] });
+  socket.ev.on('creds.update', saveCreds);
+  const onConnection = socket.ev.on.bind(socket.ev) as (event: 'connection.update', handler: (update: ConnectionFields) => unknown) => unknown;
+
+  return new Promise<number>((resolve) => {
+    let sending = false;
+    onConnection('connection.update', async ({ connection, lastDisconnect }) => {
+      if (connection === 'open' && !sending) {
+        sending = true;
+        try {
+          // sendMessage's accepted message key fields are what the proof prints.
+          const result = await socket.sendMessage(`${to}@s.whatsapp.net`, { text }) as { key?: { id?: unknown; remoteJid?: unknown } };
+          // The connection is closed rather than dropped, and the credentials are
+          // given a moment to settle first. A device that connects, sends and has
+          // its socket torn down in the same second is a device the server has
+          // been seen to unlink: the first tester device was lost that way, and
+          // the cost of a device is a person with a phone.
+          await new Promise((settled) => setTimeout(settled, SETTLE_MS));
+          socket.end(undefined);
+          console.log(JSON.stringify({
+            sent: true,
+            to,
+            message_id: result?.key?.id ?? null,
+            chat: result?.key?.remoteJid ?? null
+          }, null, 2));
+          resolve(0);
+        } catch (error) {
+          report([fault('SEND_REFUSED', to,
+            ((error as { message?: string }).message ?? String(error)).split('\n')[0],
+            'check the number and that this device is still linked, and run the command again')]);
+          resolve(1);
+        }
+        return;
+      }
+      if (connection === 'close' && !sending) {
+        const disconnectMessage = (lastDisconnect?.error as { message?: string } | undefined)?.message;
+        report([fault('SEND_CONNECTION_CLOSED', to,
+          disconnectMessage ?? 'the connection closed before anything was sent',
+          'check that this device is still linked, and run the command again')]);
+        resolve(1);
+      }
+    });
+  });
+}
+
+async function main(argv: string[]): Promise<number> {
+  const args = argv.slice(2);
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    console.log(HELP);
+    return args.length === 0 ? 1 : 0;
+  }
+  if (args[0] === 'send') {
+    if (args.includes('--help') || args.includes('-h')) {
+      console.log(HELP);
+      return 0;
+    }
+    const { named, faults } = parseSend(args.slice(1));
+    if (faults.length > 0) {
+      report(faults);
+      return 1;
+    }
+    return send(named['--auth-dir']!, named['--to']!, named['--text']!);
+  }
+  if (args[0] !== 'pair') {
+    report([fault('UNKNOWN_SUBCOMMAND', args[0],
+      'the carbon-whatsapp subcommands are pair and send',
+      'run carbon-whatsapp --help')]);
+    return 1;
+  }
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(HELP);
+    return 0;
+  }
+
+  const { named, faults } = parse(args.slice(1));
+  if (faults.length > 0) {
+    report(faults);
+    return 1;
+  }
+  // Pair finishes as 0 or 1; 'registered' is only an internal connect signal.
+  return await pair(named['--auth-dir']!, named['--phone']!) as number;
+}
+
+// The connection keeps the event loop alive, so the process is ended rather than
+// left to run out of work: a pairing that has finished must return the shell.
+process.exit(await main(process.argv));
