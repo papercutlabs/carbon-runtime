@@ -15,7 +15,7 @@
 // it. Carbon flattens the skills and keeps the errors, because a directory that
 // failed to read is not a directory with no skills.
 
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 import { HarnessFault } from './session.mjs';
 
 // Returns { skills: [{name, path, cwd}], errors: [...] }. `cwds` is explicit: the

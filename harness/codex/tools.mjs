@@ -20,7 +20,7 @@
 // its writes may touch is the declaration's write_gate, checked inside the tool.
 
 import fs from 'node:fs';
-import { fault } from '../../lib/faults.mjs';
+import { fault } from '../../lib/faults.ts';
 
 const BARE_KEY = /^[A-Za-z0-9_-]+$/;
 
