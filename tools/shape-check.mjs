@@ -52,7 +52,7 @@ import { fault, report } from '../lib/faults.mjs';
 
 export const RULES = {
   SHAPE_ONE_DEPENDENCY: {
-    why: 'the runtime ships as a tarball onto a box with no registry, so every dependency is code this programme carries: exactly one, @whiskeysockets/baileys, pinned to an exact version.'
+    why: 'the runtime ships as a tarball onto a box with no registry, so its only runtime dependency is the exactly pinned @whiskeysockets/baileys; TypeScript is pinned as the sole development dependency, and carbon-core has no runtime dependency.'
   },
   SHAPE_CLIENT_IDENTIFIER: {
     why: 'a client identifier in the core makes the universal layer client-specific, and one in the public half publishes it; both are refused by the scans that already exist.'
@@ -452,8 +452,10 @@ const isTest = (rel) => rel.startsWith('test/') || rel.startsWith('conformance/'
 // Which repository is this. The private half has the installer and the host
 // contract; the public half has the store library. Neither has the other's.
 export function repoKindOf(root) {
-  if (fs.existsSync(path.join(root, 'stream', 'store.mjs'))) return 'runtime';
-  if (fs.existsSync(path.join(root, 'lib', 'install.mjs'))) return 'core';
+  if (fs.existsSync(path.join(root, 'stream', 'store.mjs'))
+    || fs.existsSync(path.join(root, 'stream', 'store.ts'))) return 'runtime';
+  if (fs.existsSync(path.join(root, 'lib', 'install.mjs'))
+    || fs.existsSync(path.join(root, 'lib', 'install.ts'))) return 'core';
   return null;
 }
 
@@ -536,28 +538,59 @@ function shellOk(cmd, args, cwd) {
   }
 }
 
-function oneDependency(root, kind, out, notes) {
-  if (kind !== 'runtime') { notes.push('SHAPE_ONE_DEPENDENCY: not checked, this is the private half and it has no package.json'); return; }
-  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+function isExactPin(version) {
+  return typeof version === 'string'
+    && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
+}
+
+function pinnedTypeScript(pkg, out) {
+  const dev = pkg.devDependencies ?? {};
+  const names = Object.keys(dev);
+  if (names.length === 1 && names[0] === 'typescript' && isExactPin(dev.typescript)) return;
+  out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json devDependencies',
+    'the only development dependency is the exactly pinned TypeScript checker',
+    'keep TypeScript as the sole development dependency and pin its exact version'));
+}
+
+function runtimePackage(pkg, out) {
   const declared = pkg.dependencies ?? {};
   const names = Object.keys(declared);
   const expected = '@whiskeysockets/baileys';
   if (names.length !== 1 || names[0] !== expected) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
-      `this repository declares ${names.length === 0 ? 'no dependency' : names.join(', ')}, and it has exactly one: ${expected}`,
-      `remove the extra dependency, or write what it does on a box into the README's one-dependency section and change this rule deliberately`));
-    return;
-  }
-  if (!/^[0-9]/.test(declared[expected])) {
+      `this repository declares ${names.length === 0 ? 'no dependency' : names.join(', ')}, and it has exactly one runtime dependency: ${expected}`,
+      `remove the extra runtime dependency, or write what it does on a box into the README's one-dependency section and change this rule deliberately`));
+  } else if (!isExactPin(declared[expected])) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
       `${expected} is declared as ${declared[expected]}, which is a range and not a version`,
       'pin the exact version, so the tarball that goes on a box is the one that was tested'));
   }
-  if ((Object.keys(pkg.devDependencies ?? {})).length > 0) {
+  pinnedTypeScript(pkg, out);
+}
+
+function corePackage(pkg, out) {
+  if (pkg.private !== true) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
-      'this repository declares development dependencies, and the tests run on Node alone',
-      'remove them; node --test and node:assert are what the tests use'));
+      'the private carbon-core package is not marked private',
+      'mark the package private so it cannot be published by mistake'));
   }
+  if (Object.keys(pkg.dependencies ?? {}).length !== 0) {
+    out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json dependencies',
+      'carbon-core has no runtime dependencies',
+      'keep runtime dependencies out of the private package'));
+  }
+  pinnedTypeScript(pkg, out);
+  if (pkg.scripts?.typecheck !== 'tsc --noEmit') {
+    out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json scripts.typecheck',
+      'carbon-core has no typecheck command for the normal checks to run',
+      'add the tsc --noEmit typecheck script'));
+  }
+}
+
+function oneDependency(root, kind, out) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  if (kind === 'runtime') runtimePackage(pkg, out);
+  else corePackage(pkg, out);
 }
 
 function clientIdentifiers(root, kind, out, notes) {
@@ -613,9 +646,17 @@ function vendoredCopies(root, kind, other, out, notes) {
   }
   const authority = kind === 'core' ? root : other;
   const copy = kind === 'core' ? other : root;
-  const files = [...VENDORED.filter((f) => f !== 'schema/carbon.message.v1.json'),
-    ...VENDORED_TREES.flatMap((tree) => walk(authority, tree.replace(/\/$/, ''))
-      .filter((f) => !f.includes('/verifications/')))];
+  const copiedTreeFiles = VENDORED_TREES.flatMap((tree) => {
+    const prefix = tree.replace(/\/$/, '');
+    const found = walk(authority, prefix).filter((f) => !f.includes('/verifications/'));
+    if (found.length === 0) {
+      out.push(fault('SHAPE_VENDORED_COPY', prefix,
+        'the copied-tree walk found no files, so the identity check would compare nothing',
+        'restore the copied tree before comparing it with its authority'));
+    }
+    return found;
+  });
+  const files = [...VENDORED.filter((f) => f !== 'schema/carbon.message.v1.json'), ...copiedTreeFiles];
   for (const rel of files) {
     const here = path.join(authority, rel);
     const there = path.join(copy, rel);
@@ -743,7 +784,9 @@ function declaredFieldsRead(root, kind, other, out, notes) {
   add(root, here);
   add(other, there);
   if (readers.length === 0) {
-    notes.push('SHAPE_DECLARED_FIELD_UNREAD: not checked, neither lib/ nor runtime/ was in reach');
+    out.push(fault('SHAPE_DECLARED_FIELD_UNREAD', 'source modules',
+      'the reader walk found no source modules, so declaration fields would be treated as unread without checking the code',
+      'restore source modules in the reader directories or update the walk for their new extension'));
     return;
   }
   const text = readers.join('\n');
@@ -1023,8 +1066,13 @@ export function subcommandsIn(modules) {
 }
 
 function untestedSubcommands(root, modules, out, notes) {
-  const tests = walk(root, 'test').filter((rel) => rel.endsWith('.mjs'))
-    .map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
+  const testFiles = walk(root, 'test').filter((rel) => rel.endsWith('.mjs'));
+  if (testFiles.length === 0) {
+    out.push(fault('SHAPE_UNTESTED_SUBCOMMAND', 'test/',
+      'the test-module walk found no files, so no command can be matched to a test',
+      'restore the test files or update the walk when their extension changes'));
+  }
+  const tests = testFiles.map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
   const workflow = path.join(root, '.github', 'workflows', 'check.yml');
   const ci = fs.existsSync(workflow) ? fs.readFileSync(workflow, 'utf8') : '';
   const seen = tests + '\n' + ci;
@@ -1091,8 +1139,13 @@ export function check(root, { other = null } = {}) {
   const otherTree = other ? analyse(other) : null;
   const violations = [];
   const notes = [];
+  if (tree.modules.size === 0) {
+    violations.push(fault('SHAPE_ARGUMENT', root,
+      'the source-module walk found no files, so the shape rules would inspect an empty set',
+      'restore the source modules or update the walk when their extension changes'));
+  }
 
-  oneDependency(root, kind, violations, notes);
+  oneDependency(root, kind, violations);
   clientIdentifiers(root, kind, violations, notes);
   vendoredCopies(root, kind, other, violations, notes);
   adapterReach(root, tree.modules, violations);
