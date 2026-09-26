@@ -174,3 +174,39 @@ test('there is no delete path: the store library exposes none', () => {
     assert.doesNotMatch(name, /delete|remove|expire|drop/i, `${name} is a way to lose a client's record`);
   }
 });
+
+test('parking a captured-only record preserves extensions without promising captured-only state', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-park-state-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const record: TestRecord & { disposition: 'captured'; sender_name: string } = {
+    ...inbound(), disposition: 'captured', sender_name: 'Ada'
+  };
+  const store = Store.open<typeof record>(path.join(dir, 'store'));
+  const result = store.park(record, 'unreadable');
+  // This fails strict checking if park ever claims the input's captured-only subtype.
+  const capturedOnly: typeof result.record.disposition extends 'captured' ? true : false = false;
+  const sender: string = result.record.sender_name;
+  assert.equal(capturedOnly, false);
+  assert.equal(sender, 'Ada');
+  assert.equal(result.record.disposition, 'parked');
+  assert.equal(result.record.adapter_fields?.park_reason, 'unreadable');
+  assert.equal(JSON.parse(fs.readFileSync(result.file, 'utf8')).disposition, 'parked');
+});
+
+test('reply refuses an inherited outbound direction without writing a record or request', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-reply-prototype-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = Store.open<TestRecord>(path.join(dir, 'store'));
+  store.capture(inbound());
+  const record = outbound();
+  Reflect.deleteProperty(record, 'direction');
+  Object.setPrototypeOf(record, { direction: 'outbound' });
+  assert.throws(() => store.reply(record), (error: unknown) => {
+    assert.ok(error instanceof StreamFault);
+    assert.deepEqual(error.faults.map(({ code, subject }) => ({ code, subject })),
+      [{ code: 'FIELD_MISSING', subject: '$.direction' }]);
+    return true;
+  });
+  assert.equal(fs.existsSync(store.paths(record).record), false);
+  assert.equal(store.readRequest('req-0001'), null);
+});

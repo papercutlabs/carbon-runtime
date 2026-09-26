@@ -294,3 +294,35 @@ test('an attachment metadata 5xx fails the poll before capture or cursor movemen
 test('a failed CDN download fails the poll before capture or cursor movement', async () => {
   await rejectedAttachmentCycle({ downloadStatus: 503 }, 'AGENTMAIL_ATTACHMENT_DOWNLOAD_REFUSED');
 });
+
+test('unreadable netrc faults preserve non-string thrown code and message properties', (t) => {
+  const file = '/owned/synthetic-netrc';
+  for (const [thrown, expected] of [
+    [{ code: 404, message: 123 }, 'this account cannot read the file: 404'],
+    [{ message: 123 }, 'this account cannot read the file: 123']
+  ] as const) {
+    const read = t.mock.method(fs, 'readFileSync', () => { throw thrown; });
+    try {
+      assert.throws(() => readNetrcPassword(file, 'example.test'), (error: unknown) => {
+        assert.ok(error instanceof AgentMailFault);
+        assert.equal(error.faults[0].code, 'AGENTMAIL_NETRC_UNREADABLE');
+        assert.equal(error.faults[0].problem, expected);
+        return true;
+      });
+      assert.deepEqual(read.mock.calls.map((call) => call.arguments[0]), [file]);
+    } finally {
+      read.mock.restore();
+    }
+  }
+});
+
+test('API transport faults retain a non-string thrown message value', async (t) => {
+  const running = context();
+  t.mock.method(globalThis, 'fetch', async () => { throw { message: 123 }; });
+  await assert.rejects(() => adapter.poll(running), (error: unknown) => {
+    assert.ok(error instanceof AgentMailFault);
+    assert.equal(error.faults[0].code, 'AGENTMAIL_API_UNREACHABLE');
+    assert.equal(error.faults[0].problem, 123);
+    return true;
+  });
+});

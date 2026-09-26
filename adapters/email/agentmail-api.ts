@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { fault } from '../../stream/faults.ts';
 import { TransportFault } from './curl.ts';
 
-type EmailFault = { code: string; subject: string; problem: string; fix: string };
+type EmailFault = { code: string; subject: string; problem: unknown; fix: string };
 type TransportDetails = { status?: number };
 type AgentMailChannel = {
   netrc?: string;
@@ -58,7 +58,7 @@ const DEFAULT_API_HOST = 'api.agentmail.to';
 const DEFAULT_LIST_LIMIT = 100;
 const CALL_TIMEOUT_MS = 60000;
 
-export class AgentMailFault extends TransportFault {
+export class AgentMailFault extends TransportFault<unknown> {
   constructor(faults: EmailFault[], transport: TransportDetails = {}) {
     super(faults, transport);
     this.name = 'AgentMailFault';
@@ -81,13 +81,11 @@ function readNetrc(file: string | undefined) {
   }
 }
 
-function errorDetails(error: unknown): { code?: string; message?: string } {
+function errorDetails(error: unknown): { code?: unknown; message?: unknown } {
   if (typeof error !== 'object' || error === null) return {};
-  const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined;
-  const message = 'message' in error && typeof error.message === 'string' ? error.message : undefined;
   return {
-    ...(code === undefined ? {} : { code }),
-    ...(message === undefined ? {} : { message })
+    ...('code' in error ? { code: error.code } : {}),
+    ...('message' in error ? { message: error.message } : {})
   };
 }
 

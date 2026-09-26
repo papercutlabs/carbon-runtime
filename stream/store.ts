@@ -87,6 +87,12 @@ type CaptureOptions<T extends MessageRecord> = {
   cursor?: { kind: 'message' | 'revision'; position: string };
   disposition?: T['disposition'];
 };
+// Parking replaces disposition and adapter fields, while retaining named extension
+// fields. The disposition stays broad: a merge or options may keep another state.
+type ParkedRecord<T extends MessageRecord> = {
+  [K in keyof T as K extends 'disposition' | 'adapter_fields' ? never : K]: T[K];
+} & MessageRecord<T['attachments'][number]>;
+
 type CaptureResult<T extends MessageRecord> = { file: string; seq: number; merged: boolean; record: T };
 type CursorState = { message: string | null; revision: string | null };
 type ReplyRequest = {
@@ -100,7 +106,7 @@ type ReplyRequest = {
 type ThreadRecord = { unit_id: string; [key: string]: unknown };
 type ReplyOutcome<T extends MessageRecord> =
   | { fenced: 'sent'; chunk_ids: string[]; message_id: string }
-  | { fenced: null; record: T & { direction: 'outbound'; delivery: Delivery }; file: string };
+  | { fenced: null; record: T & { delivery: Delivery }; file: string };
 
 // JSON.parse has no schema type; this checked-in JSON Schema is consumed by the validator below.
 const SCHEMA: JsonSchema = JSON.parse(fs.readFileSync(
@@ -252,7 +258,7 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
   // options.cursor    { kind: 'message' | 'revision', position } advanced last,
   //                   and advanced even when the record write throws
   // options.disposition  written as its own step after the record
-  capture<T extends TRecord>(record: T, options: CaptureOptions<T> = {}): CaptureResult<T> {
+  capture<T extends TRecord | ParkedRecord<TRecord>>(record: T, options: CaptureOptions<T> = {}): CaptureResult<T> {
     const faults = validate(SCHEMA, record, '$', 'carbon.message.v1');
     if (faults.length > 0) throw new StreamFault(faults);
 
@@ -297,14 +303,13 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
   }
 
   // A payload nothing can parse is kept where it landed and never delivered.
-  park(record: TRecord, reason: string, options: CaptureOptions<TRecord> = {}): CaptureResult<TRecord> {
-    // The park path preserves a caller's record extension fields while adding the schema's parked disposition.
+  park(record: TRecord, reason: string, options: CaptureOptions<TRecord> = {}): CaptureResult<ParkedRecord<TRecord>> {
     const parked = {
       ...record,
-      disposition: 'parked' as const,
+      disposition: 'parked',
       adapter_fields: { ...(record.adapter_fields ?? {}), park_reason: reason }
-    } as TRecord;
-    return this.capture(parked, options);
+    };
+    return this.capture<ParkedRecord<TRecord>>(parked, options);
   }
 
   // A record that was captured and then could not be released. Parking it is
@@ -341,7 +346,7 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
     return written;
   }
 
-  setDisposition<T extends TRecord>(record: T, disposition: T['disposition']): T {
+  setDisposition<T extends TRecord | ParkedRecord<TRecord>>(record: T, disposition: T['disposition']): T {
     const places = this.paths(record);
     // Store records were schema-validated when captured; JSON.parse itself carries no record type.
     const on_disk: T = JSON.parse(fs.readFileSync(places.record, 'utf8'));
@@ -659,9 +664,8 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
         'a person decides what happened to this send')]);
     }
 
-    const pending: TRecord & { direction: 'outbound'; delivery: Delivery } = {
+    const pending: TRecord & { delivery: Delivery } = {
       ...record,
-      direction: 'outbound',
       delivery: { ...delivery, status }
     };
     const result = this.capture(pending);

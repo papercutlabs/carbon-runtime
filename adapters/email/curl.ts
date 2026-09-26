@@ -26,7 +26,7 @@
 import { spawnSync } from 'node:child_process';
 import { fault } from '../../stream/faults.ts';
 
-type EmailFault = { code: string; subject: string; problem: string; fix: string };
+type EmailFault<TProblem = string> = { code: string; subject: string; problem: TProblem; fix: string };
 type TransportDetails = { operation?: string | null; exit?: number; timed_out?: boolean; status?: number };
 type CurlResult = { code: number; timed_out: boolean; stdout: string; stderr: string };
 type SendResult = { status: 'sent' | 'unknown' | 'failed'; exit: number; detail: string };
@@ -43,11 +43,11 @@ type ImapArguments = {
 export const NEVER_ARRIVED = new Set([6, 7, 51, 60, 67]);
 export const STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS = 15;
 
-export class TransportFault extends Error {
-  readonly faults: EmailFault[];
+export class TransportFault<TProblem = string> extends Error {
+  readonly faults: EmailFault<TProblem>[];
   readonly transport: TransportDetails;
 
-  constructor(faults: EmailFault[], transport: TransportDetails = {}) {
+  constructor(faults: EmailFault<TProblem>[], transport: TransportDetails = {}) {
     super(faults.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('\n'));
     this.name = 'TransportFault';
     this.faults = faults;

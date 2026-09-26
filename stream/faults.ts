@@ -2,16 +2,16 @@
 // and reported together, never one at a time, so one run of a command tells the
 // caller everything that is wrong.
 
-export type Fault = {
+export type Fault<TProblem = string> = {
   code: string;
   subject: string;
-  problem: string;
+  problem: TProblem;
   fix: string;
 };
 
 type Output = { write(chunk: string): unknown };
 
-export function fault(code: string, subject: string, problem: string, fix: string): Fault {
+export function fault<TProblem>(code: string, subject: string, problem: TProblem, fix: string): Fault<TProblem> {
   return { code, subject, problem, fix };
 }
 
