@@ -1,17 +1,21 @@
+import type { Store, MessageRecord } from '../stream/store.ts';
+import type { Fields, OutboundContext, OutboundItem, ImportFields, ImportRecord, ImportEntry, CaptureOptions, LocatedItem, SourceKind } from './types.ts';
+import type { Send } from './outbound-link.ts';
+type Parts = ReturnType<typeof partsOf>;
 // The outbound import: what a client's agent itself said, out of the places the
 // client's own system wrote it down.
 //
-// `carbon-ledger-sqlite.mjs` imports a client's ledger, and a ledger is usually
+// `carbon-ledger-sqlite.ts` imports a client's ledger, and a ledger is usually
 // only half a history: it is what arrived. What the agent sent is written
 // somewhere else, and in more than one place, because the send passed through
 // more than one component on its way out. This import reads those places, joins
-// them into one send each (`outbound-link.mjs` holds that rule), and writes the
+// them into one send each (`outbound-link.ts` holds that rule), and writes the
 // same `carbon.message.v1` record into the same store, so a replay can put what
 // the agent said beside what the client asked for and read the two together.
 //
 // Nothing here knows a client. The three places and the names inside them are
 // read from the same mapping file the ledger import takes, in its `outbound`
-// section, which `outbound-mapping.mjs` reads and refuses whole.
+// section, which `outbound-mapping.ts` reads and refuses whole.
 //
 // What is written is one record per send, `historical: true`, `direction:
 // outbound`, `source: import:ledger-outbound`, merged into the store by the
@@ -34,10 +38,10 @@
 
 import crypto from 'node:crypto';
 import { conversationKind } from '../adapters/whatsapp/jid.mjs';
-import { chatKeyFor } from './carbon-capture-whatsapp.mjs';
-import { lidMapFor } from './carbon-ledger-sqlite.mjs';
-import { roleFor } from './ledger-mapping.mjs';
-import { joinOutbound } from './outbound-link.mjs';
+import { chatKeyFor } from './carbon-capture-whatsapp.ts';
+import { lidMapFor } from './carbon-ledger-sqlite.ts';
+import { roleFor } from './ledger-mapping.ts';
+import { joinOutbound } from './outbound-link.ts';
 
 export const capabilities = ['import'];
 
@@ -46,7 +50,7 @@ export const SOURCE = 'import:ledger-outbound';
 const QUOTED = 'the quoted message id the capture carries';
 const CARRIED = 'the message ids the turn row carries';
 
-function sha256(text) {
+function sha256(text: unknown) {
   return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex');
 }
 
@@ -55,7 +59,7 @@ function sha256(text) {
 // The same chat-key rule the ledger import uses, so a send lands in the
 // conversation the client's arriving messages were already imported into and
 // the two sides of a chat are one conversation.
-export function locate(context, items) {
+export function locate(context: OutboundContext, items: OutboundItem[]) {
   const lidMap = lidMapFor(context);
   return items.map((item) => {
     const { key, note } = chatKeyFor(item, lidMap);
@@ -65,7 +69,7 @@ export function locate(context, items) {
 
 // ---- 2. one joined send becomes one record ----------------------------------
 
-function partsOf(send) {
+function partsOf(send: Send) {
   return {
     event: send.item.kind === 'event' ? send.item : null,
     turn: send.attached.turn ?? (send.item.kind === 'turn' ? send.item : null),
@@ -76,7 +80,7 @@ function partsOf(send) {
 // What went out, and where it was read. The capture is preferred because it is
 // the text the channel actually carried; the turn's text is what the model
 // produced, which is the same thing only when nothing between them changed it.
-function bodyOf(parts) {
+function bodyOf(parts: Parts) {
   if (parts.event !== null && parts.event.text.length > 0) return { body: parts.event.text, from: 'the capture' };
   if (parts.turn !== null && parts.turn.text.length > 0) return { body: parts.turn.text, from: 'the turn' };
   return { body: '', from: 'nothing: no source recorded the text of this send' };
@@ -85,8 +89,8 @@ function bodyOf(parts) {
 // The messages this send answered, as record identities. A quote is what the
 // platform itself recorded; the ids a turn row carries are what the harness was
 // handed. Both are ids somebody wrote down, neither is inferred.
-function answersOf(send, parts) {
-  const refs = [];
+function answersOf(send: Send, parts: Parts) {
+  const refs: string[] = [];
   if (parts.event !== null && parts.event.reply_to) refs.push(parts.event.reply_to);
   for (const ref of parts.turn?.answers_refs ?? []) if (!refs.includes(ref)) refs.push(ref);
   if (refs.length === 0) return { refs: [], ids: [], link: 'none: no source named a message this answered' };
@@ -94,7 +98,7 @@ function answersOf(send, parts) {
   return { refs, ids: refs.map((ref) => `${send.item.conversation_id}:${ref}`), link };
 }
 
-function mediaFieldsOf(parts, fields) {
+function mediaFieldsOf(parts: Parts, fields: ImportFields) {
   const media = parts.event?.media ?? [];
   if (media.length > 0) fields.media = media;
   if (media.length > 0 && media.every((one) => one.present === false)) {
@@ -109,9 +113,10 @@ function mediaFieldsOf(parts, fields) {
 // how it ended, and whether the text the model produced is the text that went
 // out. The turn's own text is not written a second time; its digest says whether
 // the two agree, which is the question a replay asks.
-function turnFieldsOf(parts, body) {
-  const turn = parts.turn;
-  const fields = { id: turn.message_id, ...turn.fields };
+function turnFieldsOf(parts: Parts, body: string) {
+  // fieldsFor calls this only after checking that a turn is present.
+  const turn = parts.turn!;
+  const fields: Fields = { id: turn.message_id, ...turn.fields };
   if (turn.status !== null) fields.status = turn.status;
   if (turn.text.length > 0) {
     fields.text_sha256 = sha256(turn.text);
@@ -120,14 +125,14 @@ function turnFieldsOf(parts, body) {
   return fields;
 }
 
-function fieldsFor(context, send, parts, body, answers) {
-  const fields = { ...(send.item.fields ?? {}) };
+function fieldsFor(context: OutboundContext, send: Send, parts: Parts, body: ReturnType<typeof bodyOf>, answers: ReturnType<typeof answersOf>) {
+  const fields: ImportFields & { send_audit?: Fields } = { ...(send.item.fields ?? {}) };
   const named = context.mapping?.ledger;
   if (typeof named === 'string' && named.length > 0) fields.ledger = named;
   if (send.item.chat_name) fields.chat_name = send.item.chat_name;
   if (parts.event?.message_type) fields.message_type = parts.event.message_type;
   if (send.item.chat_key_note) fields.chat_key_note = send.item.chat_key_note;
-  fields.outbound_sources = ['event', 'turn', 'audit'].filter((kind) => parts[kind] !== null);
+  fields.outbound_sources = (['event', 'turn', 'audit'] satisfies SourceKind[]).filter((kind) => parts[kind] !== null);
   fields.identified_by = send.item.kind === 'event'
     ? 'the platform message id the capture carries'
     : `the id the ${send.item.kind} row carries, because no capture of this send was found`;
@@ -147,12 +152,12 @@ function fieldsFor(context, send, parts, body, answers) {
   return fields;
 }
 
-export function recordFor(context, send) {
+export function recordFor(context: OutboundContext, send: Send) {
   const parts = partsOf(send);
   const body = bodyOf(parts);
   const answers = answersOf(send, parts);
   const at = send.item.timestamp ?? '';
-  const record = {
+  const record: ImportRecord = {
     schema: 'carbon.message.v1',
     agent: context.agent,
     source: SOURCE,
@@ -184,7 +189,7 @@ export function recordFor(context, send) {
 
 // ---- 3. the whole import -----------------------------------------------------
 
-export function payload(context, items) {
+export function payload(context: OutboundContext, items: OutboundItem[]) {
   const { sends, counts } = joinOutbound(locate(context, items), context.tolerance_ms ?? 180_000);
   const entries = sends.map((send) => ({
     record: recordFor(context, send),
@@ -194,24 +199,24 @@ export function payload(context, items) {
   return { entries, parked: [], counts };
 }
 
-export function writeBatch(context, items) {
+export function writeBatch(context: OutboundContext, items: OutboundItem[]) {
   return writeEntries(context, payload(context, items).entries);
 }
 
-export function writeEntries(context, entries) {
+export function writeEntries(context: OutboundContext, entries: ImportEntry[]) {
   const written = [];
   for (const entry of entries) {
     // The raw payload is written the first time a send is seen and never again:
     // a second run is the same sources read again, not a second thing that
     // happened.
-    const options = { disposition: entry.record.disposition };
+    const options: CaptureOptions = { disposition: entry.record.disposition };
     if (!alreadyCaptured(context.store, entry.record)) options.raw = entry.raw;
     written.push(context.store.capture(entry.record, options));
   }
   return written;
 }
 
-function alreadyCaptured(store, record) {
+function alreadyCaptured(store: Store, record: MessageRecord) {
   try {
     return store.read(record.conversation_id, record.message_id, record.revision) !== null;
   } catch {
@@ -224,9 +229,11 @@ function alreadyCaptured(store, record) {
 // message nothing imported is still written, because the ledger it names is the
 // client's and the message may arrive in a later import; the count of the ones
 // that resolve today is what the import reports.
-export function resolvedAnswers(store, record) {
+export function resolvedAnswers(store: Store, record: MessageRecord) {
   let resolved = 0;
-  for (const id of record.adapter_fields?.answers ?? []) {
+  // This is the existing outbound-field consumption boundary. Store merges may
+  // retain prior fields; the assertion adds no coercion or rejection.
+  for (const id of (record.adapter_fields?.answers as string[] | undefined) ?? []) {
     let found = null;
     try {
       found = store.read(record.conversation_id, id, 0);

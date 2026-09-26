@@ -1,3 +1,5 @@
+import type { Fault } from '../stream/faults.ts';
+type ZipEntry = { name: string; method: number; crc: number; compressed_size: number; size: number; local_offset: number };
 // A zip reader, written here rather than taken from anywhere.
 //
 // The one dependency this repository has is the WhatsApp library. A history
@@ -31,7 +33,8 @@ export const MESSAGES_ENTRY = 'messages.json';
 export const MEDIA_PREFIX = 'media/';
 
 export class ZipFault extends Error {
-  constructor(faults) {
+  declare faults: Fault[];
+  constructor(faults: Fault[]) {
     super(faults.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('\n'));
     this.name = 'ZipFault';
     this.faults = faults;
@@ -43,7 +46,7 @@ export class ZipFault extends Error {
 // carrying a backslash, a drive letter, a leading slash, a dot segment or a
 // control byte is refused whatever it looks like afterwards, because those are
 // the shapes that walk out of a directory.
-export function entryKind(name) {
+export function entryKind(name: unknown) {
   if (typeof name !== 'string' || name.length === 0) return null;
   if (name.includes('\\')) return null;
   if (name.startsWith('/')) return null;
@@ -69,7 +72,7 @@ const CRC_TABLE = (() => {
   return table;
 })();
 
-export function crc32(buffer) {
+export function crc32(buffer: Uint8Array) {
   let crc = -1;
   for (let i = 0; i < buffer.length; i++) {
     crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buffer[i]) & 0xff];
@@ -77,7 +80,7 @@ export function crc32(buffer) {
   return (crc ^ -1) >>> 0;
 }
 
-function findEndOfCentralDirectory(buffer) {
+function findEndOfCentralDirectory(buffer: Buffer) {
   const earliest = Math.max(0, buffer.length - 66_000);
   for (let at = buffer.length - 22; at >= earliest; at--) {
     if (buffer.readUInt32LE(at) === EOCD) return at;
@@ -89,7 +92,7 @@ function findEndOfCentralDirectory(buffer) {
 // A zip that has outgrown the sixteen-bit fields says so with a second record,
 // and this reads that too, because an export of a long history can carry more
 // than sixty-five thousand pictures.
-function directoryOf(buffer) {
+function directoryOf(buffer: Buffer) {
   const eocd = findEndOfCentralDirectory(buffer);
   if (eocd < 0) {
     throw new ZipFault([fault('ZIP_UNREADABLE', 'the export',
@@ -119,7 +122,7 @@ function directoryOf(buffer) {
 
 // Every entry the archive names, with where its data is. Nothing is decompressed
 // here: an export carrying a thousand pictures is read one picture at a time.
-export function entries(buffer) {
+export function entries(buffer: Buffer) {
   const { count, offset } = directoryOf(buffer);
   const found = [];
   let at = offset;
@@ -145,7 +148,7 @@ export function entries(buffer) {
   return found;
 }
 
-export function readEntry(buffer, entry) {
+export function readEntry(buffer: Buffer, entry: ZipEntry) {
   if (buffer.readUInt32LE(entry.local_offset) !== LOCAL) {
     throw new ZipFault([fault('ZIP_UNREADABLE', entry.name,
       'the entry does not begin where the directory says it does',
@@ -175,11 +178,11 @@ export function readEntry(buffer, entry) {
 
 // Open an export: refuse every entry that is neither the messages file nor
 // media, before anything is read, and report all of them at once.
-export function open(buffer) {
+export function open(buffer: Buffer) {
   const all = entries(buffer);
   const refused = [];
-  const media = new Map();
-  let messages = null;
+  const media = new Map<string, ZipEntry>();
+  let messages: ZipEntry | null = null;
 
   for (const entry of all) {
     const kind = entryKind(entry.name);
@@ -200,8 +203,10 @@ export function open(buffer) {
   }
 
   return {
-    messages: () => JSON.parse(readEntry(buffer, messages).toString('utf8')),
-    media: (name) => (media.has(name) ? readEntry(buffer, media.get(name)) : null),
+    // The missing-entry branch above has already thrown before this closure runs.
+    messages: (): unknown => JSON.parse(readEntry(buffer, messages!).toString('utf8')),
+    // Map membership is checked before reading this entry.
+    media: (name: string) => (media.has(name) ? readEntry(buffer, media.get(name)!) : null),
     mediaNames: () => [...media.keys()]
   };
 }

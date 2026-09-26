@@ -1,3 +1,4 @@
+import type { LedgerMapping, RoleMapping } from '../import/types.ts';
 // The ledger import, against a ledger built here.
 //
 // A synthetic database stands in for a client's own: a messages table under
@@ -15,27 +16,27 @@ import { execFileSync } from 'node:child_process';
 
 import { Store } from '../stream/store.ts';
 import { encodeComponent } from '../stream/encode.ts';
-import { SOURCE, writeBatch, messageIndexOf } from '../import/carbon-ledger-sqlite.mjs';
+import { SOURCE, writeBatch, messageIndexOf } from '../import/carbon-ledger-sqlite.ts';
 import {
   isRead, mappingFaults, messageQuery, normaliseRow, toIso, mediaRefsOf, roleFor,
   countQuery, describeMedia, refString
-} from '../import/ledger-mapping.mjs';
+} from '../import/ledger-mapping.ts';
 import {
   CORRECTIONS_SCHEMA, groupCorrections, toCorrection, writeSidecars, sidecarFile, parseRefs
-} from '../import/ledger-corrections.mjs';
+} from '../import/ledger-corrections.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ACCOUNT = '15550009999@s.whatsapp.net';
 const CHAT = '15550001111@s.whatsapp.net';
 const GROUP = '120363000000000001@g.us';
 
-function temp(name) {
+function temp(name: string) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `carbon-ledger-${name}-`));
 }
 
 // The ledger a client's own system might keep: its own table name, its own
 // column names, seconds since the epoch, media as a JSON array of paths.
-function buildLedger(dir, { mediaRoot = null } = {}) {
+function buildLedger(dir: string, { mediaRoot = null }: { mediaRoot?: string | null } = {}) {
   const file = path.join(dir, 'client.db');
   const db = new DatabaseSync(file);
   db.exec(`
@@ -97,8 +98,8 @@ function buildLedger(dir, { mediaRoot = null } = {}) {
   return file;
 }
 
-function mappingFor(mediaRoot = null) {
-  const mapping = {
+function mappingFor(mediaRoot: string | null = null) {
+  const mapping: LedgerMapping & { corrections: NonNullable<LedgerMapping['corrections']> } = {
     ledger: 'client-ledger',
     messages: {
       table: 'chat_log',
@@ -148,14 +149,14 @@ function mappingFor(mediaRoot = null) {
   return mapping;
 }
 
-function itemsFrom(file, mapping) {
+function itemsFrom(file: string, mapping: LedgerMapping) {
   const db = new DatabaseSync(file, { readOnly: true });
   const rows = db.prepare(messageQuery(mapping)).all();
   db.close();
   return rows.map((row) => normaliseRow(mapping, row));
 }
 
-function contextIn(dir, mapping) {
+function contextIn(dir: string, mapping: LedgerMapping) {
   return {
     store: Store.open(path.join(dir, 'store')),
     agent: 'agent-01',
@@ -214,7 +215,7 @@ test('times, media references and roles are read as the mapping says', () => {
   assert.deepEqual(mediaRefsOf('a.jpg', 'single'), ['a.jpg']);
   assert.deepEqual(mediaRefsOf('[]'), []);
 
-  const roles = { roles: { from_me: 'agent', operator_senders: ['op@s.whatsapp.net'] } };
+  const roles: RoleMapping = { roles: { from_me: 'agent', operator_senders: ['op@s.whatsapp.net'] } };
   assert.equal(roleFor(roles, { from_me: true, sender_jid: null }), 'agent');
   assert.equal(roleFor(roles, { from_me: false, sender_jid: 'op@s.whatsapp.net' }), 'operator');
   assert.equal(roleFor(roles, { from_me: false, sender_jid: CHAT }), 'contact');
@@ -241,20 +242,21 @@ test('every ledger row becomes one historical record that releases nothing', () 
     assert.equal(result.record.hold, undefined, 'a message from last spring held the conversation');
   }
 
+  // These fixture ids and fields are written above and checked in the following assertions.
   const byId = new Map(written.map((r) => [r.record.platform_message_id, r.record]));
-  assert.equal(byId.get('R1').role, 'contact');
-  assert.equal(byId.get('R1').direction, 'inbound');
-  assert.equal(byId.get('R1').adapter_fields.town, 'north');
-  assert.equal(byId.get('R2').role, 'agent');
-  assert.equal(byId.get('R2').direction, 'outbound');
-  assert.equal(byId.get('R2').reply_to, `${ACCOUNT}:${CHAT}:R1`,
+  assert.equal(byId.get('R1')!.role, 'contact');
+  assert.equal(byId.get('R1')!.direction, 'inbound');
+  assert.equal(byId.get('R1')!.adapter_fields!.town, 'north');
+  assert.equal(byId.get('R2')!.role, 'agent');
+  assert.equal(byId.get('R2')!.direction, 'outbound');
+  assert.equal(byId.get('R2')!.reply_to, `${ACCOUNT}:${CHAT}:R1`,
     'the agent\'s reply does not name the message it answered');
-  assert.equal(byId.get('R2').adapter_fields.reply_to_platform_id, 'R1');
-  assert.equal(byId.get('R5').role, 'operator');
-  assert.equal(byId.get('R5').conversation_kind, 'group');
-  assert.equal(byId.get('R1').conversation_kind, 'direct');
-  assert.equal(byId.get('R1').conversation_id, `${ACCOUNT}:${CHAT}`);
-  assert.equal(byId.get('R1').sent_at, '2025-04-02T11:00:00.000Z');
+  assert.equal(byId.get('R2')!.adapter_fields!.reply_to_platform_id, 'R1');
+  assert.equal(byId.get('R5')!.role, 'operator');
+  assert.equal(byId.get('R5')!.conversation_kind, 'group');
+  assert.equal(byId.get('R1')!.conversation_kind, 'direct');
+  assert.equal(byId.get('R1')!.conversation_id, `${ACCOUNT}:${CHAT}`);
+  assert.equal(byId.get('R1')!.sent_at, '2025-04-02T11:00:00.000Z');
 });
 
 test('an attachment is referenced and its absence is recorded, never invented', () => {
@@ -265,17 +267,20 @@ test('an attachment is referenced and its absence is recorded, never invented', 
   const file = buildLedger(dir, { mediaRoot: root });
   const context = contextIn(dir, mapping);
   const written = writeBatch(context, itemsFrom(file, mapping));
+  // These fixture ids and fields are written above and checked in the following assertions.
   const byId = new Map(written.map((r) => [r.record.platform_message_id, r.record]));
 
-  const there = byId.get('R3');
+  // The fixture includes R3 and its media; the assertions below check those values.
+  const there = byId.get('R3')!;
   assert.deepEqual(there.attachments, [], 'the import copied bytes it was only asked to reference');
-  assert.equal(there.adapter_fields.media[0].present, true);
-  assert.equal(there.adapter_fields.media[0].path, path.join(root, 'there.jpg'));
-  assert.equal(there.adapter_fields.media_missing, undefined);
+  assert.equal(there.adapter_fields!.media![0].present, true);
+  assert.equal(there.adapter_fields!.media![0].path, path.join(root, 'there.jpg'));
+  assert.equal(there.adapter_fields!.media_missing, undefined);
 
-  const gone = byId.get('R4');
-  assert.equal(gone.adapter_fields.media[0].present, false);
-  assert.match(gone.adapter_fields.media_missing, /no file is at the path it recorded/);
+  // The fixture includes R4 and its missing-media fields.
+  const gone = byId.get('R4')!;
+  assert.equal(gone.adapter_fields!.media![0].present, false);
+  assert.match(gone.adapter_fields!.media_missing!, /no file is at the path it recorded/);
 });
 
 test('a second run writes no new record, no new index line and no new raw line', () => {

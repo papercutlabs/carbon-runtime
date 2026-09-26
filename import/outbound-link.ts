@@ -1,3 +1,7 @@
+import type { LocatedItem, SourceKind } from './types.ts';
+export type Link = { method: string; delta_ms?: number; tolerance_ms?: number; candidates?: number; joined_id?: string };
+export type JoinItem = Pick<LocatedItem, 'kind' | 'message_id' | 'timestamp' | 'conversation_id'>;
+export type Send<T extends JoinItem = LocatedItem> = { item: T; attached: Partial<Record<SourceKind, T>>; links: Partial<Record<SourceKind, Link>> };
 // Joining what the agent said across the places it was written down.
 //
 // One send leaves three marks in a client's system and no two of them carry the
@@ -17,16 +21,16 @@
 // and a join that was not made says that instead, because a replay that cannot
 // see which links are inferred cannot be read.
 
-const KINDS = ['turn', 'audit'];
+const KINDS: ('turn' | 'audit')[] = ['turn', 'audit'];
 
-export function millisOf(item) {
+export function millisOf(item: { timestamp?: unknown } | null | undefined) {
   const at = Date.parse(String(item?.timestamp ?? ''));
   return Number.isNaN(at) ? null : at;
 }
 
 // One deterministic order for every kind, so two runs over the same sources make
 // the same joins: earliest first, and the source's own id breaks a tie.
-function ordered(items) {
+function ordered<T extends JoinItem>(items: T[]) {
   return [...items].sort((one, other) => {
     const byTime = (millisOf(one) ?? 0) - (millisOf(other) ?? 0);
     if (byTime !== 0) return byTime;
@@ -34,7 +38,7 @@ function ordered(items) {
   });
 }
 
-function sendFor(item, method) {
+function sendFor<T extends JoinItem>(item: T, method: string): Send<T> {
   return { item, attached: {}, links: { [item.kind]: { method } } };
 }
 
@@ -42,10 +46,10 @@ function sendFor(item, method) {
 // that is not already carrying a mark of this kind. The count of everything else
 // inside the window is kept, because "there were four candidates and this was
 // the nearest" is a different fact from "there was one".
-function nearestSend(pool, item, kind, tolerance) {
+function nearestSend<T extends JoinItem>(pool: Send<T>[], item: T, kind: SourceKind, tolerance: number) {
   const at = millisOf(item);
   if (at === null) return null;
-  let best = null;
+  let best: { send: Send<T>; delta: number } | null = null;
   let candidates = 0;
   for (const send of pool) {
     if (send.item.conversation_id !== item.conversation_id) continue;
@@ -70,7 +74,7 @@ function nearestSend(pool, item, kind, tolerance) {
 // The whole join, in one pass per kind. Turns are joined before audit rows, so
 // an audit row with no capture beside it can still land on the turn that
 // produced it rather than becoming a third orphan of the same send.
-export function joinOutbound(items, tolerance) {
+export function joinOutbound<T extends JoinItem>(items: T[], tolerance: number) {
   const pool = ordered(items.filter((item) => item.kind === 'event'))
     .map((item) => sendFor(item, 'the platform message id the capture carries'));
   const counts = { event: pool.length, turn: 0, audit: 0, joined: { turn: 0, audit: 0 }, alone: { turn: 0, audit: 0 } };

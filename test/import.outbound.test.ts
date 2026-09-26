@@ -1,3 +1,8 @@
+import type { SourceKind, OutboundMapping, Fields, ImportRecord, ImportFields } from '../import/types.ts';
+import type { Link } from '../import/outbound-link.ts';
+import type { StreamFault } from '../stream/store.ts';
+// Every test owns its store; these are the generated outbound fields asserted below.
+type FixtureRecord = ImportRecord & { adapter_fields: ImportFields & { turn: Fields; send_audit: Fields; link: Record<SourceKind, Link>; chat_key_note: string } };
 // The outbound import, against the three places built here.
 //
 // A synthetic capture file, a synthetic audit directory and a synthetic turns
@@ -19,12 +24,12 @@ import { execFileSync } from 'node:child_process';
 import { Store } from '../stream/store.ts';
 import {
   SOURCE, capabilities, locate, payload, recordFor, resolvedAnswers, writeBatch
-} from '../import/carbon-ledger-outbound.mjs';
-import { joinOutbound, millisOf } from '../import/outbound-link.mjs';
+} from '../import/carbon-ledger-outbound.ts';
+import { joinOutbound, millisOf } from '../import/outbound-link.ts';
 import {
   epochOf, itemFrom, outboundFaults, selects, toleranceMs, turnItem, turnRowFaults, valueAt
-} from '../import/outbound-mapping.mjs';
-import { emptyLineCounts, emptyTurnCounts, readDirectory, readLines, readTurns } from '../import/outbound-sources.mjs';
+} from '../import/outbound-mapping.ts';
+import { emptyLineCounts, emptyTurnCounts, readDirectory, readLines, readTurns } from '../import/outbound-sources.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ACCOUNT = '15550009999@s.whatsapp.net';
@@ -32,21 +37,21 @@ const CHAT = '15550001111@s.whatsapp.net';
 const GROUP = '120363000000000001@g.us';
 const SENT = 'What the agent sent back.';
 
-function temp(name) {
+function temp(name: string) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `carbon-outbound-${name}-`));
 }
 
-function sha256(text) {
+function sha256(text: string) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
 // The capture file a channel bridge appended: the message under a name of its
 // own, the timestamp as the two-word integer a protobuf long becomes in JSON,
 // and lines that are not the agent's sends beside the ones that are.
-function buildEvents(dir) {
+function buildEvents(dir: string) {
   const file = path.join(dir, 'events.jsonl');
-  const line = (normalized) => JSON.stringify({ type: 'capture_event', normalized });
-  const at = (seconds) => ({ low: seconds, high: 0, unsigned: true });
+  const line = (normalized: unknown) => JSON.stringify({ type: 'capture_event', normalized });
+  const at = (seconds: number) => ({ low: seconds, high: 0, unsigned: true });
   const lines = [
     line({
       messageId: 'SENT_1', chatId: CHAT, chatName: 'Ada', senderId: ACCOUNT, senderName: null,
@@ -72,10 +77,10 @@ function buildEvents(dir) {
 
 // The audit a send authority appended, one directory of daily files: two rows
 // per operation, and most operations are not sends.
-function buildAudit(dir) {
+function buildAudit(dir: string) {
   const at = path.join(dir, 'audit');
   fs.mkdirSync(at, { recursive: true });
-  const row = (event, action, destination, stamp, extra = {}) =>
+  const row = (event: string, action: string, destination: string, stamp: string, extra: Fields = {}) =>
     JSON.stringify({ schema: 'audit.v1', event, action, destination, at: stamp, operationId: `op-${action}-${stamp}`, ...extra });
   fs.writeFileSync(path.join(at, 'audit-2025-04-02.jsonl'), [
     row('decision', 'send', CHAT, '2025-04-02T11:02:05.000Z', { allowed: true }),
@@ -90,7 +95,7 @@ function buildAudit(dir) {
 
 // The harness's turns table: the text the model produced, the ids it was
 // answering, and no message id at all.
-function buildTurns(dir) {
+function buildTurns(dir: string) {
   const file = path.join(dir, 'turns.db');
   const db = new DatabaseSync(file);
   db.exec(`CREATE TABLE agent_turns (
@@ -145,7 +150,7 @@ function mappingFor() {
   };
 }
 
-function contextIn(dir, mapping) {
+function contextIn(dir: string, mapping: OutboundMapping) {
   return {
     store: Store.open(path.join(dir, 'store')),
     agent: 'agent-01',
@@ -156,7 +161,7 @@ function contextIn(dir, mapping) {
   };
 }
 
-function itemsFrom(dir, mapping) {
+function itemsFrom(dir: string, mapping: ReturnType<typeof mappingFor>) {
   const counts = { events: emptyLineCounts(), audit: emptyLineCounts(), turns: emptyTurnCounts() };
   const events = readLines(path.join(dir, 'events.jsonl'), 'event', mapping.outbound.events, null, counts.events);
   const audit = readDirectory(path.join(dir, 'audit'), 'audit', mapping.outbound.audit, null, counts.audit);
@@ -166,7 +171,7 @@ function itemsFrom(dir, mapping) {
   return { items: [...events, ...audit, ...turns], counts };
 }
 
-function build(dir) {
+function build(dir: string) {
   buildEvents(dir);
   buildAudit(dir);
   buildTurns(dir);
@@ -239,12 +244,14 @@ test('only the lines the mapping selects are read, and an unreadable line is cou
   assert.equal(counts.turns.rows, 3);
   assert.equal(counts.turns.selected, 3);
 
-  const event = items.find((one) => one.message_id === 'SENT_1');
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const event = items.find((one) => one.message_id === 'SENT_1')!;
   assert.equal(event.timestamp, '2025-04-02T11:02:00.000Z', 'the two-word integer was not read as a time');
   assert.equal(event.reply_to, 'LEDGER_1');
   assert.deepEqual(event.fields, { trace: 'kept' });
 
-  const turn = items.find((one) => one.message_id === 'TURN_2');
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const turn = items.find((one) => one.message_id === 'TURN_2')!;
   assert.deepEqual(turn.answers_refs, ['LEDGER_1', 'LEDGER_2']);
   assert.deepEqual(turn.fields, { model: 'a-model' }, 'a column nothing named was dropped instead of carried');
 });
@@ -259,12 +266,13 @@ test('a turns query that names none of the columns is refused before a record is
   const db = new DatabaseSync(path.join(dir, 'turns.db'), { readOnly: true });
   assert.throws(
     () => readTurns(db, { sql: 'SELECT turn_ref, chat FROM agent_turns' }, emptyTurnCounts()),
-    (error) => error.faults.every((f) => f.code === 'OUTBOUND_TURN_COLUMN_UNNAMED'));
+    // The tested query must return the existing structured missing-column fault.
+    (error) => (error as StreamFault).faults.every((f) => f.code === 'OUTBOUND_TURN_COLUMN_UNNAMED'));
   db.close();
 });
 
 test('a mark is joined to the send it belongs to, or it says it joined to nothing', () => {
-  const item = (kind, message_id, timestamp) => ({
+  const item = (kind: SourceKind, message_id: string, timestamp: string) => ({
     kind, message_id, timestamp, conversation_id: 'a:chat', chat_key: 'chat', fields: {}, answers_refs: []
   });
   const { sends, counts } = joinOutbound([
@@ -280,22 +288,26 @@ test('a mark is joined to the send it belongs to, or it says it joined to nothin
   assert.equal(counts.alone.turn, 2, 'the far turn joined a send an hour away');
   assert.equal(sends.length, 4,
     'two turns ten seconds apart became one send, and one of them lost its text');
-  assert.equal(sends.find((send) => send.item.message_id === 'T3').attached.turn, undefined,
+  // T3 is an explicit fixture item; the assertion checks it remains unattached.
+  assert.equal(sends.find((send) => send.item.message_id === 'T3')!.attached.turn, undefined,
     'a turn joined to another turn');
 
-  const near = sends.find((send) => send.item.message_id === 'E2');
-  assert.equal(near.attached.turn.message_id, 'T1', 'the nearer send did not win the turn');
-  assert.equal(near.links.turn.method, 'conversation and time');
-  assert.equal(near.links.turn.delta_ms, 10_000);
-  assert.equal(near.links.turn.tolerance_ms, 60_000);
-  assert.equal(near.links.turn.candidates, 2);
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const near = sends.find((send) => send.item.message_id === 'E2')!;
+  assert.equal(near.attached.turn!.message_id, 'T1', 'the nearer send did not win the turn');
+  assert.equal(near.links.turn!.method, 'conversation and time');
+  assert.equal(near.links.turn!.delta_ms, 10_000);
+  assert.equal(near.links.turn!.tolerance_ms, 60_000);
+  assert.equal(near.links.turn!.candidates, 2);
 
-  const alone = sends.find((send) => send.item.message_id === 'T2');
-  assert.match(alone.links.turn.method, /^none:/);
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const alone = sends.find((send) => send.item.message_id === 'T2')!;
+  assert.match(alone.links.turn!.method, /^none:/);
   assert.equal(alone.attached.turn, undefined);
 
-  const first = sends.find((send) => send.item.message_id === 'E1');
-  assert.equal(first.attached.audit.message_id, 'A1');
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const first = sends.find((send) => send.item.message_id === 'E1')!;
+  assert.equal(first.attached.audit!.message_id, 'A1');
   assert.equal(millisOf({ timestamp: 'not a time' }), null);
 });
 
@@ -316,8 +328,10 @@ test('every send becomes one outbound record that says how it was joined', () =>
   assert.equal(counts.alone.audit, 1);
   assert.equal(entries.length, 4, 'a mark with no capture beside it was dropped instead of kept');
 
-  const byId = new Map(entries.map((entry) => [entry.record.platform_message_id, entry.record]));
-  const sent = byId.get('SENT_1');
+  // The fixture writers above produce the outbound field shape checked below.
+  const byId = new Map<string, FixtureRecord>(entries.map((entry) => [entry.record.platform_message_id, entry.record as FixtureRecord]));
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const sent = byId.get('SENT_1')!;
   assert.equal(sent.source, SOURCE);
   assert.equal(sent.direction, 'outbound');
   assert.equal(sent.role, 'agent');
@@ -338,7 +352,8 @@ test('every send becomes one outbound record that says how it was joined', () =>
   assert.equal(sent.adapter_fields.link.turn.method, 'conversation and time');
   assert.equal(sent.adapter_fields.link.turn.delta_ms, 20_000);
 
-  const group = byId.get('SENT_2');
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const group = byId.get('SENT_2')!;
   assert.equal(group.conversation_kind, 'group');
   assert.deepEqual(group.adapter_fields.outbound_sources, ['event', 'turn']);
   assert.equal(group.adapter_fields.turn.text_is_what_went_out, false,
@@ -348,9 +363,10 @@ test('every send becomes one outbound record that says how it was joined', () =>
   assert.equal(group.adapter_fields.media_missing, undefined,
     'a file nothing said where to look for was called missing');
 
-  const alone = byId.get('TURN_2');
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const alone = byId.get('TURN_2')!;
   assert.deepEqual(alone.adapter_fields.outbound_sources, ['turn']);
-  assert.match(alone.adapter_fields.identified_by, /the id the turn row carries/);
+  assert.match(alone.adapter_fields.identified_by!, /the id the turn row carries/);
   assert.match(alone.adapter_fields.link.turn.method, /^none:/);
   assert.equal(alone.reply_to, undefined, 'two answered messages became one reply link');
   assert.deepEqual(alone.adapter_fields.answers,
@@ -389,13 +405,16 @@ test('a chat keyed by phone number lands where the ledger import put it, and say
   const context = contextIn(dir, mapping);
   const { items } = itemsFrom(dir, mapping);
 
-  const placed = locate(context, items).find((one) => one.message_id === 'SENT_1');
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const placed = locate(context, items).find((one) => one.message_id === 'SENT_1')!;
   assert.equal(placed.conversation_id, `${ACCOUNT}:${CHAT}`);
   const record = recordFor({ ...context }, { item: placed, attached: {}, links: {} });
-  assert.match(record.adapter_fields.chat_key_note, /keyed by phone number/);
+  assert.match(// The located phone fixture supplies this note; the assertion checks it.
+    record.adapter_fields!.chat_key_note as string, /keyed by phone number/);
 
   const known = { ...context, lid_map: { phone_to_lid: { [CHAT]: '99001@lid' }, lid_to_phone: {} } };
-  const joined = locate(known, items).find((one) => one.message_id === 'SENT_1');
+  // This fixture lookup is expected to exist; the original assertions still verify it.
+  const joined = locate(known, items).find((one) => one.message_id === 'SENT_1')!;
   assert.equal(joined.conversation_id, `${ACCOUNT}:99001@lid`);
   assert.equal(joined.chat_key_note, null);
 });
@@ -484,18 +503,20 @@ test('the command refuses a source the mapping does not describe, and a run with
   const dir = temp('refuse');
   build(dir);
   const mapping = mappingFor();
-  delete mapping.outbound.audit;
+  // This refusal case deliberately removes a normally present source.
+  delete (mapping.outbound as Partial<typeof mapping.outbound>).audit;
   const mappingFile = path.join(dir, 'mapping.json');
   fs.writeFileSync(mappingFile, JSON.stringify(mapping, null, 2));
 
-  const run = (args) => {
+  const run = (args: string[]) => {
     try {
       execFileSync(process.execPath, [path.join(ROOT, 'bin', 'carbon-import'), 'ledger-outbound',
         '--agent', 'agent-01', '--mapping', mappingFile, '--store', path.join(dir, 'store'),
         '--account', ACCOUNT, ...args], { encoding: 'utf8' });
       return { code: 0, out: '' };
     } catch (error) {
-      return { code: error.status, out: (error.stdout ?? '') + (error.stderr ?? '') };
+      // execFileSync reports failed commands with status and captured text.
+      return { code: (error as { status: number }).status, out: ((error as { stdout?: string }).stdout ?? '') + ((error as { stderr?: string }).stderr ?? '') };
     }
   };
 

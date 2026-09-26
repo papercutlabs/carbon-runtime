@@ -1,6 +1,6 @@
 // A zip writer, for the tests only.
 //
-// The reader in import/zip.mjs has to be fed zips, including zips no honest tool
+// The reader in import/zip.ts has to be fed zips, including zips no honest tool
 // would produce: an entry naming a path outside the archive, an entry compressed
 // with a method nobody uses, an entry whose bytes do not match its checksum. So
 // the tests build their own, here, rather than checking a binary fixture into a
@@ -9,14 +9,14 @@
 // This ships with the tests and never with the runtime.
 
 import zlib from 'node:zlib';
-import { crc32 } from '../import/zip.mjs';
+import { crc32 } from '../import/zip.ts';
 
 const LOCAL = 0x04034b50;
 const CENTRAL = 0x02014b50;
 const EOCD = 0x06054b50;
 
 // entries: [{ name, data (Buffer|string), method: 0 | 8, crc?: number }]
-export function buildZip(entries) {
+export function buildZip(entries: { name: string; data?: Buffer | string; method?: number; crc?: number }[]) {
   const locals = [];
   const centrals = [];
   let offset = 0;
@@ -66,7 +66,7 @@ export function buildZip(entries) {
 }
 
 // The export the capture extension produces: messages.json plus media/.
-export function buildExport(rows, media = {}) {
+export function buildExport(rows: unknown, media: Record<string, Buffer | string> = {}) {
   return buildZip([
     { name: 'messages.json', data: JSON.stringify(rows, null, 2) },
     ...Object.entries(media).map(([name, data]) => ({ name, data }))

@@ -9,13 +9,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fault, report } from '../stream/faults.ts';
 import { Store, StreamFault } from '../stream/store.ts';
-import { open as openExport, ZipFault } from '../import/zip.mjs';
-import { mimeOf, writeBatch } from '../import/carbon-capture-whatsapp.mjs';
-import * as ledger from '../import/carbon-ledger-sqlite.mjs';
-import { messageQuery, normaliseRow, readMapping } from '../import/ledger-mapping.mjs';
-import { groupCorrections, toCorrection, writeSidecars } from '../import/ledger-corrections.mjs';
-import { OUTBOUND_HELP, runOutbound } from '../import/outbound-command.mjs';
-import { resolveAccount } from '../import/store-account.mjs';
+import { open as openExport, ZipFault } from '../import/zip.ts';
+import { mimeOf, writeBatch } from '../import/carbon-capture-whatsapp.ts';
+import * as ledger from '../import/carbon-ledger-sqlite.ts';
+import { messageQuery, normaliseRow, readMapping } from '../import/ledger-mapping.ts';
+import { groupCorrections, toCorrection, writeSidecars } from '../import/ledger-corrections.ts';
+import { OUTBOUND_HELP, runOutbound } from '../import/outbound-command.ts';
+import { resolveAccount } from '../import/store-account.ts';
 import { DatabaseSync } from 'node:sqlite';
 
 const BATCH = 200;
@@ -136,7 +136,7 @@ Usage:
   --mapping <file>   the JSON mapping naming the ledger's table, its columns,
                      the roles its senders carry and the corrections it holds.
                      Its shape is documented at the top of
-                     import/carbon-ledger-sqlite.mjs.
+                     import/carbon-ledger-sqlite.ts.
   --store <dir>      the agent's store directory
   --account <jid>    the account this history belongs to. Read from the store
                      when it names exactly one WhatsApp channel, or from the
