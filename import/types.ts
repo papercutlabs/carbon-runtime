@@ -1,6 +1,6 @@
 // Import-side structures describe the fields each stage reads. External values
 // remain unknown until a conversion or the store's schema validator handles them.
-import type { Store, MessageRecord, MessageRole, Attachment } from '../stream/store.ts';
+import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 
 export type Fields = Record<string, unknown>;
 export type LidMap = { phone_to_lid: Record<string, string>; lid_to_phone?: Record<string, string> };
@@ -12,7 +12,9 @@ export type CaptureRow = {
   from_me?: unknown; sender_jid?: unknown; sender_name?: unknown; text?: unknown;
   message_type?: unknown; has_media?: unknown; attachments?: WantedAttachment[];
 };
-export type RoleMapping = { roles?: { agent_senders?: string[]; operator_senders?: string[]; from_me?: MessageRole; default?: MessageRole } };
+// Mapping validation does not validate role values. Keep them unknown until
+// the store validates the record; malformed roles must retain the existing faults.
+export type RoleMapping = { roles?: { agent_senders?: string[]; operator_senders?: string[]; from_me?: unknown; default?: unknown } };
 export type CorrectionQuery = { kind: string; sql: string; timestamp?: string; message_refs?: string };
 export type MessageMapping = {
   table: string; columns?: Record<string, string | null>; carry?: string[];
@@ -49,7 +51,10 @@ export type ImportFields = Fields & {
   media?: MediaRef[]; media_missing?: string; answers?: string[]; identified_by?: string;
 };
 export type ImportRecord = MessageRecord<Attachment> & { adapter_fields?: ImportFields };
-export type ImportEntry = { record: ImportRecord; raw: string; attachments: WantedAttachment[] };
+// A payload is not yet a stored record: mapping-provided roles remain untrusted.
+export type ImportCandidate = { [K in keyof ImportRecord]: K extends 'role' ? unknown : ImportRecord[K] };
+export type ImportIdentity = Pick<ImportRecord, 'conversation_id' | 'message_id' | 'revision'>;
+export type ImportEntry = { record: ImportCandidate; raw: string; attachments: WantedAttachment[] };
 export type CaptureOptions = { disposition: MessageRecord['disposition']; raw?: string };
 export type MessageIndex = Map<string, { conversation_id: string; message_id: string }>;
 export type NamedSources = { '--events': string | null; '--audit': string | null; '--turns': string | null };

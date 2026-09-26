@@ -1,5 +1,5 @@
-import type { Store, MessageRecord } from '../stream/store.ts';
-import type { LedgerContext, LedgerItem, LidMap, ImportFields, ImportRecord, CaptureOptions, MessageIndex } from './types.ts';
+import type { Store } from '../stream/store.ts';
+import type { LedgerContext, LedgerItem, LidMap, ImportFields, ImportRecord, ImportCandidate, ImportIdentity, CaptureOptions, MessageIndex } from './types.ts';
 // The ledger import: a client's own message history out of a SQLite ledger.
 //
 // Some clients have no chat export. What they have is a running system that
@@ -181,7 +181,7 @@ function recordFor(context: LedgerContext, item: LedgerItem) {
   const platform_message_id = String(item.message_id ?? '');
   const at = item.timestamp ?? '';
   const from_me = item.from_me === true;
-  const record: ImportRecord = {
+  const record: ImportCandidate = {
     schema: 'carbon.message.v1',
     agent: context.agent,
     source: SOURCE,
@@ -237,12 +237,15 @@ export function writeBatch(context: LedgerContext, items: LedgerItem[]) {
     // wrong for an import, where a second run is the same ledger read again.
     const options: CaptureOptions = { disposition: entry.record.disposition };
     if (!alreadyCaptured(context.store, entry.record)) options.raw = entry.raw;
-    written.push(context.store.capture(entry.record, options));
+    // capture validates the complete candidate before any write and returns
+    // only schema-valid records. This assertion is confined to that validator
+    // call; payload consumers continue to see an unknown role.
+    written.push(context.store.capture(entry.record as ImportRecord, options));
   }
   return written;
 }
 
-function alreadyCaptured(store: Store, record: MessageRecord) {
+function alreadyCaptured(store: Store, record: ImportIdentity) {
   try {
     return store.read(record.conversation_id, record.message_id, record.revision) !== null;
   } catch {

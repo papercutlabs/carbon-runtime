@@ -1,5 +1,5 @@
-import type { Store, MessageRecord } from '../stream/store.ts';
-import type { Fields, OutboundContext, OutboundItem, ImportFields, ImportRecord, ImportEntry, CaptureOptions, LocatedItem, SourceKind } from './types.ts';
+import type { Store } from '../stream/store.ts';
+import type { Fields, OutboundContext, OutboundItem, ImportFields, ImportRecord, ImportCandidate, ImportIdentity, ImportEntry, CaptureOptions, SourceKind } from './types.ts';
 import type { Send } from './outbound-link.ts';
 type Parts = ReturnType<typeof partsOf>;
 // The outbound import: what a client's agent itself said, out of the places the
@@ -157,7 +157,7 @@ export function recordFor(context: OutboundContext, send: Send) {
   const body = bodyOf(parts);
   const answers = answersOf(send, parts);
   const at = send.item.timestamp ?? '';
-  const record: ImportRecord = {
+  const record: ImportCandidate = {
     schema: 'carbon.message.v1',
     agent: context.agent,
     source: SOURCE,
@@ -211,12 +211,15 @@ export function writeEntries(context: OutboundContext, entries: ImportEntry[]) {
     // happened.
     const options: CaptureOptions = { disposition: entry.record.disposition };
     if (!alreadyCaptured(context.store, entry.record)) options.raw = entry.raw;
-    written.push(context.store.capture(entry.record, options));
+    // capture validates the complete candidate before any write and returns
+    // only schema-valid records. This assertion is confined to that validator
+    // call; payload consumers continue to see an unknown role.
+    written.push(context.store.capture(entry.record as ImportRecord, options));
   }
   return written;
 }
 
-function alreadyCaptured(store: Store, record: MessageRecord) {
+function alreadyCaptured(store: Store, record: ImportIdentity) {
   try {
     return store.read(record.conversation_id, record.message_id, record.revision) !== null;
   } catch {
@@ -229,7 +232,7 @@ function alreadyCaptured(store: Store, record: MessageRecord) {
 // message nothing imported is still written, because the ledger it names is the
 // client's and the message may arrive in a later import; the count of the ones
 // that resolve today is what the import reports.
-export function resolvedAnswers(store: Store, record: MessageRecord) {
+export function resolvedAnswers(store: Store, record: Pick<ImportRecord, 'conversation_id' | 'adapter_fields'>) {
   let resolved = 0;
   // This is the existing outbound-field consumption boundary. Store merges may
   // retain prior fields; the assertion adds no coercion or rejection.
