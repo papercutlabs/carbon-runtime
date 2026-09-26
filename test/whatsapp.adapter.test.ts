@@ -356,6 +356,8 @@ test('unvalidated WhatsApp and import outputs cannot promise strings or provider
     `import type { Context } from ${JSON.stringify(path.join(root, 'adapters/whatsapp/types.ts'))};`,
     'declare const context: Context;'
   ];
+  // These source strings are checked, never executed; the casts select exported
+  // return types so the compiler must reject an unjustified downstream operation.
   const unsafe = [
     'content.read({}).text.toUpperCase();',
     'content.read({}).media?.mime.toUpperCase();',

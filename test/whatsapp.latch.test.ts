@@ -269,6 +269,7 @@ test('the socket preserves media success, the pinned retry failure, reconnect bu
     assert.ok(mock.control.contexts.every(value => !('logger' in value)));
     mock.control.mediaStatus = 0;
     await mock.emit('connection.update', { connection: 'close', lastDisconnect: { error: { message: 19 } } });
+    // The callback above just wrote connection.reason into this synthetic channel.
     assert.deepEqual((readChannel(store, ACCOUNT) as { connection: { reason: unknown } }).connection.reason, 19);
     await arrivals(running);
     assert.equal(mock.control.opens, 2);
@@ -277,6 +278,7 @@ test('the socket preserves media success, the pinned retry failure, reconnect bu
       key: { id: String(i) }, messageTimestamp: 50, message: { conversation: 'text' }
     })) });
     assert.equal(items.length, RETAINED);
+    // These buffered events were constructed immediately above with string ids.
     assert.equal((items[0].event as { key: { id: string } }).key.id, '2');
     const stopped: number[] = [];
     await openChannel({ store, account: 'terminal', authDir, onItems: () => {}, stop: code => { stopped.push(code); } });
