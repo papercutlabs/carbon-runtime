@@ -6,13 +6,16 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const SCAN = path.join(ROOT, 'tools', 'scan-identifiers.mjs');
+const SCAN = path.join(ROOT, 'tools', 'scan-identifiers.ts');
 
-function scan(dir) {
+function scan(dir: string) {
   try {
     return { code: 0, out: execFileSync(process.execPath, [SCAN, dir], { encoding: 'utf8' }) };
   } catch (error) {
-    return { code: error.status, out: error.stdout ?? '' };
+    assert.ok(typeof error === 'object' && error !== null && 'status' in error && 'stdout' in error);
+    const out = error.stdout ?? '';
+    assert.ok(typeof out === 'string');
+    return { code: error.status, out };
   }
 }
 
@@ -38,7 +41,7 @@ test('the scan matches a whole word and not a fragment of one', () => {
 
 test('nothing in this tree can take a client\'s records away', () => {
   for (const dir of ['stream', 'adapters', 'import', 'conformance', 'bin']) {
-    const walk = (at) => {
+    const walk = (at: string): void => {
       for (const name of fs.readdirSync(at)) {
         const full = path.join(at, name);
         if (fs.statSync(full).isDirectory()) walk(full);
@@ -46,5 +49,34 @@ test('nothing in this tree can take a client\'s records away', () => {
       }
     };
     walk(path.join(ROOT, dir));
+  }
+});
+
+test('the scan refuses walks with no candidate files after exclusions', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-scan-empty-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cases = [
+    [],
+    ['.git/ignored.txt', 'node_modules/ignored.txt', 'dist/ignored.txt'],
+    ['image.PNG', 'nested/archive.zip'],
+    ['schema/carbon.message.v1.json', 'schema/carbon.teaching.v1.json']
+  ];
+  for (const [index, files] of cases.entries()) {
+    const dir = path.join(root, String(index));
+    fs.mkdirSync(dir);
+    for (const file of files) {
+      const full = path.join(dir, file);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, '');
+    }
+    const empty = scan(dir);
+    assert.equal(empty.code, 1, `walk ${index} passed without reading a candidate file`);
+    assert.deepEqual(JSON.parse(empty.out), {
+      code: 'IDENTIFIER_SCAN_EMPTY', subject: dir,
+      problem: 'the identifier scan read no candidate files after exclusions',
+      fix: 'point the scan at a tree containing at least one text file outside the exclusions'
+    });
+    fs.writeFileSync(path.join(dir, 'empty.txt'), '');
+    assert.deepEqual(scan(dir), { code: 0, out: '' }, 'an empty text file counts as a file read');
   }
 });

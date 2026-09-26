@@ -2,7 +2,7 @@
 # They are hashed and not written out because several of them are the very
 # identifiers that must not appear in a public tree: a plaintext list of client
 # names would be the leak it is meant to prevent. The readable list lives in the
-# private repository, and tools/scan-identifiers.mjs hashes each word of each
+# private repository, and tools/scan-identifiers.ts hashes each word of each
 # line here and compares. Hashing a short word is not secrecy, only the removal
 # of a plain reading; nothing here depends on it being more than that.
 0e27150cb1fc10c8366e5924160b7d3c36bc045edf614989b5134136bd719188

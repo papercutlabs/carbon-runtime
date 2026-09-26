@@ -10,7 +10,7 @@
 // "archive" is never a hit on a word inside it.
 //
 // Usage:
-//   node tools/scan-identifiers.mjs <dir>
+//   node tools/scan-identifiers.ts <dir>
 //
 // A hit is one JSON line of {code, subject, problem, fix} and any hit exits
 // non-zero. The hit names the file and line, and does not repeat the word: the
@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fault, report } from '../stream/faults.ts';
+import type { Fault } from '../stream/faults.ts';
 
 const HERE = path.resolve(import.meta.dirname);
 const WORDS = path.join(HERE, 'denied-words.sha256');
@@ -36,16 +37,16 @@ const EXEMPT = new Map([
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
 const BINARY = /\.(png|jpg|jpeg|gif|pdf|gz|tgz|zip|woff2?)$/i;
 
-function denied() {
+function denied(): Set<string> {
   return new Set(fs.readFileSync(WORDS, 'utf8')
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith('#')));
 }
 
-function files(root) {
-  const found = [];
-  const walk = (at) => {
+function files(root: string): string[] {
+  const found: string[] = [];
+  const walk = (at: string): void => {
     for (const name of fs.readdirSync(at)) {
       if (SKIP_DIRS.has(name)) continue;
       const full = path.join(at, name);
@@ -57,13 +58,13 @@ function files(root) {
   return found;
 }
 
-function main(argv) {
+function main(argv: string[]): number {
   const root = argv[2];
   if (!root || root === '--help' || root === '-h') {
     console.log(`scan-identifiers — refuse a client, internal, machine or person name in a public tree
 
 Usage:
-  node tools/scan-identifiers.mjs <dir>
+  node tools/scan-identifiers.ts <dir>
 
 The words come from tools/denied-words.sha256, which holds them hashed rather
 than written out. Each line of each file is split into words and each word is
@@ -73,11 +74,13 @@ with its reason written beside it in this script.`);
   }
 
   const words = denied();
-  const faults = [];
+  const faults: Fault[] = [];
+  let read = 0;
   for (const file of files(root)) {
     const relative = path.relative(root, file);
     if (EXEMPT.has(relative) || path.resolve(file) === WORDS) continue;
     const lines = fs.readFileSync(file, 'utf8').split('\n');
+    read += 1;
     lines.forEach((line, i) => {
       for (const word of line.toLowerCase().split(/[^a-z0-9]+/)) {
         if (word.length === 0) continue;
@@ -89,6 +92,11 @@ with its reason written beside it in this script.`);
         }
       }
     });
+  }
+  if (read === 0) {
+    faults.push(fault('IDENTIFIER_SCAN_EMPTY', root,
+      'the identifier scan read no candidate files after exclusions',
+      'point the scan at a tree containing at least one text file outside the exclusions'));
   }
   report(faults);
   return faults.length === 0 ? 0 : 1;
