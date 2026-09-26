@@ -97,7 +97,7 @@ jobs:
           fi
 
       - name: no client, internal, machine or person name in a public tree
-        run: node tools/scan-identifiers.mjs .
+        run: node tools/scan-identifiers.ts .
 
       # A box has no registry and no reason to reach one, so the dependency ships
       # inside the tarball. This is the step that would have caught the first

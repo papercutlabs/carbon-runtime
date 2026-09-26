@@ -600,7 +600,7 @@ function oneDependency(root, kind, out) {
 
 function clientIdentifiers(root, kind, out, notes) {
   if (kind === 'runtime') {
-    const scan = path.join(root, 'tools', 'scan-identifiers.mjs');
+    const scan = path.join(root, 'tools', 'scan-identifiers.ts');
     const result = shellOk(process.execPath, [scan, root], root);
     if (!result.ok) {
       for (const line of result.out.split('\n').filter((l) => l.trim().startsWith('{'))) {
@@ -609,12 +609,12 @@ function clientIdentifiers(root, kind, out, notes) {
         if (parsed) out.push(fault('SHAPE_CLIENT_IDENTIFIER', parsed.subject, parsed.problem, parsed.fix));
       }
       if (!result.out.includes('{')) {
-        out.push(fault('SHAPE_CLIENT_IDENTIFIER', 'tools/scan-identifiers.mjs',
+        out.push(fault('SHAPE_CLIENT_IDENTIFIER', 'tools/scan-identifiers.ts',
           `the identifier scan did not run: ${result.out.split('\n')[0] ?? 'no output'}`,
-          'run node tools/scan-identifiers.mjs . and read what it says'));
+          'run node tools/scan-identifiers.ts . and read what it says'));
       }
     }
-    notes.push('SHAPE_CLIENT_IDENTIFIER: tools/scan-identifiers.mjs over the whole public tree');
+    notes.push('SHAPE_CLIENT_IDENTIFIER: tools/scan-identifiers.ts over the whole public tree');
     return;
   }
   const result = shellOk(process.execPath, [
