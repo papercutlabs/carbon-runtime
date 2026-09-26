@@ -7,7 +7,7 @@
 // no fixtures, no workflow, no tools.
 //
 // Usage:
-//   node tools/release.mjs [--out <dir>]
+//   node tools/release.ts [--out <dir>]
 //
 // It writes carbon-runtime-<version>.tar.gz and carbon-runtime-<version>.tar.gz.sha256
 // and prints both paths. It publishes nothing.
@@ -52,13 +52,13 @@ const SHIPPED = [
   'runtime', 'harness', 'lib', 'tools/lib'
 ];
 
-function main(argv) {
+function main(argv: string[]): number {
   const args = argv.slice(2);
   if (args[0] === '--help' || args[0] === '-h') {
     console.log(`release — build the pinned tarball a box installs
 
 Usage:
-  node tools/release.mjs [--out <dir>]
+  node tools/release.ts [--out <dir>]
 
   --out <dir>   where the tarball and its sha256 file land; the default is dist/
 
@@ -78,7 +78,7 @@ build, which carries no native binary.`);
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--out') out = path.resolve(args[++i] ?? '');
     else {
-      report([fault('UNKNOWN_ARGUMENT', args[i], 'not an argument of release', 'run node tools/release.mjs --help')]);
+      report([fault('UNKNOWN_ARGUMENT', args[i], 'not an argument of release', 'run node tools/release.ts --help')]);
       return 1;
     }
   }
@@ -91,7 +91,7 @@ build, which carries no native binary.`);
     return 1;
   }
 
-  const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+  const version: unknown = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; // The existing property read leaves the JSON value unvalidated, including for interpolation.
   fs.mkdirSync(out, { recursive: true });
   const name = `carbon-runtime-${version}.tar.gz`;
   const tarball = path.join(out, name);
