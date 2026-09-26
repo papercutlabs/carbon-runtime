@@ -17,7 +17,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 
 1. **Not the schema authority.** `schema/carbon.message.v1.json` is a vendored
    copy. The authority is a separate, private repository, and the copy here must
-   stay byte-identical to it; `test/schema.test.mjs` compares the two when
+   stay byte-identical to it; `test/schema.test.ts` compares the two when
    `CARBON_SCHEMA_AUTHORITY` points at a checkout of the authority, and says it
    skipped when nothing does.
 2. **No install, and no doctor.** Putting an agent on a box, checking a box

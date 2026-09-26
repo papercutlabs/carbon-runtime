@@ -7,6 +7,8 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const VENDORED = path.join(ROOT, 'schema', 'carbon.message.v1.json');
 const TEACHING = path.join(ROOT, 'schema', 'carbon.teaching.v1.json');
 
+// Schema JSON is unvalidated. JSON.parse stays untyped so these assertions
+// exercise the file contents rather than inventing a typed schema guarantee.
 test('the vendored schema is the record shape this store writes', () => {
   const schema = JSON.parse(fs.readFileSync(VENDORED, 'utf8'));
   assert.equal(schema.title, 'carbon.message.v1');
