@@ -1,3 +1,5 @@
+import type { Fault } from '../stream/faults.ts';
+import type { Fields, MessageMapping, LedgerMapping, CorrectionQuery, MediaRoot, RoleMapping } from './types.ts';
 // The mapping: the half of a ledger import that knows a client.
 //
 // A ledger is somebody else's table under somebody else's column names, so the
@@ -5,7 +7,7 @@
 // this module is what reads it: what a mapping must say, how a mapping becomes
 // one SQL statement, and how a row of that statement becomes the item the
 // adapter writes. The mapping file's shape is documented at the top of
-// `carbon-ledger-sqlite.mjs`.
+// `carbon-ledger-sqlite.ts`.
 //
 // Two rules hold everything here together. A mapping is refused whole, before a
 // row is read, because a converter that half-reads a client's history and then
@@ -27,13 +29,13 @@ const REF_KEYS = ['path', 'file', 'ref', 'media_ref', 'url', 'sha256'];
 
 // ---- refusing a mapping -----------------------------------------------------
 
-function identifierFault(code, subject, what) {
+function identifierFault(code: string, subject: string, what: string) {
   return fault(code, subject,
     'a name is a plain SQL identifier here, and nothing else is accepted',
     `name ${what}`);
 }
 
-function formatFault(subject, given, allowed) {
+function formatFault(subject: string, given: unknown, allowed: readonly unknown[]) {
   if (given === undefined) return null;
   if (allowed.includes(given)) return null;
   return fault('FORMAT_UNKNOWN', `${subject} -> ${String(given)}`,
@@ -41,8 +43,8 @@ function formatFault(subject, given, allowed) {
     'name the format the ledger writes');
 }
 
-function columnFaults(columns) {
-  const faults = [];
+function columnFaults(columns: Record<string, unknown>) {
+  const faults: Fault[] = [];
   for (const name of REQUIRED_COLUMNS) {
     const column = columns[name];
     if (typeof column === 'string' && column.length > 0) continue;
@@ -59,8 +61,8 @@ function columnFaults(columns) {
   return faults;
 }
 
-function messagesFaults(messages) {
-  const faults = [];
+function messagesFaults(messages: MessageMapping) {
+  const faults: Fault[] = [];
   if (typeof messages.table !== 'string' || !IDENTIFIER.test(messages.table)) {
     faults.push(identifierFault('TABLE_NAME_UNUSABLE', String(messages.table),
       'the ledger table, for example message_ledger'));
@@ -75,25 +77,26 @@ function messagesFaults(messages) {
     formatFault('messages.timestamp', messages.timestamp, TIMESTAMP_FORMATS),
     formatFault('messages.media_refs', messages.media_refs, MEDIA_REF_FORMATS)
   ];
-  faults.push(...formats.filter(Boolean));
+  faults.push(...// Boolean removes the only non-fault value, null.
+    formats.filter(Boolean) as Fault[]);
   return faults;
 }
 
 // A correction query is one read. Nothing here runs a statement a mapping wrote
 // unless it starts with SELECT or WITH and carries no second statement, so a
 // mapping file is never a way to write to the system it is reading.
-export function isRead(sql) {
+export function isRead(sql: unknown) {
   const text = String(sql).replace(/^\s*(--[^\n]*\n|\s)*/, '');
   return /^(select|with)\b/i.test(text) && !text.includes(';');
 }
 
-function correctionFaults(corrections) {
+function correctionFaults(corrections: unknown) {
   if (!Array.isArray(corrections)) {
     return [fault('CORRECTIONS_NOT_A_LIST', 'corrections',
       'corrections is a list of queries, each with a kind and a select',
       'make corrections a list, or leave it out')];
   }
-  const faults = [];
+  const faults: Fault[] = [];
   corrections.forEach((query, at) => {
     const where = `corrections[${at}]`;
     if (typeof query?.kind !== 'string' || query.kind.length === 0) {
@@ -112,38 +115,44 @@ function correctionFaults(corrections) {
   return faults;
 }
 
-export function mappingFaults(mapping, subject = 'the mapping') {
+export function mappingFaults(mapping: unknown, subject = 'the mapping') {
   if (mapping === null || typeof mapping !== 'object' || Array.isArray(mapping)) {
     return [fault('MAPPING_NOT_AN_OBJECT', subject,
       'a mapping is one JSON object naming the ledger\'s tables and columns',
-      'see the mapping file shape in import/carbon-ledger-sqlite.mjs')];
+      'see the mapping file shape in import/carbon-ledger-sqlite.ts')];
   }
-  const messages = mapping.messages;
+  // Only the container has been checked here; the original field checks below
+  // still decide faults, including malformed nested values.
+  const messages = (mapping as { messages?: unknown }).messages;
   if (messages === null || typeof messages !== 'object' || Array.isArray(messages)) {
     return [fault('MAPPING_WITHOUT_MESSAGES', subject,
       'the mapping names no messages table, so there is nothing to import',
       'give the mapping a messages object with a table and columns')];
   }
-  return [...messagesFaults(messages), ...correctionFaults(mapping.corrections ?? [])];
+  // These views preserve the existing validator's nested reads and exceptions.
+  return [...messagesFaults(messages as MessageMapping), ...correctionFaults((mapping as { corrections?: unknown }).corrections ?? [])];
 }
 
-export function readMapping(file) {
-  let mapping;
+export function readMapping(file: string): LedgerMapping {
+  let mapping: unknown;
   try {
     mapping = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     throw new StreamFault([fault('MAPPING_UNREADABLE', file,
-      (error.message ?? String(error)).split('\n')[0],
+      // readFileSync and JSON.parse throw errors; retain the existing message fallback.
+      ((error as { message?: string }).message ?? String(error)).split('\n')[0],
       'pass the path of a JSON mapping file')]);
   }
   const faults = mappingFaults(mapping, file);
   if (faults.length > 0) throw new StreamFault(faults);
-  return mapping;
+  // mappingFaults above checks the required query structure; optional fields
+  // keep their existing consumption-time behavior rather than adding validation.
+  return mapping as LedgerMapping;
 }
 
 // ---- the query --------------------------------------------------------------
 
-function clause(keyword, given) {
+function clause(keyword: string, given: unknown) {
   if (typeof given !== 'string' || given.length === 0) return '';
   return ` ${keyword} ${given}`;
 }
@@ -151,7 +160,7 @@ function clause(keyword, given) {
 // One statement, built out of names the mapping already had to pass. Every
 // column is aliased to the name this import reads, so nothing past this line
 // ever sees a client's column name again.
-export function messageQuery(mapping) {
+export function messageQuery(mapping: LedgerMapping) {
   const messages = mapping.messages;
   const selected = [];
   for (const [name, column] of Object.entries(messages.columns ?? {})) {
@@ -163,14 +172,14 @@ export function messageQuery(mapping) {
     + clause('WHERE', messages.where) + clause('ORDER BY', messages.order_by);
 }
 
-export function countQuery(mapping) {
+export function countQuery(mapping: LedgerMapping) {
   return `SELECT count(*) AS n FROM "${mapping.messages.table}"`
     + clause('WHERE', mapping.messages.where);
 }
 
 // ---- what a column holds ----------------------------------------------------
 
-export function toIso(value, format = 'epoch_seconds') {
+export function toIso(value: unknown, format = 'epoch_seconds') {
   if (value === null || value === undefined || value === '') return null;
   if (format === 'iso8601') {
     const parsed = Date.parse(String(value));
@@ -186,17 +195,18 @@ export function toIso(value, format = 'epoch_seconds') {
 // path under a name of its own. The mapping may say which name; otherwise the
 // usual ones are tried, and a reference nothing recognises is carried as the
 // text it is rather than dropped.
-export function refString(ref, key = null) {
+export function refString(ref: unknown, key: string | null = null) {
   if (typeof ref === 'string') return ref;
   if (ref === null || typeof ref !== 'object') return String(ref ?? '');
   for (const name of [key, ...REF_KEYS]) {
     if (name === null) continue;
-    if (typeof ref[name] === 'string' && ref[name].length > 0) return ref[name];
+    // The object check above permits dynamic reference keys without assuming a value type.
+    if (typeof (ref as Fields)[name] === 'string' && (ref as Record<string, string>)[name].length > 0) return (ref as Record<string, string>)[name];
   }
   return '';
 }
 
-export function mediaRefsOf(value, format = 'json_array', key = null) {
+export function mediaRefsOf(value: unknown, format = 'json_array', key: string | null = null) {
   if (format === 'none' || value === null || value === undefined || value === '') return [];
   if (format === 'single') return [String(value)];
   if (format === 'comma') return String(value).split(',').map((r) => r.trim()).filter(Boolean);
@@ -213,7 +223,7 @@ export function mediaRefsOf(value, format = 'json_array', key = null) {
 // An attachment is referenced, never copied. The ledger recorded where the file
 // was; whether that file is there now is a fact about the box, so it is recorded
 // as a fact, and left unknown when nothing said where to look.
-export function describeMedia(ref, media) {
+export function describeMedia(ref: string, media?: MediaRoot | null) {
   const root = typeof media?.root === 'string' && media.root.length > 0 ? media.root : null;
   if (root === null) return { ref, present: null };
   const file = path.isAbsolute(ref) ? ref : path.join(root, ref);
@@ -222,26 +232,26 @@ export function describeMedia(ref, media) {
 
 // ---- a row becomes an item --------------------------------------------------
 
-function truthy(value) {
+function truthy(value: unknown) {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
   if (typeof value === 'string') return value === '1' || value.toLowerCase() === 'true';
   return false;
 }
 
-function text(value) {
+function text(value: unknown) {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return '';
   return String(value);
 }
 
-function orNull(value) {
+function orNull(value: unknown) {
   if (value === null || value === undefined || value === '') return null;
   return text(value);
 }
 
-function carried(row) {
-  const fields = {};
+function carried(row: Fields) {
+  const fields: Fields = {};
   for (const [name, value] of Object.entries(row)) {
     if (!name.startsWith('carry__')) continue;
     if (value === null || value === undefined || value === '') continue;
@@ -254,7 +264,7 @@ function carried(row) {
 // the name the WhatsApp chat-key rule already reads, so a ledger keyed by phone
 // number joins the conversations a live adapter keyed by linked id through the
 // same map, and that rule is not written twice.
-export function normaliseRow(mapping, row, media = null) {
+export function normaliseRow(mapping: LedgerMapping, row: Fields, media: MediaRoot | null = null) {
   const messages = mapping.messages;
   const refs = mediaRefsOf(row.media_refs, messages.media_refs ?? 'json_array',
     messages.media_ref_key ?? null);
@@ -278,7 +288,7 @@ export function normaliseRow(mapping, row, media = null) {
 // contact, operator or agent, decided by the sender the ledger recorded and the
 // lists the mapping holds. A ledger that says only from_me still answers the
 // question, because a message the account sent has a role of its own.
-export function roleFor(mapping, item) {
+export function roleFor(mapping: RoleMapping, item: { sender_jid?: string | null; from_me?: boolean }) {
   const roles = mapping.roles ?? {};
   const sender = item.sender_jid ?? null;
   if (sender !== null && (roles.agent_senders ?? []).includes(sender)) return 'agent';

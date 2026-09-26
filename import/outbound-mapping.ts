@@ -1,3 +1,4 @@
+import type { Fields, SourceSection, TurnSection, MediaRoot, OutboundMapping, SourceKind } from './types.ts';
 // The outbound half of a ledger mapping: the names of the places an agent's own
 // sends were recorded.
 //
@@ -9,7 +10,7 @@
 // the send was permitted and whether it left — so the import reads all three and
 // joins them.
 //
-// This module is the half that knows a client's names. Like `ledger-mapping.mjs`
+// This module is the half that knows a client's names. Like `ledger-mapping.ts`
 // it reads them out of one JSON file and refuses the file whole before a line is
 // read, and every name it accepts is a plain identifier or a dotted path of
 // plain identifiers, so a mapping cannot carry a second statement or a path
@@ -60,7 +61,7 @@
 // reason and this is not the place to decide it was wrong.
 
 import { fault } from '../stream/faults.ts';
-import { describeMedia, isRead, mediaRefsOf, toIso } from './ledger-mapping.mjs';
+import { describeMedia, isRead, mediaRefsOf, toIso } from './ledger-mapping.ts';
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const TIMESTAMP_FORMATS = ['epoch_seconds', 'epoch_millis', 'iso8601'];
@@ -70,14 +71,14 @@ const REQUIRED_FIELDS = ['platform_message_id', 'chat_key', 'timestamp'];
 const TURN_FIELDS = ['platform_message_id', 'chat_key', 'timestamp', 'body',
   'answers_refs', 'sender_id', 'sender_name', 'reply_to', 'status'];
 
-const FILE_KINDS = ['events', 'audit'];
+const FILE_KINDS: ('events' | 'audit')[] = ['events', 'audit'];
 
 // ---- paths ------------------------------------------------------------------
 
 // A path is dotted plain identifiers and nothing else: no index, no wildcard, no
 // empty segment. That is what keeps a mapping from reaching out of the object it
 // was handed.
-function pathFaults(where, given) {
+function pathFaults(where: string, given: unknown) {
   if (typeof given !== 'string' || given.length === 0) {
     return [fault('OUTBOUND_PATH_UNUSABLE', `${where} -> ${String(given)}`,
       'a name here is a dotted path of plain identifiers, and nothing else is accepted',
@@ -90,19 +91,20 @@ function pathFaults(where, given) {
     'name the field the line holds, for example normalized.messageId')];
 }
 
-export function valueAt(object, path) {
+export function valueAt(object: unknown, path: unknown) {
   if (path === null || path === undefined) return undefined;
   let at = object;
   for (const part of String(path).split('.')) {
     if (at === null || typeof at !== 'object') return undefined;
-    at = at[part];
+    // The object guard above allows a dynamic key; its value remains unknown.
+    at = (at as Fields)[part];
   }
   return at;
 }
 
 // ---- refusing the section ---------------------------------------------------
 
-function fieldFaults(where, fields) {
+function fieldFaults(where: string, fields: Fields) {
   const faults = [];
   for (const name of REQUIRED_FIELDS) {
     const path = fields[name];
@@ -118,7 +120,7 @@ function fieldFaults(where, fields) {
   return faults;
 }
 
-function formatFaults(where, section) {
+function formatFaults(where: string, section: SourceSection) {
   const faults = [];
   const stamp = section.timestamp;
   if (stamp !== undefined && !TIMESTAMP_FORMATS.includes(stamp)) {
@@ -129,7 +131,7 @@ function formatFaults(where, section) {
   return faults;
 }
 
-function fileKindFaults(where, section) {
+function fileKindFaults(where: string, section: SourceSection) {
   const faults = [...formatFaults(where, section)];
   if (section.record !== undefined && section.record !== null) {
     faults.push(...pathFaults(`${where}.record`, section.record));
@@ -142,7 +144,7 @@ function fileKindFaults(where, section) {
   return faults;
 }
 
-function turnFaults(where, section) {
+function turnFaults(where: string, section: Partial<TurnSection>) {
   const faults = [...formatFaults(where, section)];
   if (typeof section.sql !== 'string' || !isRead(section.sql)) {
     faults.push(fault('OUTBOUND_TURNS_NOT_A_READ', where,
@@ -152,8 +154,10 @@ function turnFaults(where, section) {
   return faults;
 }
 
-export function outboundFaults(mapping, subject = 'the mapping') {
-  const outbound = mapping?.outbound;
+export function outboundFaults(mapping: unknown, subject = 'the mapping') {
+  // This view preserves optional property access on arbitrary parsed JSON;
+  // the existing checks below still reject or throw on malformed sections.
+  const outbound = (mapping as Partial<OutboundMapping> | null | undefined)?.outbound;
   if (outbound === null || outbound === undefined) {
     return [fault('MAPPING_WITHOUT_OUTBOUND', subject,
       'the mapping names no outbound sources, so there is nothing for this import to read',
@@ -181,7 +185,7 @@ export function outboundFaults(mapping, subject = 'the mapping') {
 // How far apart in time a turn or an audit row may be from the send it is joined
 // to. It is the mapping's to say, because it is a fact about the client's own
 // system, and three minutes is only what a mapping that says nothing gets.
-export function toleranceMs(mapping) {
+export function toleranceMs(mapping: Partial<OutboundMapping> | null | undefined) {
   const given = mapping?.outbound?.link?.tolerance_seconds;
   if (typeof given !== 'number' || !Number.isFinite(given) || given < 0) return 180_000;
   return Math.round(given * 1000);
@@ -189,20 +193,20 @@ export function toleranceMs(mapping) {
 
 // ---- a line or a row becomes an item ----------------------------------------
 
-function truthy(value) {
+function truthy(value: unknown) {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
   if (typeof value === 'string') return value === '1' || value.toLowerCase() === 'true';
   return false;
 }
 
-function text(value) {
+function text(value: unknown) {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return '';
   return String(value);
 }
 
-function orNull(value) {
+function orNull(value: unknown) {
   if (value === null || value === undefined || value === '') return null;
   return text(value);
 }
@@ -211,15 +215,16 @@ function orNull(value) {
 // protobuf long looks like once it has been through JSON. It is read as the
 // number it is, so a mapping does not have to describe the encoding of a library
 // the client happened to use.
-export function epochOf(value) {
-  if (value !== null && typeof value === 'object' && typeof value.low === 'number') {
-    const high = typeof value.high === 'number' ? value.high : 0;
-    return high * 4_294_967_296 + (value.low >>> 0);
+export function epochOf(value: unknown) {
+  // Narrow only the numeric fields read below; preserve the original property reads.
+  if (value !== null && typeof value === 'object' && typeof (value as { low?: unknown }).low === 'number') {
+    const high = typeof (value as { high?: unknown }).high === 'number' ? (value as { high: number }).high : 0;
+    return high * 4_294_967_296 + ((value as { low: number }).low >>> 0);
   }
   return value;
 }
 
-export function selects(section, holder) {
+export function selects(section: SourceSection, holder: unknown) {
   for (const [path, wanted] of Object.entries(section.select ?? {})) {
     const found = valueAt(holder, path);
     const allowed = Array.isArray(wanted) ? wanted : [wanted];
@@ -228,17 +233,18 @@ export function selects(section, holder) {
   return true;
 }
 
-function carried(section, holder) {
-  const fields = {};
+function carried(section: SourceSection, holder: unknown) {
+  const fields: Fields = {};
   for (const path of section.carry ?? []) {
     const value = valueAt(holder, path);
     if (value === null || value === undefined || value === '') continue;
-    fields[String(path).split('.').pop()] = value;
+    // Splitting a string always yields at least one element.
+    fields[String(path).split('.').pop()!] = value;
   }
   return fields;
 }
 
-function refsOf(value, format) {
+function refsOf(value: unknown, format?: string) {
   if (Array.isArray(value)) return value.map((one) => text(one)).filter(Boolean);
   if (value === null || value === undefined || value === '') return [];
   return mediaRefsOf(value, format ?? 'json_array', null);
@@ -247,8 +253,8 @@ function refsOf(value, format) {
 // The item every outbound source is read into, whatever it was written as. The
 // `kind` is which source it came from, and it is the only thing downstream needs
 // to know about the client's own shapes.
-export function itemFrom(kind, section, holder, media = null) {
-  const at = (name) => valueAt(holder, (section.fields ?? {})[name]);
+export function itemFrom(kind: SourceKind, section: SourceSection, holder: unknown, media: MediaRoot | null = null) {
+  const at = (name: string) => valueAt(holder, (section.fields ?? {})[name]);
   const refs = refsOf(at('media_refs'), section.media_refs);
   return {
     kind,
@@ -272,10 +278,10 @@ export function itemFrom(kind, section, holder, media = null) {
 // A turns query names its own output columns, so the row is already under the
 // names this reads. It is turned into the same item by the same rule, with the
 // columns nothing named carried whole.
-export function turnItem(section, row) {
-  const holder = {};
-  const fields = {};
-  const extra = {};
+export function turnItem(section: SourceSection, row: Fields) {
+  const holder: Fields = {};
+  const fields: Record<string, string> = {};
+  const extra: Fields = {};
   for (const [name, value] of Object.entries(row)) {
     if (TURN_FIELDS.includes(name)) {
       holder[name] = value;
@@ -293,7 +299,7 @@ export function turnItem(section, row) {
 // The column names a turns query must have produced. It is read off the first
 // row, so a query that named none of them is refused before a record is written
 // rather than after a client's history is half in the store.
-export function turnRowFaults(row) {
+export function turnRowFaults(row: Fields | null | undefined) {
   const faults = [];
   for (const name of REQUIRED_FIELDS) {
     if (row !== null && row !== undefined && row[name] !== undefined) continue;

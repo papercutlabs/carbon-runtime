@@ -1,14 +1,16 @@
+import type { Store } from '../stream/store.ts';
+import type { LedgerContext, LedgerItem, LidMap, ImportFields, ImportRecord, ImportCandidate, ImportIdentity, CaptureOptions, MessageIndex } from './types.ts';
 // The ledger import: a client's own message history out of a SQLite ledger.
 //
 // Some clients have no chat export. What they have is a running system that
 // already wrote every message it saw into a SQLite table of its own — a ledger —
 // beside the case records that system keeps. That table is the same history an
 // export would be, in somebody else's column names, so this is the same import
-// as `carbon-capture-whatsapp.mjs` with one part moved outside: the names.
+// as `carbon-capture-whatsapp.ts` with one part moved outside: the names.
 //
 // Nothing here knows a client. The table, the columns, the roles, the media
 // references and the corrections are read from a mapping file the caller passes
-// (`ledger-mapping.mjs` reads it), so this converts "a ledger-shaped SQLite
+// (`ledger-mapping.ts` reads it), so this converts "a ledger-shaped SQLite
 // database" and the client-specific half is one JSON file that never has to live
 // in a public repository.
 //
@@ -19,7 +21,7 @@
 // wakes nothing up.
 //
 // Beside the records, the corrections the ledger holds are written one file per
-// conversation by `ledger-corrections.mjs`, because a case miner reads them next.
+// conversation by `ledger-corrections.ts`, because a case miner reads them next.
 //
 // ---- The mapping file ------------------------------------------------------
 //
@@ -108,8 +110,8 @@
 
 import { conversationKind } from '../adapters/whatsapp/jid.mjs';
 import { readLidMap } from '../adapters/whatsapp/channel-state.mjs';
-import { chatKeyFor } from './carbon-capture-whatsapp.mjs';
-import { roleFor } from './ledger-mapping.mjs';
+import { chatKeyFor } from './carbon-capture-whatsapp.ts';
+import { roleFor } from './ledger-mapping.ts';
 
 export const capabilities = ['import'];
 
@@ -118,7 +120,7 @@ export const SOURCE = 'import:ledger-sqlite';
 // The map the live adapter keeps of every phone-form and linked-id-form pair it
 // has seen, which is how a ledger keyed by phone number joins the conversations
 // the live adapter already keyed by linked id.
-export function lidMapFor(context) {
+export function lidMapFor(context: Pick<LedgerContext, 'store' | 'account' | 'lid_map'>) {
   if (context.lid_map) return context.lid_map;
   try {
     return readLidMap(context.store, context.account);
@@ -132,7 +134,7 @@ export function lidMapFor(context) {
 // An import is a one-shot producer: it reads the rows the caller handed it and
 // advances no cursor, because the cursors belong to the live adapter and moving
 // them would make it skip messages it has not read.
-export function listPending(context) {
+export function listPending(context: LedgerContext) {
   return context.items ?? [];
 }
 
@@ -146,7 +148,7 @@ export function consume() {}
 // linked-id form is stored under its phone key with a note saying so, because
 // inventing a linked id would be worse than two conversations a person can
 // still join later.
-function placeOf(context, item, lidMap) {
+function placeOf(context: LedgerContext, item: LedgerItem, lidMap: LidMap) {
   const { key, note } = chatKeyFor(item, lidMap);
   const conversation_id = `${context.account}:${key}`;
   return { key, note, conversation_id };
@@ -155,8 +157,8 @@ function placeOf(context, item, lidMap) {
 // A history import sets no hold. A hold stops the agent while a person is
 // handling a conversation now; an operator's message from last spring is not
 // that, and writing one would hold every conversation the client ever answered.
-function fieldsFor(context, item, place) {
-  const fields = { ...(item.fields ?? {}) };
+function fieldsFor(context: LedgerContext, item: LedgerItem, place: ReturnType<typeof placeOf>) {
+  const fields: ImportFields = { ...(item.fields ?? {}) };
   const named = context.mapping?.ledger;
   if (typeof named === 'string' && named.length > 0) fields.ledger = named;
   if (item.chat_name) fields.chat_name = item.chat_name;
@@ -174,12 +176,12 @@ function fieldsFor(context, item, place) {
   return fields;
 }
 
-function recordFor(context, item) {
+function recordFor(context: LedgerContext, item: LedgerItem) {
   const place = placeOf(context, item, lidMapFor(context));
   const platform_message_id = String(item.message_id ?? '');
   const at = item.timestamp ?? '';
   const from_me = item.from_me === true;
-  const record = {
+  const record: ImportCandidate = {
     schema: 'carbon.message.v1',
     agent: context.agent,
     source: SOURCE,
@@ -214,7 +216,7 @@ function recordFor(context, item) {
   return record;
 }
 
-export function payload(context, items) {
+export function payload(context: LedgerContext, items: LedgerItem[]) {
   const entries = items.map((item) => ({
     record: recordFor(context, item),
     raw: JSON.stringify(item),
@@ -225,7 +227,7 @@ export function payload(context, items) {
 
 // ---- 4. writing --------------------------------------------------------------
 
-export function writeBatch(context, items) {
+export function writeBatch(context: LedgerContext, items: LedgerItem[]) {
   const { entries } = payload(context, items);
   const written = [];
   for (const entry of entries) {
@@ -233,14 +235,17 @@ export function writeBatch(context, items) {
     // The store appends a raw line for every capture, which is right for a live
     // channel, where a second arrival is a second thing that happened; it is
     // wrong for an import, where a second run is the same ledger read again.
-    const options = { disposition: entry.record.disposition };
+    const options: CaptureOptions = { disposition: entry.record.disposition };
     if (!alreadyCaptured(context.store, entry.record)) options.raw = entry.raw;
-    written.push(context.store.capture(entry.record, options));
+    // capture validates the complete candidate before any write and returns
+    // only schema-valid records. This assertion is confined to that validator
+    // call; payload consumers continue to see an unknown role.
+    written.push(context.store.capture(entry.record as ImportRecord, options));
   }
   return written;
 }
 
-function alreadyCaptured(store, record) {
+function alreadyCaptured(store: Store, record: ImportIdentity) {
   try {
     return store.read(record.conversation_id, record.message_id, record.revision) !== null;
   } catch {
@@ -251,9 +256,9 @@ function alreadyCaptured(store, record) {
 
 // The index the corrections are keyed by: every ledger id this import wrote, and
 // the conversation and record identity it became.
-export function messageIndexOf(context, items) {
+export function messageIndexOf(context: LedgerContext, items: LedgerItem[]) {
   const lidMap = lidMapFor(context);
-  const index = new Map();
+  const index: MessageIndex = new Map();
   for (const item of items) {
     const place = placeOf(context, item, lidMap);
     index.set(String(item.message_id), {

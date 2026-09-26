@@ -114,7 +114,7 @@ import wrote it. Neither releases a turn.
    table of its own. That table is the same history under somebody else's column
    names, so the names are not in the code: they are in a mapping file the caller
    passes, whose shape is documented at the top of
-   `import/carbon-ledger-sqlite.mjs`. The mapping is refused whole before a row
+   `import/carbon-ledger-sqlite.ts`. The mapping is refused whole before a row
    is read, every table and column name it gives must be a plain SQL identifier,
    and a corrections query it carries must be a single `SELECT` or `WITH`, so a
    mapping can never write to the database it reads. Attachments are referenced
@@ -128,7 +128,7 @@ import wrote it. Neither releases a turn.
    and the ids it was answering, an audit directory has the chat and whether the
    send was permitted. The three are read through the mapping's `outbound`
    section, whose shape is documented at the top of
-   `import/outbound-mapping.mjs`, and joined into one send each by the only
+   `import/outbound-mapping.ts`, and joined into one send each by the only
    deterministic key the data offers: the conversation and the moment, inside a
    tolerance the mapping sets. Every record says how its join was made, how far
    apart the two marks were and how many others were inside the window, and a
