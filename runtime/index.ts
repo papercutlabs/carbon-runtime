@@ -369,7 +369,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
           childExit = childExit ?? { code: null, signal: 'unknown' };
           break;
         }
-        dueAt.set(loop, now() + loop.intervalMs);
+        dueAt.set(loop, now() + loop.intervalMs!); // Every scheduled loop received its checked interval before this sweep.
         if (childExit) break;
       }
       done += 1;

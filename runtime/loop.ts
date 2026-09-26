@@ -494,8 +494,8 @@ export class ReleaseLoop<S = Session> {
   declare toolStatusStale: boolean;
   declare holdFaults: Fault[];
   declare items: () => unknown[];
-  declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null;
-  declare intervalMs: number;
+  declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null | undefined;
+  declare intervalMs: number | undefined;
 
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
