@@ -19,7 +19,7 @@ export const REGISTRY = {
   // the adapter with no channel, so the release loop can be run and proved
   // without a network and without a credential
   fixture: 'adapters/fixture/index.mjs',
-  email: 'adapters/email/index.mjs',
+  email: 'adapters/email/index.ts',
   whatsapp: 'adapters/whatsapp/index.mjs',
   telegram: 'adapters/telegram/index.mjs'
 };

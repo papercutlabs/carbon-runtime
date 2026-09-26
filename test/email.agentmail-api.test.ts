@@ -11,21 +11,22 @@ import { ingest } from '../conformance/cases.mjs';
 import { ReleaseLoop } from '../runtime/loop.mjs';
 import { pollState } from '../runtime/poll.mjs';
 import { fakeHarness } from './fake-harness.mjs';
-import * as adapter from '../adapters/email/index.mjs';
-import { AgentMailFault, readNetrcPassword } from '../adapters/email/agentmail-api.mjs';
+import * as adapter from '../adapters/email/index.ts';
+import { AgentMailFault, readNetrcPassword } from '../adapters/email/agentmail-api.ts';
+import type { AgentMailEmailContext } from '../adapters/email/index.ts';
 
 const ACCOUNT = 'agent-01@example.test';
 const API_KEY = 'am_fixture_key';
 const NETRC = path.join(import.meta.dirname, 'fixtures', 'agentmail.netrc');
 
-function netrcFile(body) {
+function netrcFile(body: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-agentmail-key-'));
   const file = path.join(dir, 'netrc');
   fs.writeFileSync(file, body, { mode: 0o600 });
   return file;
 }
 
-function context() {
+function context(): AgentMailEmailContext {
   return {
     store: Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-agentmail-')), 'store')),
     adapter,
@@ -56,12 +57,26 @@ function context() {
   };
 }
 
-function json(body, status = 200) {
-  return { ok: status >= 200 && status < 300, status, statusText: status === 200 ? 'OK' : 'Service Unavailable', json: async () => body };
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    statusText: status === 200 ? 'OK' : 'Service Unavailable'
+  });
 }
 
-function fullMessage({ internalId, messageId, timestamp, from, references = [], inReplyTo = null, text, attachments = [] }) {
-  const headers = {
+type MessageFixture = {
+  internalId: string;
+  messageId: string;
+  timestamp: string;
+  from: string;
+  references?: string[];
+  inReplyTo?: string | null;
+  text: string;
+  attachments?: { attachment_id: string; size: number; filename: string; content_type: string }[];
+};
+
+function fullMessage({ internalId, messageId, timestamp, from, references = [], inReplyTo = null, text, attachments = [] }: MessageFixture) {
+  const headers: Record<string, string> = {
     'Message-ID': `<${messageId}>`,
     From: from,
     To: ACCOUNT,
@@ -86,8 +101,10 @@ function fullMessage({ internalId, messageId, timestamp, from, references = [], 
   };
 }
 
-function recordedServer({ metadataStatus = 200, downloadStatus = 200 } = {}) {
-  const asked = [];
+type RecordedServerOptions = { metadataStatus?: number; downloadStatus?: number };
+
+function recordedServer({ metadataStatus = 200, downloadStatus = 200 }: RecordedServerOptions = {}) {
+  const asked: { url: URL; authorization: string | null }[] = [];
   let empty = false;
   const first = fullMessage({
     internalId: 'provider-message-1',
@@ -108,17 +125,18 @@ function recordedServer({ metadataStatus = 200, downloadStatus = 200 } = {}) {
   });
   const previous = globalThis.fetch;
   globalThis.fetch = async (input, options = {}) => {
-    const url = new URL(input);
-    asked.push({ url, authorization: options.headers?.authorization });
+    const url = input instanceof Request
+      ? new URL(input.url)
+      : input instanceof URL ? input : new URL(input);
+    const authorization = new Headers(options.headers).get('authorization');
+    asked.push({ url, authorization });
     if (url.hostname === 'cdn.agentmail.to') {
-      return {
-        ok: downloadStatus >= 200 && downloadStatus < 300,
+      return new Response(Buffer.from('file'), {
         status: downloadStatus,
-        statusText: downloadStatus === 200 ? 'OK' : 'Service Unavailable',
-        arrayBuffer: async () => Buffer.from('file')
-      };
+        statusText: downloadStatus === 200 ? 'OK' : 'Service Unavailable'
+      });
     }
-    assert.equal(options.headers.authorization, `Bearer ${API_KEY}`);
+    assert.equal(authorization, `Bearer ${API_KEY}`);
     if (url.pathname.endsWith('/attachments/attachment-1')) {
       return json({ attachment_id: 'attachment-1', download_url: 'https://cdn.agentmail.to/object?signature=fixture' }, metadataStatus);
     }
@@ -146,15 +164,15 @@ test('the Bearer token is the password from the declared AgentMail netrc machine
   assert.equal(readNetrcPassword(netrcFile('machine imap.agentmail.to login "agent one" password "am key"\n'),
     'imap.agentmail.to'), 'am key');
   assert.throws(() => readNetrcPassword('/no/such/netrc', 'imap.agentmail.to'),
-    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_UNREADABLE');
+    (error: AgentMailFault) => error.faults[0].code === 'AGENTMAIL_NETRC_UNREADABLE');
   assert.throws(() => readNetrcPassword(netrcFile('machine smtp.agentmail.to login agent password smtp\n'), 'imap.agentmail.to'),
-    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_MACHINE_ABSENT');
+    (error: AgentMailFault) => error.faults[0].code === 'AGENTMAIL_NETRC_MACHINE_ABSENT');
   assert.throws(() => readNetrcPassword(netrcFile('machine imap.agentmail.to login agent\n'), 'imap.agentmail.to'),
-    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_PASSWORD_ABSENT');
+    (error: AgentMailFault) => error.faults[0].code === 'AGENTMAIL_NETRC_PASSWORD_ABSENT');
   assert.throws(() => readNetrcPassword(netrcFile('# machine imap.agentmail.to password wrong\n'), 'imap.agentmail.to'),
-    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_SYNTAX_UNSUPPORTED');
+    (error: AgentMailFault) => error.faults[0].code === 'AGENTMAIL_NETRC_SYNTAX_UNSUPPORTED');
   assert.throws(() => readNetrcPassword(netrcFile('machine imap.agentmail.to password "unterminated\n'), 'imap.agentmail.to'),
-    (error) => error.faults[0].code === 'AGENTMAIL_NETRC_MALFORMED');
+    (error: AgentMailFault) => error.faults[0].code === 'AGENTMAIL_NETRC_MALFORMED');
 });
 
 test('list pagination and full fetch produce the existing email capture and hold semantics', async () => {
@@ -190,7 +208,8 @@ test('list pagination and full fetch produce the existing email capture and hold
     server.makeEmpty();
     const again = await adapter.poll(running);
     assert.equal(again.items.length, 0);
-    const lastList = server.asked.filter((call) => call.url.pathname.endsWith('/messages')).at(-1).url;
+    const listCalls = server.asked.filter((call) => call.url.pathname.endsWith('/messages'));
+    const lastList = listCalls[listCalls.length - 1].url;
     assert.equal(lastList.searchParams.get('after'), '2026-09-16T06:01:00.000Z');
     assert.equal(lastList.searchParams.get('ascending'), 'true');
     assert.equal(lastList.searchParams.get('limit'), '1');
@@ -204,7 +223,7 @@ test('an AgentMail 5xx is one failed runtime poll cycle and reaches the existing
   const previous = globalThis.fetch;
   globalThis.fetch = async () => json({ code: 'temporary' }, 503);
   try {
-    await assert.rejects(() => adapter.poll(running), (error) => {
+    await assert.rejects(() => adapter.poll(running), (error: unknown) => {
       assert.ok(error instanceof AgentMailFault);
       assert.equal(error.faults[0].code, 'AGENTMAIL_API_REFUSED');
       return true;
@@ -232,7 +251,7 @@ test('an AgentMail 5xx is one failed runtime poll cycle and reaches the existing
   }
 });
 
-async function rejectedAttachmentCycle(serverOptions, code) {
+async function rejectedAttachmentCycle(serverOptions: RecordedServerOptions, code: string): Promise<void> {
   const running = context();
   const server = recordedServer(serverOptions);
   try {
@@ -253,6 +272,7 @@ async function rejectedAttachmentCycle(serverOptions, code) {
     assert.equal(result.failures, 1);
     assert.equal(result.holding, false);
     assert.equal(result.items.length, 0);
+    assert.ok(result.fault);
     assert.match(result.fault.problem, new RegExp(`^${code}:`));
     assert.equal(pollState(running.store, ACCOUNT, 'email').consecutive_failures, 1);
     assert.equal(pollState(running.store, ACCOUNT, 'email').holding, false);

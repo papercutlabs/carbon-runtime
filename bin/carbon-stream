@@ -116,15 +116,19 @@ function checkStore(dir) {
   return 0;
 }
 
-// An adapter is named by its directory, which holds index.mjs, or by its module.
-// A module may be named with or without its extension, because an adapter that
-// is one file is written in a command line beside adapters that are directories
-// and the difference is not one a caller should have to remember.
+// An adapter is named by its directory, which holds index.mjs or index.ts, or
+// by its module. A module may be named with or without its extension, because
+// an adapter that is one file sits beside adapters that are directories.
 async function loadAdapter(adapterPath) {
   const resolved = path.resolve(adapterPath);
   let target = resolved;
-  if (!fs.existsSync(resolved)) target = `${resolved}.mjs`;
-  else if (fs.statSync(resolved).isDirectory()) target = path.join(resolved, 'index.mjs');
+  if (!fs.existsSync(resolved)) {
+    if (fs.existsSync(`${resolved}.mjs`)) target = `${resolved}.mjs`;
+    else target = `${resolved}.ts`;
+  } else if (fs.statSync(resolved).isDirectory()) {
+    const javascript = path.join(resolved, 'index.mjs');
+    target = fs.existsSync(javascript) ? javascript : path.join(resolved, 'index.ts');
+  }
   return import(pathToFileURL(target).href);
 }
 
@@ -152,7 +156,7 @@ async function checkAdapter(adapterPath, fixturesDir) {
   } catch (error) {
     report([fault('ADAPTER_UNLOADABLE', adapterPath,
       (error.message ?? String(error)).split('\n')[0],
-      'give the path of an ES module, or of a directory holding index.mjs')]);
+      'give the path of an ES module, or of a directory holding index.mjs or index.ts')]);
     return 1;
   }
   if (!Array.isArray(adapter.capabilities) || adapter.capabilities.length === 0) {

@@ -9,15 +9,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   MimeUnreadable, decodeWords, header, headerRaw, readMessage, stripHtml
-} from '../adapters/email/mime.mjs';
+} from '../adapters/email/mime.ts';
 
 const RECORDED = path.join(import.meta.dirname, 'fixtures', 'imap-recorded');
-const lines = (text) => text.split(/\r?\n/);
+const lines = (text: string): string[] => text.split(/\r?\n/);
 const CAP = { maxAttachmentBytes: 1000 };
 
 test('a header folded over three lines is one header', () => {
   const message = readMessage(lines(fs.readFileSync(path.join(RECORDED, 'fetch-1.txt'), 'latin1')), CAP);
-  assert.match(headerRaw(message.headers, 'message-id'), /^<[^ ]+@mail\.example\.test>$/);
+  const messageId = headerRaw(message.headers, 'message-id');
+  assert.ok(messageId !== undefined);
+  assert.match(messageId, /^<[^ ]+@mail\.example\.test>$/);
   assert.equal(header(message.headers, 'subject'), 'carbon-email smoke 20260910092517866');
   assert.equal(header(message.headers, 'x-carbon-origin'), 'probe');
 });
@@ -76,7 +78,7 @@ test('stripHtml drops a script, keeps the line breaks and decodes the entities',
   assert.equal(stripHtml('<script>alert(1)</script><div>a</div><div>b &lt;c&gt;</div>'), 'a\nb <c>');
 });
 
-function withAttachment(bytes) {
+function withAttachment(bytes: string): string[] {
   return [
     'From: ada@example.test',
     'Message-ID: <three@example.test>',
@@ -106,18 +108,22 @@ test('stripHtml leaves no tag standing, even one its own removal splices togethe
 test('an attachment under the cap arrives with its bytes and its digest', () => {
   const message = readMessage(withAttachment('x'.repeat(100)), { maxAttachmentBytes: 1000 });
   assert.equal(message.attachments.length, 1);
-  assert.equal(message.attachments[0].bytes.length, 100);
-  assert.equal(message.attachments[0].filename, 'note.pdf');
-  assert.equal(message.attachments[0].download_failed, undefined);
+  const attachment = message.attachments[0];
+  if (attachment.download_failed === true) throw new Error('an under-cap attachment was marked as failed');
+  assert.equal(attachment.bytes.length, 100);
+  assert.equal(attachment.filename, 'note.pdf');
+  assert.equal(attachment.download_failed, undefined);
   assert.equal(message.body, 'see attached');
 });
 
 test('an attachment over the cap is recorded as download_failed, with no bytes', () => {
   const message = readMessage(withAttachment('x'.repeat(100)), { maxAttachmentBytes: 64 });
   assert.equal(message.attachments.length, 1);
-  assert.equal(message.attachments[0].download_failed, true);
-  assert.equal(message.attachments[0].bytes, 100, 'the true size is not recorded');
-  assert.match(message.attachments[0].sha256, /^[0-9a-f]{64}$/);
+  const attachment = message.attachments[0];
+  assert.equal(attachment.download_failed, true);
+  if (attachment.download_failed !== true) throw new Error('an over-cap attachment was not marked as failed');
+  assert.equal(attachment.bytes, 100, 'the true size is not recorded');
+  assert.match(attachment.sha256, /^[0-9a-f]{64}$/);
   assert.equal(message.body, 'see attached', 'the text was lost with the attachment');
 });
 

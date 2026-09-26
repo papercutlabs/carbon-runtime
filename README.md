@@ -52,7 +52,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
 | `bin/carbon-telegram` | `probe --token-file <file>`, which asks the server what bot a token is; `send --token-file <file> --chat <id> --text <text>`, which puts one message in a chat in a proof and records nothing |
 | `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>`; `ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>`; `ledger-outbound --agent <id> --mapping <file> --store <dir> [--events <file>] [--audit <dir>] [--turns <file>]` |
-| `test/` | `node --test "test/*.test.mjs"` |
+| `test/` | `node --test "test/*.test.mjs" "test/*.test.ts"` |
 | `tools/` | the MCP scaffold the reply tool and the teaching tools are served by, the identifier scan and the release build |
 
 ## The store

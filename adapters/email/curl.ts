@@ -26,16 +26,39 @@
 import { spawnSync } from 'node:child_process';
 import { fault } from '../../stream/faults.mjs';
 
+type EmailFault = { code: string; subject: string; problem: string; fix: string };
+type TransportDetails = { operation?: string | null; exit?: number; timed_out?: boolean; status?: number };
+type CurlResult = { code: number; timed_out: boolean; stdout: string; stderr: string };
+type SendResult = { status: 'sent' | 'unknown' | 'failed'; exit: number; detail: string };
+type ImapArguments = {
+  netrc: string;
+  host: string;
+  port?: number;
+  mailbox?: string | null;
+  request?: string | null;
+  uid?: number | null;
+  timeoutSeconds?: number | null;
+};
+
 export const NEVER_ARRIVED = new Set([6, 7, 51, 60, 67]);
 export const STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS = 15;
 
 export class TransportFault extends Error {
-  constructor(faults, transport = {}) {
+  readonly faults: EmailFault[];
+  readonly transport: TransportDetails;
+
+  constructor(faults: EmailFault[], transport: TransportDetails = {}) {
     super(faults.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('\n'));
     this.name = 'TransportFault';
     this.faults = faults;
     this.transport = transport;
   }
+}
+
+function errorCode(error: Error | null | undefined) {
+  return error !== null && error !== undefined && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined;
 }
 
 export function curlBinary() {
@@ -45,22 +68,22 @@ export function curlBinary() {
 // The wire is read as latin1 so that one character is one byte: the charset of a
 // message is a fact of its own headers, decided by the MIME reader, not by
 // however this process happened to decode the socket.
-export function runCurl(args, { timeout_ms = 120000 } = {}) {
+export function runCurl(args: string[], { timeout_ms = 120000 }: { timeout_ms?: number } = {}) {
   const result = spawnSync(curlBinary(), args, { encoding: 'buffer', timeout: timeout_ms });
-  if (result.error && result.error.code === 'ENOENT') {
+  if (errorCode(result.error) === 'ENOENT') {
     throw new TransportFault([fault('CURL_MISSING', curlBinary(),
       'the email adapter speaks imaps and smtps through curl, and there is no curl at this name',
       'install curl, or name one in CARBON_EMAIL_CURL')]);
   }
   return {
     code: result.status ?? -1,
-    timed_out: result.error?.code === 'ETIMEDOUT',
+    timed_out: errorCode(result.error) === 'ETIMEDOUT',
     stdout: (result.stdout ?? Buffer.alloc(0)).toString('latin1'),
     stderr: (result.stderr ?? Buffer.alloc(0)).toString('latin1').split('\n').slice(-4).join('\n').trim()
   };
 }
 
-function imapArgs({ netrc, host, port = 993, mailbox = null, request = null, uid = null, timeoutSeconds = null }) {
+function imapArgs({ netrc, host, port = 993, mailbox = null, request = null, uid = null, timeoutSeconds = null }: ImapArguments) {
   const at = mailbox === null ? '' : encodeURIComponent(mailbox);
   const url = `imaps://${host}:${port}/${at}${uid === null ? '' : `;UID=${uid}`}`;
   const args = ['--silent', '--show-error'];
@@ -74,7 +97,7 @@ function imapArgs({ netrc, host, port = 993, mailbox = null, request = null, uid
   return args;
 }
 
-function readOrThrow(args, subject, what, operation = null) {
+function readOrThrow(args: string[], subject: string, what: string, operation: string | null = null) {
   const result = runCurl(args);
   if (result.code !== 0) {
     throw new TransportFault([fault('IMAP_READ_FAILED', subject,
@@ -87,7 +110,7 @@ function readOrThrow(args, subject, what, operation = null) {
 }
 
 // LIST "" "*" — what mailboxes this account has.
-export function listMailboxes({ netrc, host, port = 993 }) {
+export function listMailboxes({ netrc, host, port = 993 }: { netrc: string; host: string; port?: number }) {
   const out = readOrThrow(imapArgs({ netrc, host, port }), host, 'listing the mailboxes');
   const names = [];
   for (const line of out.split(/\r?\n/)) {
@@ -99,7 +122,7 @@ export function listMailboxes({ netrc, host, port = 993 }) {
 
 // The watermark's first half. A mailbox that comes back with a different
 // UIDVALIDITY has renumbered every message in it, so every uid we hold is void.
-export function status({ netrc, host, port = 993, mailbox }) {
+export function status({ netrc, host, port = 993, mailbox }: { netrc: string; host: string; port?: number; mailbox: string }) {
   const out = readOrThrow(
     imapArgs({
       netrc, host, port, mailbox,
@@ -123,7 +146,9 @@ export function status({ netrc, host, port = 993, mailbox }) {
 }
 
 // UID SEARCH from the watermark up. The uids come back in one untagged line.
-export function searchUids({ netrc, host, port = 993, mailbox, fromUid }) {
+export function searchUids({ netrc, host, port = 993, mailbox, fromUid }: {
+  netrc: string; host: string; port?: number; mailbox: string; fromUid: number;
+}) {
   const out = readOrThrow(
     imapArgs({ netrc, host, port, mailbox, request: `UID SEARCH UID ${fromUid}:*` }),
     `${host} ${mailbox}`, 'searching for new messages');
@@ -143,7 +168,7 @@ export function searchUids({ netrc, host, port = 993, mailbox, fromUid }) {
 
 // Which messages the mailbox still counts as unread, before we read any of
 // them. See restoreUnseen.
-export function unseenUids({ netrc, host, port = 993, mailbox }) {
+export function unseenUids({ netrc, host, port = 993, mailbox }: { netrc: string; host: string; port?: number; mailbox: string }) {
   const out = readOrThrow(
     imapArgs({ netrc, host, port, mailbox, request: 'UID SEARCH UNSEEN' }),
     `${host} ${mailbox}`, 'reading which messages are unread');
@@ -168,7 +193,9 @@ export function unseenUids({ netrc, host, port = 993, mailbox }) {
 // The URL form fetches BODY[], which marks the message read. In a mailbox a
 // person also reads, that would quietly take a message off their unread list,
 // so the caller reads the unseen set first and puts the flag back afterwards.
-export function fetchMessage({ netrc, host, port = 993, mailbox, uid }) {
+export function fetchMessage({ netrc, host, port = 993, mailbox, uid }: {
+  netrc: string; host: string; port?: number; mailbox: string; uid: number;
+}) {
   const out = readOrThrow(
     imapArgs({ netrc, host, port, mailbox, uid }),
     `${host} ${mailbox} uid ${uid}`, `fetching uid ${uid}`);
@@ -178,7 +205,9 @@ export function fetchMessage({ netrc, host, port = 993, mailbox, uid }) {
 // Put \Seen back on the messages that did not have it before we read them. A
 // failure here is reported and is not a reason to lose the capture, so it comes
 // back as a fault list rather than a throw.
-export function restoreUnseen({ netrc, host, port = 993, mailbox, uids }) {
+export function restoreUnseen({ netrc, host, port = 993, mailbox, uids }: {
+  netrc: string; host: string; port?: number; mailbox: string; uids: number[];
+}) {
   if (uids.length === 0) return [];
   const result = runCurl(imapArgs({
     netrc, host, port, mailbox,
@@ -201,11 +230,13 @@ export function restoreUnseen({ netrc, host, port = 993, mailbox, uids }) {
 // There is no third value. A plain, unencrypted submission is not offered, so
 // `--ssl-reqd` is always passed on the starttls path: a server that cannot
 // upgrade gets no credential.
-export const SMTP_SECURITY = ['implicit', 'starttls'];
+export const SMTP_SECURITY: string[] = ['implicit', 'starttls'];
 
 // The send. The message is handed to curl as a file, so no part of it and no
 // part of the credential sits on a command line.
-export function sendMessage({ netrc, host, port = 465, security = 'implicit', from, to, file, timeout_ms = 120000 }) {
+export function sendMessage({ netrc, host, port = 465, security = 'implicit', from, to, file, timeout_ms = 120000 }: {
+  netrc: string; host: string; port?: number; security?: string; from: string; to: string[]; file: string; timeout_ms?: number;
+}) {
   if (!SMTP_SECURITY.includes(security)) {
     throw new TransportFault([fault('SMTP_SECURITY_UNKNOWN', String(security),
       `a submission connection is ${SMTP_SECURITY.join(' or ')}, and this channel asks for something else`,
@@ -221,10 +252,14 @@ export function sendMessage({ netrc, host, port = 465, security = 'implicit', fr
   for (const recipient of to) args.push('--mail-rcpt', recipient);
   args.push('--upload-file', file);
   const result = runCurl(args, { timeout_ms });
-  if (result.code === 0) return { status: 'sent', exit: 0, detail: '' };
-  return {
+  if (result.code === 0) {
+    const sent: SendResult = { status: 'sent', exit: 0, detail: '' };
+    return sent;
+  }
+  const outcome: SendResult = {
     status: NEVER_ARRIVED.has(result.code) ? 'failed' : 'unknown',
     exit: result.code,
     detail: result.stderr
   };
+  return outcome;
 }

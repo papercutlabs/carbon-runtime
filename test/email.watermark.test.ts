@@ -11,7 +11,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../stream/store.mjs';
 import { ingest } from '../conformance/cases.mjs';
-import * as adapter from '../adapters/email/index.mjs';
+import * as adapter from '../adapters/email/index.ts';
+import { TransportFault } from '../adapters/email/curl.ts';
+import type { ImapEmailContext } from '../adapters/email/index.ts';
 
 const HERE = import.meta.dirname;
 const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
@@ -20,14 +22,14 @@ const ACCOUNT = 'agent-01@example.test';
 
 process.env.CARBON_EMAIL_CURL = SHIM;
 
-function recordedAs(changes = {}) {
+function recordedAs(changes: Record<string, string | Buffer> = {}): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-recorded-'));
   for (const name of fs.readdirSync(RECORDED)) fs.copyFileSync(path.join(RECORDED, name), path.join(dir, name));
   for (const [name, content] of Object.entries(changes)) fs.writeFileSync(path.join(dir, name), content);
   return dir;
 }
 
-function context(recorded) {
+function context(recorded: string): ImapEmailContext {
   process.env.CARBON_EMAIL_RECORDED = recorded;
   const store = Store.open(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-wm-')), 'store'));
   return {
@@ -118,7 +120,8 @@ test('a UIDVALIDITY below the one we hold is a person\'s decision, not a re-scan
   process.env.CARBON_EMAIL_RECORDED = recordedAs({
     'status.txt': '* STATUS "INBOX" (UIDVALIDITY 12 UIDNEXT 3 MESSAGES 2)\r\n'
   });
-  assert.throws(() => adapter.poll(running), (error) => {
+  assert.throws(() => adapter.poll(running), (error: unknown) => {
+    if (!(error instanceof TransportFault)) return false;
     assert.equal(error.faults[0].code, 'UIDVALIDITY_WENT_BACKWARDS');
     return true;
   });
@@ -129,7 +132,7 @@ test('the poll interval has a floor, and a declaration below it is refused', () 
   assert.equal(adapter.pollIntervalMs({ poll_interval_ms: 300000 }), 300000);
   assert.equal(adapter.POLL_INTERVAL_FLOOR_MS, 30000);
   assert.throws(() => adapter.pollIntervalMs({ poll_interval_ms: 5000 }),
-    (error) => error.faults[0].code === 'POLL_INTERVAL_BELOW_FLOOR');
+    (error: unknown) => error instanceof TransportFault && error.faults[0].code === 'POLL_INTERVAL_BELOW_FLOOR');
   assert.throws(() => adapter.pollIntervalMs({}),
-    (error) => error.faults[0].code === 'POLL_INTERVAL_MISSING');
+    (error: unknown) => error instanceof TransportFault && error.faults[0].code === 'POLL_INTERVAL_MISSING');
 });

@@ -17,7 +17,7 @@
     "carbon-tool-server": "bin/carbon-tool-server"
   },
   "scripts": {
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test \"test/*.test.mjs\" \"test/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "check": "node bin/carbon-stream check --adapter adapters/fixture --fixtures adapters/fixture/fixtures",
     "check:email": "node bin/carbon-stream check --adapter adapters/email --fixtures adapters/email/fixtures",
