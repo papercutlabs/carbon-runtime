@@ -1,3 +1,4 @@
+import type { Store } from '../stream/store.ts';
 // What a channel knows that is not a message.
 //
 // One file per account and channel kind under the store,
@@ -25,7 +26,7 @@ import { componentFaults, encodeComponent, decodeComponent } from '../stream/enc
 
 const DIR_MODE = 0o700;
 
-export function channelStateFile(store, account, kind) {
+export function channelStateFile(store: Pick<Store, 'under'>, account: string, kind: string) {
   const faults = [...componentFaults('account', account), ...componentFaults('channel kind', kind)];
   if (faults.length > 0) throw new StreamFault(faults);
   const dir = store.under('channels', encodeComponent(account));
@@ -33,7 +34,7 @@ export function channelStateFile(store, account, kind) {
   return path.join(dir, `${encodeComponent(kind)}.channel.json`);
 }
 
-export function readChannelState(store, account, kind) {
+export function readChannelState(store: Pick<Store, 'under'>, account: string, kind: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(channelStateFile(store, account, kind), 'utf8'));
   } catch {
@@ -44,8 +45,10 @@ export function readChannelState(store, account, kind) {
 // Merge at the top level only. A caller owns a block and writes the whole block,
 // so a shallow merge is enough and a deep one would silently keep a field the
 // caller meant to drop.
-export function writeChannelState(store, account, kind, patch) {
-  const state = { ...readChannelState(store, account, kind), account, kind, ...patch };
+export function writeChannelState(store: Pick<Store, 'under'>, account: string, kind: string, patch: unknown): Record<string, unknown> {
+  // Object spread deliberately preserves the old treatment of scalars and null.
+  // These are spread operands only, not validated channel state.
+  const state = { ...(readChannelState(store, account, kind) as object), account, kind, ...(patch as object) };
   writeAtomic(channelStateFile(store, account, kind), JSON.stringify(state, null, 2) + '\n');
   return state;
 }
@@ -53,7 +56,7 @@ export function writeChannelState(store, account, kind, patch) {
 // Every channel state file under the store, whoever wrote it. This is what a
 // check from outside the box reads, and what the runtime reads at start to know
 // whether it is resuming into a channel that was already failing.
-export function channelStatesUnder(store) {
+export function channelStatesUnder(store: Pick<Store, 'under'>) {
   const dir = store.under('channels');
   if (!fs.existsSync(dir)) return [];
   const found = [];
@@ -62,7 +65,7 @@ export function channelStatesUnder(store) {
     if (!fs.statSync(at).isDirectory()) continue;
     for (const name of fs.readdirSync(at).sort()) {
       if (!name.endsWith('.channel.json')) continue;
-      let content = null;
+      let content: unknown = null;
       try { content = JSON.parse(fs.readFileSync(path.join(at, name), 'utf8')); } catch { content = null; }
       found.push({
         account: decodeComponent(account),

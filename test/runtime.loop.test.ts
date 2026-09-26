@@ -1,3 +1,8 @@
+import type { Declaration, Channel, Teaching, Server, Status, TurnParams, Context } from '../runtime/types.ts';
+import type { MessageRecord, Attachment } from '../stream/store.ts';
+import type { OnTurn, FakeSession } from './fake-harness.ts';
+type TestDeclaration = Declaration & { schema: string; agent: { id: string; client: string }; channels: Channel[]; secrets: { name: string; path: string; purpose?: string }[]; tool_servers: Server[]; unit_of_work: { kind: string; id_from: string; idle_close_ms?: number }; sandbox: { mode: string; network: boolean }; limits: { max_turn_ms: number } };
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -12,18 +17,18 @@ import {
   ReleaseLoop, releaseIdFor, releaseDecision, unitIdFor, when, turnInput, replyInstruction,
   checkoutLine, followUpInput, taughtBlock, holdApplies, toolCallsIn, commandsIn, MAX_INLINE_ATTACHMENT_BYTES,
   NOTHING_TAUGHT, saidNothingTaught, teachCheckInput
-} from '../runtime/loop.mjs';
-import { EXIT, RuntimeFault, fault } from '../runtime/faults.mjs';
-import { replyHandler } from '../runtime/reply-tool.mjs';
-import { serveTeachTool } from '../runtime/teach-tool.mjs';
+} from '../runtime/loop.ts';
+import { EXIT, RuntimeFault, fault } from '../runtime/faults.ts';
+import { replyHandler } from '../runtime/reply-tool.ts';
+import { serveTeachTool } from '../runtime/teach-tool.ts';
 import { listTeachings, remember } from '../stream/teachings.ts';
-import { fakeHarness } from './fake-harness.mjs';
+import { fakeHarness } from './fake-harness.ts';
 import * as fixture from '../adapters/fixture/index.ts';
 
 const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
 
-function declaration(overrides = {}) {
+function declaration(overrides: Partial<TestDeclaration> = {}): TestDeclaration {
   return {
     schema: 'carbon.agent-declaration.v1',
     agent: { id: AGENT, client: 'ExampleCorp' },
@@ -48,7 +53,7 @@ function declaration(overrides = {}) {
 // refusal being tested two tests further down.
 const REPLY_LISTED = () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }];
 
-function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED, adapter = fixture } = {}) {
+function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED, adapter = fixture }: { decl?: TestDeclaration; onTurn?: ((store: Store) => OnTurn) | null; statuses?: () => Status[]; adapter?: object } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
   const store = Store.open(dir);
   const harness = fakeHarness({ onTurn: onTurn ? onTurn(store) : (() => 'completed'), statuses });
@@ -67,7 +72,7 @@ function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED
   return { loop, store, dir, harness };
 }
 
-function item(id, text, extra = {}) {
+function item(id: number | string, text: string, extra: Partial<ReturnType<typeof fixture.listPending>[number]> = {}) {
   return {
     conversation: 'c1',
     id: String(id),
@@ -81,7 +86,7 @@ function item(id, text, extra = {}) {
 
 // The model answers by calling the reply tool, which is what the runtime hands
 // it. Doing that here rather than pretending keeps the fence in the test.
-function answering(store, { text = 'the answer', requestId = null, times = 1 } = {}) {
+function answering(store: Store, { text = 'the answer', requestId = null, times = 1 }: { text?: string; requestId?: string | null; times?: number } = {}): (session: FakeSession, params: TurnParams) => string {
   const handle = replyHandler({ store, agent: AGENT });
   return (session, params) => {
     for (let i = 0; i < times; i++) {
@@ -97,7 +102,7 @@ function answering(store, { text = 'the answer', requestId = null, times = 1 } =
 
 test('six records in one packet are one release, turn and delivery in arrival order', async () => {
   const { loop, store, harness } = makeLoop({ onTurn: (s) => answering(s) });
-  const lines = [];
+  const lines: Record<string, unknown>[] = [];
   loop.log = (line) => lines.push(line);
   const packet = Array.from({ length: 6 }, (_, index) => item(index + 1, `body-${index + 1}`));
 
@@ -117,14 +122,14 @@ test('six records in one packet are one release, turn and delivery in arrival or
   const records = store.rebuild();
   const inbound = records.filter((r) => r.direction === 'inbound');
   assert.equal(inbound.length, 6);
-  assert.equal(new Set(inbound.map((r) => r.release.turn_id)).size, 1);
-  assert.ok(inbound.every((r) => r.release.completed_at), 'every record in the gather is completed');
+  assert.equal(new Set(inbound.map((r) => r.release!.turn_id)).size, 1); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
+  assert.ok(inbound.every((r) => r.release!.completed_at), 'every record in the gather is completed'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
   const outbound = records.filter((r) => r.direction === 'outbound');
   assert.equal(outbound.length, 1);
-  assert.equal(outbound[0].delivery.status, 'sent');
-  assert.equal(outbound[0].delivery.request_id, inbound[0].release.turn_id);
-  assert.deepEqual(lines.find((line) => line.event === 'release').message_ids, messageIds);
-  assert.deepEqual(lines.find((line) => line.event === 'turn').message_ids, messageIds);
+  assert.equal(outbound[0].delivery!.status, 'sent'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+  assert.equal(outbound[0].delivery!.request_id, inbound[0].release!.turn_id); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+  assert.deepEqual(lines.find((line) => line.event === 'release')!.message_ids, messageIds); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.deepEqual(lines.find((line) => line.event === 'turn')!.message_ids, messageIds); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('two records captured in one pass are one release, turn and delivery', async () => {
@@ -142,11 +147,11 @@ test('two records captured in one pass are one release, turn and delivery', asyn
 });
 
 test('the release is on the record before the turn is asked for', async () => {
-  let seen = null;
+  let seen = null as MessageRecord | null; // The fixture callback assigns this value before the awaited operation finishes; TypeScript cannot track that assignment.
   const { loop, store } = makeLoop({
     onTurn: (s) => () => {
       const record = s.rebuild().find((r) => r.direction === 'inbound');
-      seen = JSON.parse(fs.readFileSync(s.paths(record).record, 'utf8'));
+      seen = JSON.parse(fs.readFileSync(s.paths(record!).record, 'utf8')); // This fixture creates the selected value before this access; retain the original failure if it is absent.
       return 'completed';
     }
   });
@@ -154,10 +159,10 @@ test('the release is on the record before the turn is asked for', async () => {
   const record = store.rebuild()[0];
 
   await loop.releasePass();
-  assert.ok(seen.release, 'the turn ran with no release written');
-  assert.equal(seen.release.thread_id, 'thread-1');
-  assert.equal(seen.release.turn_id, releaseIdFor(record));
-  assert.equal(seen.release.completed_at, undefined, 'the release was completed before the turn finished');
+  assert.ok(seen!.release, 'the turn ran with no release written'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(seen!.release!.thread_id, 'thread-1'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
+  assert.equal(seen!.release!.turn_id, releaseIdFor(record)); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
+  assert.equal(seen!.release!.completed_at, undefined, 'the release was completed before the turn finished'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
 });
 
 test('a gathered release interrupted mid-turn is re-issued once and produces one reply', async () => {
@@ -181,12 +186,12 @@ test('a gathered release interrupted mid-turn is re-issued once and produces one
 
   const outbound = store.rebuild().filter((r) => r.direction === 'outbound');
   assert.equal(outbound.length, 1, 'the re-issue produced a second reply');
-  assert.equal(outbound[0].delivery.status, 'sent');
+  assert.equal(outbound[0].delivery!.status, 'sent'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
   assert.equal(second.session.turns.length, 1);
   assert.equal(second.session.turns[0].clientUserMessageId, releaseIdFor(records));
   assert.equal(outbound[0].reply_to, records[1].message_id);
   assert.ok(store.rebuild().filter((r) => r.direction === 'inbound')
-    .every((r) => r.release.completed_at));
+    .every((r) => r.release!.completed_at)); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
 });
 
 test('recovery completes every record of a gathered release whose reply was already sent', async () => {
@@ -202,7 +207,7 @@ test('recovery completes every record of a gathered release whose reply was alre
   loop.capture([item(1, 'first'), item(2, 'second')]);
   await loop.releasePass();
   const inbound = store.rebuild().filter((r) => r.direction === 'inbound');
-  const releaseId = releaseIdFor(inbound);
+  const releaseId = releaseIdFor(inbound!); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   store.markSent(releaseId, ['sent-1']);
 
   const recovered = loop.recover();
@@ -210,7 +215,7 @@ test('recovery completes every record of a gathered release whose reply was alre
   assert.deepEqual(recovered.reissue, []);
   assert.deepEqual(recovered.done, inbound.map((r) => r.message_id));
   assert.ok(store.rebuild().filter((r) => r.direction === 'inbound')
-    .every((r) => r.release.completed_at));
+    .every((r) => r.release!.completed_at)); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
 });
 
 test('records from two conversations in one pass become two releases', async () => {
@@ -219,7 +224,7 @@ test('records from two conversations in one pass become two releases', async () 
       const handle = replyHandler({ store: s, agent: AGENT });
       return (session, params) => {
         const conversation = params.input.match(/^conversation_id: (.+)$/m)?.[1];
-        handle({ conversation_id: conversation, request_id: params.clientUserMessageId, text: 'the answer' });
+        handle({ conversation_id: conversation!, request_id: params.clientUserMessageId, text: 'the answer' }); // This fixture creates the selected value before this access; retain the original failure if it is absent.
         return 'completed';
       };
     }
@@ -236,7 +241,7 @@ test('records from two conversations in one pass become two releases', async () 
 });
 
 test('a record captured while a gathered turn runs waits for the next pass', async () => {
-  let active;
+  let active: ReleaseLoop<FakeSession>;
   const { loop, harness } = makeLoop({
     onTurn: (s) => {
       const answer = answering(s);
@@ -262,7 +267,7 @@ test('a second reply under a sent request id returns the chunk ids and sends not
   await loop.pass([item(1, 'first')]);
 
   const handle = replyHandler({ store, agent: AGENT });
-  const requestId = releaseIdFor(store.rebuild().find((r) => r.direction === 'inbound'));
+  const requestId = releaseIdFor(store.rebuild().find((r) => r.direction === 'inbound')!); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   const again = handle({ conversation_id: `${ACCOUNT}:c1`, request_id: requestId, text: 'the answer' });
   assert.equal(again.data.status, 'already_sent');
   assert.ok(again.data.chunk_ids.length > 0);
@@ -276,7 +281,7 @@ test('a second reply under a pending request id is refused, and under a failed o
   handle({ conversation_id: `${ACCOUNT}:c1`, request_id: 'r-1', text: 'first try' });
 
   assert.throws(() => handle({ conversation_id: `${ACCOUNT}:c1`, request_id: 'r-1', text: 'second try' }),
-    (error) => error.faults.some((f) => f.code === 'REQUEST_ALREADY_PENDING'));
+    (error) => (error as RuntimeFault).faults.some((f) => f.code === 'REQUEST_ALREADY_PENDING')); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
 
   store.markFailed('r-1');
   const allowed = handle({ conversation_id: `${ACCOUNT}:c1`, request_id: 'r-1', text: 'after a known failure' });
@@ -290,7 +295,7 @@ test('an unknown send is never retried, whoever asks', async () => {
   handle({ conversation_id: `${ACCOUNT}:c1`, request_id: 'r-2', text: 'the answer' });
   store.markUnknown('r-2');
   assert.throws(() => handle({ conversation_id: `${ACCOUNT}:c1`, request_id: 'r-2', text: 'the answer' }),
-    (error) => error.faults.some((f) => f.code === 'DELIVERY_UNKNOWN_NEVER_RETRIED'));
+    (error) => (error as RuntimeFault).faults.some((f) => f.code === 'DELIVERY_UNKNOWN_NEVER_RETRIED')); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
 });
 
 test('an operator message holds the conversation and releases nothing', async () => {
@@ -318,14 +323,14 @@ test('an operator message holds the conversation and releases nothing', async ()
 // The conversation's declared kind is what decides it.
 
 // The same declaration with c1 named as a kind other than customer.
-function kindDeclaration(kind) {
+function kindDeclaration(kind: string) {
   const decl = declaration();
   decl.channels[0].conversations = [{ id: `${ACCOUNT}:c1`, kind }];
   return decl;
 }
 
 // The operator's own message, with the hold the adapter writes on it.
-function operatorItem(id, text) {
+function operatorItem(id: number, text: string) {
   return item(id, text, {
     role: 'operator',
     sender: 'operator-1',
@@ -443,8 +448,8 @@ test('a tool server nobody declared is refused by name, and no turn is taken', a
   });
   loop.capture([item(1, 'first')]);
   await assert.rejects(() => loop.releasePass(), (error) => {
-    assert.ok(error.faults.some((f) => f.code === 'TOOL_SERVER_UNDECLARED' && f.subject === 'codex_apps'),
-      JSON.stringify(error.faults));
+    assert.ok((error as RuntimeFault).faults.some((f) => f.code === 'TOOL_SERVER_UNDECLARED' && f.subject === 'codex_apps'), // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
+      JSON.stringify((error as RuntimeFault).faults)); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
     return true;
   });
 });
@@ -456,13 +461,13 @@ test('a failed turn writes permanent-error, latches, and stops with the latch co
   loop.capture([item(1, 'first')]);
 
   await assert.rejects(() => loop.releasePass(), (error) => {
-    assert.equal(error.exitCode, 78);
-    assert.equal(error.faults[0].code, 'TURN_FAILED');
+    assert.equal((error as RuntimeFault).exitCode, 78); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
+    assert.equal((error as RuntimeFault).faults[0].code, 'TURN_FAILED'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
     return true;
   });
   const record = store.rebuild().find((r) => r.direction === 'inbound');
-  assert.equal(record.disposition, 'permanent-error');
-  assert.ok(record.release.completed_at);
+  assert.equal(record!.disposition, 'permanent-error'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.ok(record!.release!.completed_at); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
   assert.ok(fs.existsSync(path.join(dir, 'channels', ACCOUNT, 'fixture.latch.json')));
 });
 
@@ -478,8 +483,8 @@ test('a completion time the harness gives in seconds is written as an ISO string
   });
   await loop.pass([item(1, 'first')]);
   const record = store.rebuild().find((r) => r.direction === 'inbound');
-  assert.equal(typeof record.release.completed_at, 'string');
-  assert.equal(record.release.completed_at, '2026-09-10T10:00:00.000Z');
+  assert.equal(typeof record!.release!.completed_at, 'string'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
+  assert.equal(record!.release!.completed_at, '2026-09-10T10:00:00.000Z'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
   assert.equal(when(1789034400), '2026-09-10T10:00:00.000Z');
   assert.equal(when(undefined), null);
 });
@@ -586,10 +591,10 @@ test('a record whose release faults is parked, and the channel keeps working', a
   assert.deepEqual(result.released.map((r) => r.message_id), [`${ACCOUNT}:c1:2`]);
 
   const parked = store.rebuild().find((r) => r.message_id === `${ACCOUNT}:c1:1`);
-  assert.equal(parked.disposition, 'parked');
-  assert.equal(parked.adapter_fields.park_faults[0].code, 'UNIT_ID_ABSENT');
-  assert.match(parked.adapter_fields.park_reason, /UNIT_ID_ABSENT/);
-  assert.ok(!parked.release, 'a record that never reached a turn carries no release');
+  assert.equal(parked!.disposition, 'parked'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal((parked!.adapter_fields!.park_faults as { code: string }[])[0].code, 'UNIT_ID_ABSENT'); // The parking operation retained this case's named faults; inspect their existing fields.
+  assert.match(parked!.adapter_fields!.park_reason as string, /UNIT_ID_ABSENT/); // The fixture supplies this text; the existing text assertion remains the runtime check.
+  assert.ok(!parked!.release, 'a record that never reached a turn carries no release'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('two units in one conversation become two releases', async () => {
@@ -624,7 +629,7 @@ test('the terminal latch still ends the process rather than parking a record', a
 
   await assert.rejects(
     () => loop.pass([item(1, 'the model refuses this permanently')]),
-    (error) => error.exitCode === EXIT.LATCHED && error.faults[0].code === 'TURN_FAILED'
+    (error) => (error as RuntimeFault).exitCode === EXIT.LATCHED && (error as RuntimeFault).faults[0].code === 'TURN_FAILED' // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
   );
 });
 
@@ -639,7 +644,7 @@ test('an app-server listing a tool server nobody declared still ends the process
 
   await assert.rejects(
     () => loop.pass([item(1, 'anything')]),
-    (error) => error.faults.some((f) => f.code === 'TOOL_SERVER_UNDECLARED')
+    (error) => (error as RuntimeFault).faults.some((f) => f.code === 'TOOL_SERVER_UNDECLARED') // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
   );
 });
 
@@ -648,7 +653,7 @@ test('an app-server listing a tool server nobody declared still ends the process
 // The first real message on a box was answered well and delivered nothing: the
 // model wrote its answer into its own message and never called the reply tool.
 // The runtime asks once, and then decides.
-function said(text) {
+function said(text: string): (store: Store) => OnTurn {
   return () => (session, params, n) => ({ status: 'completed', agent_message: `${text} (turn ${n})` });
 }
 
@@ -675,7 +680,7 @@ test('a turn that delivers nothing is followed up once, and the follow-up reply 
   const thread = JSON.parse(fs.readFileSync(path.join(dir, 'threads', `${ACCOUNT}~3Ac1.json`), 'utf8'));
   assert.equal(thread.turns.length, 2, 'exactly one follow-up');
   assert.equal(thread.turns[0].agent_message, 'Sure, here is the answer.');
-  assert.equal(store.rebuild().find((r) => r.direction === 'inbound').disposition, 'captured');
+  assert.equal(store.rebuild().find((r) => r.direction === 'inbound')!.disposition, 'captured'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('NO_REPLY closes every record of a gathered release with that reason', async () => {
@@ -692,8 +697,8 @@ test('NO_REPLY closes every record of a gathered release with that reason', asyn
 
   const records = store.rebuild().filter((r) => r.direction === 'inbound');
   assert.ok(records.every((record) => record.disposition === 'captured'));
-  assert.ok(records.every((record) => record.adapter_fields.reply_outcome === 'no-reply-declared'));
-  assert.ok(records.every((record) => record.release.completed_at), 'the gathered release stays open');
+  assert.ok(records.every((record) => record.adapter_fields!.reply_outcome === 'no-reply-declared')); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.ok(records.every((record) => record.release!.completed_at), 'the gathered release stays open'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
 });
 
 test('a follow-up that neither replies nor says NO_REPLY parks every gathered record', async () => {
@@ -706,8 +711,8 @@ test('a follow-up that neither replies nor says NO_REPLY parks every gathered re
 
   const records = store.rebuild().filter((r) => r.direction === 'inbound');
   assert.ok(records.every((record) => record.disposition === 'parked'));
-  assert.ok(records.every((record) => record.adapter_fields.park_reason === 'no-reply'));
-  assert.ok(records.every((record) => record.adapter_fields.park_faults[0].code === 'REPLY_ABSENT'));
+  assert.ok(records.every((record) => record.adapter_fields!.park_reason === 'no-reply')); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.ok(records.every((record) => (record.adapter_fields!.park_faults as { code: string }[])[0].code === 'REPLY_ABSENT')); // The parking operation retained this case's named faults; inspect their existing fields.
 });
 
 test('a turn that calls the reply tool is never followed up', async () => {
@@ -727,16 +732,16 @@ test('a turn that calls the reply tool is never followed up', async () => {
 test('a thread is opened on the work directory and never on the checkout', async () => {
   const { loop, harness, dir } = makeLoop();
   await loop.pass([item(1, 'a question')]);
-  assert.equal(harness.session.opens.length, 1);
-  assert.equal(harness.session.opens[0].cwd, dir);
-  assert.notEqual(harness.session.opens[0].cwd, loop.checkout);
+  assert.equal(harness.session.opens!.length, 1); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(harness.session.opens![0].cwd, dir); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.notEqual(harness.session.opens![0].cwd, loop.checkout); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('a loop with no work directory is refused rather than opened on the checkout', () => {
   assert.throws(() => new ReleaseLoop({
-    declaration: declaration(), channel: declaration().channels[0], store: null, storeDir: '/tmp',
-    adapter: fixture, harness: null, session: null, agent: AGENT, checkout: '/tmp/repo'
-  }), (error) => error.faults.some((f) => f.code === 'WORK_DIR_UNNAMED'));
+    declaration: declaration(), channel: declaration().channels[0], store: null as never, storeDir: '/tmp', // These deliberately invalid dependencies must stay unused before the missing-work refusal.
+    adapter: fixture, harness: null as never, session: null, agent: AGENT, checkout: '/tmp/repo' // These deliberately invalid dependencies must stay unused before the missing-work refusal.
+  }), (error) => (error as RuntimeFault).faults.some((f) => f.code === 'WORK_DIR_UNNAMED')); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
 });
 
 // The thread no longer opens on the checkout, so the turn says where it is: the
@@ -758,7 +763,7 @@ test('the reply instruction is the first line and the last line of the turn', ()
 });
 
 test('what a turn cost is in the log, because the store is not readable from outside the box', async () => {
-  const lines = [];
+  const lines: Record<string, unknown>[] = [];
   const { loop } = makeLoop({
     onTurn: (s) => (session, params) => {
       replyHandler({ store: s, agent: AGENT })({
@@ -786,9 +791,9 @@ test('an adapter whose send is a promise is awaited, not read for a status it ha
   const sent = [];
   loop.adapter = {
     ...fixture,
-    send: async (context, record) => {
+    send: async (context: Context, record: MessageRecord & { delivery: NonNullable<MessageRecord['delivery']> }) => {
       await new Promise((settled) => setTimeout(settled, 5));
-      sent.push(record.delivery.request_id);
+      sent.push(record.delivery!.request_id); // The reply in this case carries delivery state; direct access must still fail if it is absent.
       return { status: 'sent', chunk_ids: ['chunk-1'] };
     }
   };
@@ -799,8 +804,8 @@ test('an adapter whose send is a promise is awaited, not read for a status it ha
   assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
   const outbound = store.rebuild().filter((r) => r.direction === 'outbound');
   assert.equal(outbound.length, 1);
-  assert.equal(outbound[0].delivery.status, 'sent');
-  assert.deepEqual(outbound[0].delivery.chunk_ids, ['chunk-1']);
+  assert.equal(outbound[0].delivery!.status, 'sent'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+  assert.deepEqual(outbound[0].delivery!.chunk_ids, ['chunk-1']); // The reply in this case carries delivery state; direct access must still fail if it is absent.
 });
 
 test('the log says which tools a turn called, by name and never by argument', () => {
@@ -831,8 +836,8 @@ test('the log says which tools a turn called, by name and never by argument', ()
 // on the first client box it does not run at all — so a small text attachment
 // travels in the turn itself.
 
-function withAttachment(store, meta, bytes) {
-  const base = {
+function withAttachment(store: Store, meta: { mime: string; filename?: string; file?: string; bytes?: number; sha256?: string; download_failed?: boolean }, bytes: Uint8Array | null) {
+  const base: Pick<MessageRecord, 'schema' | 'agent' | 'source' | 'account' | 'conversation_id' | 'conversation_kind' | 'message_id' | 'platform_message_id' | 'revision' | 'direction' | 'role' | 'sender_id' | 'sender_name' | 'sent_at' | 'received_at' | 'body' | 'historical' | 'disposition'> = {
     schema: 'carbon.message.v1', agent: AGENT, source: 'fixture', account: ACCOUNT,
     conversation_id: `${ACCOUNT}:c1`, conversation_kind: 'direct',
     message_id: `${ACCOUNT}:c1:m1`, platform_message_id: 'm1', revision: 0,
@@ -915,7 +920,7 @@ test('a small text attachment travels in the turn input, under its own name and 
 
   assert.match(input, /attachments: 1/);
   assert.match(input, /- booking-note\.txt \(text\/plain, 43 bytes, sha256 [0-9a-f]{64}\)/);
-  assert.match(input, new RegExp(store.under(record.attachments[0].file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(input, new RegExp(store.under(record.attachments[0].file!).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   assert.match(input, /ALLD-UAT-778812/, 'the text the sender attached never reached the model');
   assert.match(input, /-----BEGIN ATTACHMENT [0-9a-f]{64}-----/);
   assert.match(input, /-----END ATTACHMENT [0-9a-f]{64}-----/);
@@ -962,7 +967,7 @@ test('an attachment too large to capture says its bytes are not on this box', ()
   const store = Store.open(dir);
   const record = withAttachment(store, {
     file: 'unwritten/' + 'a'.repeat(64), mime: 'text/plain', bytes: 40000000,
-    sha256: 'a'.repeat(64), download_failed: true, filename: 'archive.txt'
+    sha256: 'a'.repeat(64), download_failed: true as const, filename: 'archive.txt' // Keep this fixture's literal type without changing its value.
   }, null);
 
   const input = turnInput(record, 'release-1', { store });
@@ -977,7 +982,7 @@ test('a message with no attachment carries no attachment block', () => {
 });
 
 test('the turn the loop runs carries the attachment, not only the body', async () => {
-  const inputs = [];
+  const inputs: string[] = [];
   const { loop, store } = makeLoop({
     onTurn: (s) => (session, params) => {
       inputs.push(params.input ?? params.text ?? null);
@@ -994,7 +999,7 @@ test('the turn the loop runs carries the attachment, not only the body', async (
   await loop.pass([item(1, 'the reference is attached', { attachments: [collected] })]);
 
   const captured = store.rebuild().find((r) => r.direction === 'inbound');
-  assert.equal(captured.attachments[0].filename, 'booking-note.txt');
+  assert.equal((captured!.attachments[0] as Attachment).filename, 'booking-note.txt'); // The fixture wrote this attachment metadata; the assertion checks the stored value.
 
   assert.equal(inputs.length, 1);
   assert.match(String(inputs[0]), /booking-note\.txt/);
@@ -1006,7 +1011,7 @@ test('the turn the loop runs carries the attachment, not only the body', async (
 // crossed max_attachment_bytes. Capture must not mistake that integer for bytes
 // to write; the record parks nothing, ends nothing, and still releases.
 test('an oversize attachment parks nothing, ends nothing, and the message still releases', async () => {
-  const inputs = [];
+  const inputs: string[] = [];
   const { loop, store } = makeLoop({
     onTurn: (s) => (session, params) => {
       inputs.push(params.input ?? params.text ?? null);
@@ -1021,7 +1026,7 @@ test('an oversize attachment parks nothing, ends nothing, and the message still 
     mime: 'application/pdf',
     bytes: 40000000,
     sha256: 'b'.repeat(64),
-    download_failed: true,
+    download_failed: true as const, // Keep this fixture's literal type without changing its value.
     filename: 'archive.pdf'
   };
 
@@ -1030,9 +1035,9 @@ test('an oversize attachment parks nothing, ends nothing, and the message still 
   assert.deepEqual(outcome.parked, [], 'an oversize attachment parked a record');
 
   const captured = store.rebuild().find((r) => r.direction === 'inbound');
-  assert.equal(captured.attachments[0].download_failed, true);
-  assert.equal(captured.attachments[0].bytes, 40000000);
-  assert.equal(captured.release.thread_id !== undefined, true, 'the message did not release');
+  assert.equal((captured!.attachments[0] as Attachment).download_failed, true); // The fixture wrote this attachment metadata; the assertion checks the stored value.
+  assert.equal((captured!.attachments[0] as Attachment).bytes, 40000000); // The fixture wrote this attachment metadata; the assertion checks the stored value.
+  assert.equal(captured!.release!.thread_id !== undefined, true, 'the message did not release'); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
 
   assert.equal(inputs.length, 1, 'the turn the model saw never ran');
   assert.match(String(inputs[0]), /archive\.pdf \(application\/pdf, 40000000 bytes, sha256 b{64}\): too large to capture, so its bytes are not on this box\./);
@@ -1069,7 +1074,7 @@ test('a turn that ran nothing locally logs an empty list, which is an answer', (
 
 // One git command in the checkout, for the one proof that is about the checkout
 // not changing when a client teaches the agent something.
-function git(cwd, ...args) {
+function git(cwd: string, ...args: string[]) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
@@ -1079,7 +1084,7 @@ function git(cwd, ...args) {
 const MANAGEMENT = `${ACCOUNT}:c1`;
 const WORK_CHAT = `${ACCOUNT}:c2`;
 
-function teachingDeclaration(overrides = {}) {
+function teachingDeclaration(overrides: Partial<Teaching> = {}) {
   const decl = declaration({
     teaching: { enabled: true, max_active: 40, max_chars: 400, open_change_max_age_days: 7, ...overrides }
   });
@@ -1101,13 +1106,13 @@ const TEACH_LISTED = () => [
 // One captured message and one instruction taught in it, through the store
 // library, for the tests that are about what the block says rather than about how
 // it got written.
-function taught(text, { at = '2026-09-11T09:00:00.000Z' } = {}) {
+function taught(text: string, { at = '2026-09-11T09:00:00.000Z' } = {}) {
   const { loop, store } = makeLoop({ decl: teachingDeclaration(), statuses: TEACH_LISTED });
   loop.capture([item(1, 'a workbook landed here', { sender_name: 'Ada' })]);
-  const capture = store.rebuild().find((r) => r.direction === 'inbound');
+  const capture = store.rebuild().find((r) => r.direction === 'inbound')!; // This fixture creates the selected value before this access; retain the original failure if it is absent.
   remember(store, {
-    agent: AGENT, text, conversation_id: capture.conversation_id,
-    source_message_id: capture.message_id, max_active: 40, max_chars: 400, now: at
+    agent: AGENT, text, conversation_id: capture!.conversation_id, // This fixture creates the selected value before this access; retain the original failure if it is absent.
+    source_message_id: capture!.message_id, max_active: 40, max_chars: 400, now: at // This fixture creates the selected value before this access; retain the original failure if it is absent.
   });
   return { loop, store, capture };
 }
@@ -1130,14 +1135,14 @@ test('the taught list is in the turn, under its heading, after the reply instruc
   assert.equal(lines[heading + 3],
     '1. When a workbook lands here I will not change any records off it. (taught by Ada, 2026-09-11)');
   assert.ok(heading > lines.indexOf(replyInstruction(capture, 'release-1')), 'the block is before the reply instruction');
-  assert.ok(heading < lines.indexOf(capture.body), 'the block is after the message body');
+  assert.ok(heading < lines.indexOf(capture!.body), 'the block is after the message body'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('the heading counts what is standing, and the list is oldest first', () => {
   const { store, capture } = taught('The first thing.');
   remember(store, {
-    agent: AGENT, text: 'The second thing.', conversation_id: capture.conversation_id,
-    source_message_id: capture.message_id, max_active: 40, max_chars: 400,
+    agent: AGENT, text: 'The second thing.', conversation_id: capture!.conversation_id, // This fixture creates the selected value before this access; retain the original failure if it is absent.
+    source_message_id: capture!.message_id, max_active: 40, max_chars: 400, // This fixture creates the selected value before this access; retain the original failure if it is absent.
     now: '2026-09-11T11:00:00.000Z'
   });
 
@@ -1188,7 +1193,7 @@ test('the reply-enforcement follow-up turn carries the taught list too', () => {
 // nothing is installed, and the checkout is untouched between the two.
 test('an instruction taught in one turn is in the next turn of the unit, with nothing installed between them', async () => {
   const decl = teachingDeclaration();
-  const inputs = [];
+  const inputs: string[] = [];
   const { loop, store, dir, harness } = makeLoop({
     decl,
     statuses: TEACH_LISTED,
@@ -1205,8 +1210,8 @@ test('an instruction taught in one turn is in the next turn of the unit, with no
               name: 'remember',
               arguments: {
                 text: 'When a workbook lands here I will not change any records off it.',
-                conversation_id: capture.conversation_id,
-                source_message_id: capture.message_id
+                conversation_id: capture!.conversation_id, // This fixture creates the selected value before this access; retain the original failure if it is absent.
+                source_message_id: capture!.message_id // This fixture creates the selected value before this access; retain the original failure if it is absent.
               }
             }
           })
@@ -1259,7 +1264,7 @@ test('an instruction taught in one turn is in the next turn of the unit, with no
 // the same store, a message captured on a work chat, and nothing written.
 test('a remember from a work chat is refused by name and writes nothing, while the management conversation stands', async () => {
   const decl = teachingDeclaration();
-  const refusals = [];
+  const refusals: { isError?: boolean; structuredContent: { faults: { code: string; subject: string }[] } }[] = [];
   const { loop, store, dir } = makeLoop({
     decl,
     statuses: TEACH_LISTED,
@@ -1284,7 +1289,7 @@ test('a remember from a work chat is refused by name and writes nothing, while t
         refusals.push((await called.json()).result);
       }
       replyHandler({ store: s, agent: AGENT })({
-        conversation_id: params.input.match(/conversation_id: (\S+)/)[1],
+        conversation_id: params.input.match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
         request_id: params.clientUserMessageId, text: 'Understood.'
       });
       return 'completed';
@@ -1312,7 +1317,7 @@ test('a remember from a work chat is refused by name and writes nothing, while t
 });
 
 test('with teaching off the turn carries no block and the harness lists no teaching server', async () => {
-  const inputs = [];
+  const inputs: string[] = [];
   const decl = teachingDeclaration({ enabled: false });
   const { loop, dir } = makeLoop({
     decl,
@@ -1345,7 +1350,7 @@ test('with teaching off the turn carries no block and the harness lists no teach
 // A loop whose declaration turns teaching on, with the real teaching server on
 // loopback and the loop holding it, so a record written in a turn says which
 // release it was written under.
-async function teachCheckLoop({ onTurn }) {
+async function teachCheckLoop({ onTurn }: { onTurn: (store: Store) => OnTurn }) {
   const decl = teachingDeclaration();
   const made = makeLoop({ decl, statuses: TEACH_LISTED, onTurn });
   const served = await serveTeachTool({
@@ -1361,10 +1366,10 @@ async function teachCheckLoop({ onTurn }) {
 // and handed over.
 async function freePort() {
   const probe = net.createServer();
-  return new Promise((resolve, reject) => {
+  return new Promise<number>((resolve, reject) => {
     probe.on('error', reject);
     probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
+      const { port } = probe.address() as net.AddressInfo; // listen on an IP address succeeded before this callback reads the assigned port.
       probe.close(() => resolve(port));
     });
   });
@@ -1372,7 +1377,7 @@ async function freePort() {
 
 // The tool call the model would make, made over the real server so the record is
 // written by the path a box writes it by.
-async function callTeachTool(url, name, args) {
+async function callTeachTool(url: string, name: string, args: Record<string, unknown>) {
   const called = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1383,46 +1388,46 @@ async function callTeachTool(url, name, args) {
 
 // What the model answers with: the reply tool, told which declaration it is
 // serving, which is what holds a management reply where it is.
-function replyWith(store, decl, params, text) {
+function replyWith(store: Store, decl: Declaration, params: TurnParams, text: string) {
   return replyHandler({ store, agent: AGENT, declaration: decl })({
-    conversation_id: params.input.match(/conversation_id: (\S+)/)[1],
+    conversation_id: params.input.match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
     request_id: params.clientUserMessageId.replace(/-(follow-up|teach-check)$/, ''),
     text
   });
 }
 
 test('a management turn that recorded what it was taught sends its reply and takes no second turn', async () => {
-  let served = null;
+  let served = null as Awaited<ReturnType<typeof serveTeachTool>> | null; // The fixture callback assigns this value before the awaited operation finishes; TypeScript cannot track that assignment.
   const { loop, store, harness, decl } = await teachCheckLoop({
     onTurn: (s) => async (session, params) => {
       const capture = s.rebuild().find((r) => r.direction === 'inbound');
-      const result = await callTeachTool(served.url, 'remember', {
+      const result = await callTeachTool(served!.url, 'remember', { // This fixture creates the selected value before this access; retain the original failure if it is absent.
         text: 'When a workbook lands here I will not change any records off it.',
-        conversation_id: params.input.match(/conversation_id: (\S+)/)[1],
-        source_message_id: params.input.match(/message_id: (\S+)/)[1]
+        conversation_id: params.input.match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
+        source_message_id: params.input.match(/message_id: (\S+)/)![1] // This fixture creates the selected value before this access; retain the original failure if it is absent.
       });
       assert.notEqual(result.isError, true, JSON.stringify(result));
-      assert.equal(capture.message_id, params.input.match(/message_id: (\S+)/)[1],
+      assert.equal(capture!.message_id, params.input.match(/message_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
         'the turn stated a message_id that is not this message');
       replyWith(s, decl, params, 'Understood. I will wait for the reviewed updates.');
       return 'completed';
     }
   });
-  served = loop.teach;
+  served = loop.teach as Awaited<ReturnType<typeof serveTeachTool>>; // teachCheckLoop placed the actual served teaching tool here before the test uses it.
 
   let result;
   try {
     result = await loop.pass([item(1, 'A workbook landing here is not permission to change records.', { sender_name: 'Ada' })]);
   } finally {
-    await served.close();
+    await served!.close(); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   }
 
   assert.equal(harness.session.turns.length, 1, 'a turn that recorded what it was taught was followed up anyway');
   assert.equal(result.released[0].teach_check, 'released');
   assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
   const outbound = store.rebuild().find((r) => r.direction === 'outbound');
-  assert.equal(outbound.delivery.status, 'sent');
-  assert.equal(outbound.body, 'Understood. I will wait for the reviewed updates.');
+  assert.equal(outbound!.delivery!.status, 'sent'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+  assert.equal(outbound!.body, 'Understood. I will wait for the reviewed updates.'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   // The record says which release it was written under, and it was written by
   // the server rather than by anything the model passed.
   const [teaching] = listTeachings(store).active;
@@ -1430,8 +1435,8 @@ test('a management turn that recorded what it was taught sends its reply and tak
 });
 
 test('a management turn that recorded nothing is asked once, and NOTHING_TAUGHT sends the reply unchanged', async () => {
-  let served = null;
-  const inputs = [];
+  let served = null as Awaited<ReturnType<typeof serveTeachTool>> | null; // The fixture callback assigns this value before the awaited operation finishes; TypeScript cannot track that assignment.
+  const inputs: string[] = [];
   const { loop, store, harness, decl } = await teachCheckLoop({
     onTurn: (s) => (session, params) => {
       inputs.push(params.input);
@@ -1442,18 +1447,18 @@ test('a management turn that recorded nothing is asked once, and NOTHING_TAUGHT 
       return { status: 'completed', agent_message: `  ${NOTHING_TAUGHT}\n` };
     }
   });
-  served = loop.teach;
+  served = loop.teach as Awaited<ReturnType<typeof serveTeachTool>>; // teachCheckLoop placed the actual served teaching tool here before the test uses it.
 
   let result;
   try {
     result = await loop.pass([item(1, 'What is the position on the two cases?', { sender_name: 'Ada' })]);
   } finally {
-    await served.close();
+    await served!.close(); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   }
 
   assert.equal(harness.session.turns.length, 2, 'exactly one teach check');
-  const capture = store.rebuild().find((r) => r.direction === 'inbound');
-  assert.equal(inputs[1], teachCheckInput(capture, result.released[0].release_id,
+  const capture = store.rebuild().find((r) => r.direction === 'inbound')!; // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(inputs[1], teachCheckInput(capture!, result.released[0].release_id, // This fixture creates the selected value before this access; retain the original failure if it is absent.
     { store, declaration: decl }));
   assert.match(inputs[1], /^Your reply on this conversation is written and has not gone out yet\./);
   assert.match(inputs[1], /answer exactly NOTHING_TAUGHT/);
@@ -1461,14 +1466,14 @@ test('a management turn that recorded nothing is asked once, and NOTHING_TAUGHT 
   assert.equal(result.released[0].teach_check, 'released-nothing-taught');
   assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
   const outbound = store.rebuild().find((r) => r.direction === 'outbound');
-  assert.equal(outbound.delivery.status, 'sent');
+  assert.equal(outbound!.delivery!.status, 'sent'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
   // Never rewritten: the reply that goes out is the one the model wrote.
-  assert.equal(outbound.body, 'Both cases are with the reviewer.');
+  assert.equal(outbound!.body, 'Both cases are with the reviewer.'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   assert.deepEqual(listTeachings(store).records, []);
 });
 
 test('a management reply whose teach check is answered by neither a record nor NOTHING_TAUGHT is parked, unsent and unchanged', async () => {
-  let served = null;
+  let served = null as Awaited<ReturnType<typeof serveTeachTool>> | null; // The fixture callback assigns this value before the awaited operation finishes; TypeScript cannot track that assignment.
   const { loop, store, harness, decl } = await teachCheckLoop({
     onTurn: (s) => (session, params) => {
       if (params.clientUserMessageId.endsWith('-teach-check')) {
@@ -1478,13 +1483,13 @@ test('a management reply whose teach check is answered by neither a record nor N
       return 'completed';
     }
   });
-  served = loop.teach;
+  served = loop.teach as Awaited<ReturnType<typeof serveTeachTool>>; // teachCheckLoop placed the actual served teaching tool here before the test uses it.
 
   let result;
   try {
     result = await loop.pass([item(1, 'A workbook landing here is not permission to change records.', { sender_name: 'Ada' })]);
   } finally {
-    await served.close();
+    await served!.close(); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   }
 
   assert.equal(harness.session.turns.length, 2, 'asked more than once, or not at all');
@@ -1495,24 +1500,24 @@ test('a management reply whose teach check is answered by neither a record nor N
   assert.deepEqual(result.delivered, [], 'a reply claiming a memory nothing holds was sent');
 
   const outbound = store.rebuild().find((r) => r.direction === 'outbound');
-  assert.equal(outbound.disposition, 'parked');
-  assert.equal(outbound.adapter_fields.park_reason, 'unrecorded-teaching');
-  assert.equal(outbound.adapter_fields.park_faults[0].code, 'TEACHING_UNRECORDED');
+  assert.equal(outbound!.disposition, 'parked'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(outbound!.adapter_fields!.park_reason, 'unrecorded-teaching'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal((outbound!.adapter_fields!.park_faults as { code: string }[])[0].code, 'TEACHING_UNRECORDED'); // The parking operation retained this case's named faults; inspect their existing fields.
   // Held, so no deliver pass will ever take it, and the text is the model's own.
-  assert.equal(outbound.delivery.status, 'pending-teach-check');
-  assert.equal(outbound.body, 'Understood. I will not change any cases off a workbook.');
+  assert.equal(outbound!.delivery!.status, 'pending-teach-check'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
+  assert.equal(outbound!.body, 'Understood. I will not change any cases off a workbook.'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   assert.deepEqual(listTeachings(store).records, []);
 });
 
 test('a customer or an ops conversation pays no teach check: one turn, and the reply goes out', async () => {
-  let served = null;
+  let served = null as Awaited<ReturnType<typeof serveTeachTool>> | null; // The fixture callback assigns this value before the awaited operation finishes; TypeScript cannot track that assignment.
   const { loop, store, harness, decl } = await teachCheckLoop({
     onTurn: (s) => (session, params) => {
       replyWith(s, decl, params, 'On it.');
       return 'completed';
     }
   });
-  served = loop.teach;
+  served = loop.teach as Awaited<ReturnType<typeof serveTeachTool>>; // teachCheckLoop placed the actual served teaching tool here before the test uses it.
 
   let result;
   try {
@@ -1523,14 +1528,14 @@ test('a customer or an ops conversation pays no teach check: one turn, and the r
       item(2, 'Any news?', { conversation: 'c3', sender_name: 'A customer' })
     ]);
   } finally {
-    await served.close();
+    await served!.close(); // This fixture creates the selected value before this access; retain the original failure if it is absent.
   }
 
   assert.equal(harness.session.turns.length, 2, 'a conversation that is not the management one was teach-checked');
   assert.deepEqual(result.released.map((r) => r.teach_check), ['not-held', 'not-held']);
   assert.deepEqual(result.delivered.map((d) => d.status), ['sent', 'sent']);
   assert.ok(store.rebuild().filter((r) => r.direction === 'outbound')
-    .every((r) => r.delivery.status === 'sent' && r.disposition !== 'parked'));
+    .every((r) => r.delivery!.status === 'sent' && r.disposition !== 'parked')); // The reply in this case carries delivery state; direct access must still fail if it is absent.
 });
 
 // ---- the signal that a turn is running ---------------------------------------
@@ -1541,16 +1546,16 @@ test('a customer or an ops conversation pays no teach check: one turn, and the r
 // four endings a release has, and then proved to cost nothing when the channel's
 // own call is broken.
 
-function typingAdapter(behaviour, recorded = []) {
+function typingAdapter(behaviour: (recorded: string[], state: string) => unknown, recorded: string[] = []) {
   return {
-    adapter: { ...fixture, typing: (context, record, state) => behaviour(recorded, state) },
+    adapter: { ...fixture, typing: (context: Context, record: MessageRecord, state: string) => behaviour(recorded, state) },
     recorded
   };
 }
 
 test('an answered message shows the signal from before the turn until after the reply', async () => {
   fixture.forgetTyping();
-  let atTurn = null;
+  let atTurn = null as ReturnType<typeof fixture.typingRecorded> | null; // The fixture callback assigns this value before the awaited operation finishes; TypeScript cannot track that assignment.
   const { loop, store } = makeLoop({
     onTurn: (s) => (session, params) => {
       atTurn = fixture.typingRecorded();
@@ -1568,7 +1573,7 @@ test('an answered message shows the signal from before the turn until after the 
   // slower than that legitimately records a second composing.
   assert.ok(states.slice(0, -1).every((state) => state === 'composing'),
     `a state other than composing before the stop: ${JSON.stringify(states)}`);
-  assert.deepEqual(atTurn.map((call) => call.state), ['composing'],
+  assert.deepEqual(atTurn!.map((call) => call.state), ['composing'], // This fixture creates the selected value before this access; retain the original failure if it is absent.
     'the signal had not started when the harness was asked for the turn');
   assert.equal(fixture.typingRecorded()[0].conversation_id, `${ACCOUNT}:c1`);
   assert.ok(store.rebuild().some((r) => r.direction === 'outbound'),
@@ -1580,9 +1585,9 @@ test('a turn the model reports failed still stops the signal', async () => {
   const { loop } = makeLoop({ onTurn: () => () => 'failed' });
 
   await assert.rejects(() => loop.pass([item(1, 'a question')]),
-    (error) => error.faults[0].code === 'TURN_FAILED');
+    (error) => (error as RuntimeFault).faults[0].code === 'TURN_FAILED'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
 
-  assert.equal(fixture.typingRecorded().at(-1).state, 'paused');
+  assert.equal(fixture.typingRecorded().at(-1)!.state, 'paused'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('a release parked because nothing reached the contact still stops the signal', async () => {
@@ -1592,8 +1597,8 @@ test('a release parked because nothing reached the contact still stops the signa
   const result = await loop.pass([item(1, 'a question')]);
 
   assert.equal(result.released[0].reply, 'parked-no-reply');
-  assert.equal(store.rebuild().find((r) => r.direction === 'inbound').disposition, 'parked');
-  assert.equal(fixture.typingRecorded().at(-1).state, 'paused');
+  assert.equal(store.rebuild().find((r) => r.direction === 'inbound')!.disposition, 'parked'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  assert.equal(fixture.typingRecorded().at(-1)!.state, 'paused'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('a fault raised during the turn still stops the signal', async () => {
@@ -1608,12 +1613,12 @@ test('a fault raised during the turn still stops the signal', async () => {
   const result = await loop.pass([item(1, 'a question')]);
 
   assert.deepEqual(result.parked, [`${ACCOUNT}:c1:1`]);
-  assert.equal(fixture.typingRecorded().at(-1).state, 'paused');
+  assert.equal(fixture.typingRecorded().at(-1)!.state, 'paused'); // This fixture creates the selected value before this access; retain the original failure if it is absent.
 });
 
 test('a channel whose signal throws every time still answers, and says so once in the log', async () => {
   const { adapter } = typingAdapter(() => { throw new Error('the provider refused'); });
-  const lines = [];
+  const lines: Record<string, unknown>[] = [];
   const { loop, store } = makeLoop({ adapter, onTurn: (s) => answering(s) });
   loop.log = (line) => lines.push(line);
 
@@ -1623,7 +1628,7 @@ test('a channel whose signal throws every time still answers, and says so once i
   assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
   const outbound = store.rebuild().filter((r) => r.direction === 'outbound');
   assert.equal(outbound.length, 1);
-  assert.equal(outbound[0].delivery.status, 'sent');
+  assert.equal(outbound[0].delivery!.status, 'sent'); // The reply in this case carries delivery state; direct access must still fail if it is absent.
   const failed = lines.filter((l) => l.event === 'typing.failed');
   assert.ok(failed.length > 0, `no typing.failed line in ${JSON.stringify(lines.map((l) => l.event))}`);
   assert.equal(failed[0].channel, 'fixture');
@@ -1633,7 +1638,7 @@ test('a channel whose signal throws every time still answers, and says so once i
 
 test('an adapter that has no such signal runs the loop unchanged and logs nothing about it', async () => {
   const { typing, typingRecorded, forgetTyping, ...noTyping } = fixture;
-  const lines = [];
+  const lines: Record<string, unknown>[] = [];
   const { loop } = makeLoop({ adapter: noTyping, onTurn: (s) => answering(s) });
   loop.log = (line) => lines.push(line);
 
@@ -1644,8 +1649,8 @@ test('an adapter that has no such signal runs the loop unchanged and logs nothin
 });
 
 test('a signal that lands after the turn has ended is followed by a stop', async () => {
-  let settle;
-  const pending = new Promise((resolve) => { settle = resolve; });
+  let settle!: () => void; // The Promise executor synchronously supplies this resolver before the test calls it.
+  const pending = new Promise<void>((resolve) => { settle = resolve; });
   const { adapter, recorded } = typingAdapter((into, state) => {
     into.push(state);
     return state === 'composing' ? pending : undefined;

@@ -9,7 +9,7 @@
 // What is real in it, which is the whole point. The agent is started from its
 // own declaration by carbon-core's scored runner, through the codex app-server,
 // on the interface a client agent runs on live. The teaching tools are the real
-// `runtime/teach-tool.mjs`, started as a declared tool server of that
+// `runtime/teach-tool.ts`, started as a declared tool server of that
 // declaration, writing into a real store through `stream/teachings.ts`. The
 // boundary text the model reads is the real manifest. Nothing here stands in for
 // the model's judgment: what this file writes is the client repository, the
@@ -45,10 +45,10 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../stream/store.ts';
 import { listTeachings } from '../stream/teachings.ts';
-import { holdApplies, releaseDecision } from '../runtime/loop.mjs';
-import { resolveChannel } from '../runtime/channel.mjs';
+import { holdApplies, releaseDecision } from '../runtime/loop.ts';
+import { resolveChannel } from '../runtime/channel.ts';
 
-const TEACH_TOOL = path.resolve(import.meta.dirname, '..', 'runtime', 'teach-tool.mjs');
+const TEACH_TOOL = path.resolve(import.meta.dirname, '..', 'runtime', 'teach-tool.ts');
 const TEACH_PORT = 8731;
 
 const MANAGEMENT = 'proof-account:management';
@@ -230,7 +230,7 @@ function declarationFor(storeDir) {
     runtime: {
       // Pins the carbon-runtime release the scored turn is rendered by
       // (PA-196): the codex adapter reads this repository's own
-      // runtime/loop.mjs turnInput rather than composing a thinner turn of
+      // runtime/loop.ts turnInput rather than composing a thinner turn of
       // its own, so the case's turn is the same sentence a box would see.
       version: '0.7.1',
       sha256: '8d5b25ce4bc2d3f455f856d706a1fd0b583ecb608aa74ee0062e378d0b3b708b',
@@ -357,7 +357,7 @@ function caseRecord(caseId, spec, digest) {
     // below), in the shape carbon.case.v1 declares: the runtime's own
     // turnInput renders the turn from this, not from a runner-local prompt
     // (PA-196). conversation_id and the case id together give the release
-    // id runtime/loop.mjs derives, which is the same id the store's capture
+    // id runtime/loop.ts derives, which is the same id the store's capture
     // carries as its message_id.
     inbound: { conversation_id: spec.conversation, sender: spec.sender.id, sender_name: spec.sender.name, body: spec.body },
     prior_state: { kind: 'none' },

@@ -1,3 +1,6 @@
+import type { Declaration, Channel, Log, Harness, Session, ChildExit } from './types.ts';
+type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number };
+
 // The runtime process: the one thing a unit starts.
 //
 // It spawns the pinned harness as its direct child and exits non-zero if that
@@ -15,16 +18,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
-import { fault, report, RuntimeFault, EXIT } from './faults.mjs';
-import { refuseIfLatched } from './latch.mjs';
-import { takeLock, releaseLock } from './lock.mjs';
-import { loadAdapter } from './registry.mjs';
-import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.mjs';
-import { serveReplyTool, REPLY_PORT } from './reply-tool.mjs';
-import { serveTeachTool, TEACH_PORT } from './teach-tool.mjs';
-import { ReleaseLoop } from './loop.mjs';
-import { pollIntervalFor } from './poll.mjs';
-import { resolveChannel } from './channel.mjs';
+import { fault, report, RuntimeFault, EXIT } from './faults.ts';
+import { refuseIfLatched } from './latch.ts';
+import { takeLock, releaseLock } from './lock.ts';
+import { loadAdapter } from './registry.ts';
+import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.ts';
+import { serveReplyTool, REPLY_PORT } from './reply-tool.ts';
+import { serveTeachTool, TEACH_PORT } from './teach-tool.ts';
+import { ReleaseLoop } from './loop.ts';
+import { pollIntervalFor } from './poll.ts';
+import { resolveChannel } from './channel.ts';
 
 // Where each thing lives under an agent directory. Install renders the left-hand
 // side; the runtime reads it and guesses none of it.
@@ -41,7 +44,7 @@ import { resolveChannel } from './channel.mjs';
 // directory. The checkout stays at the stable path, read-only by ownership and
 // mode (the tools user owns it at 0555 and 0444), the turn input names it, and
 // the guidance the harness loads from `cwd` is linked into `work/` from it.
-export function placesUnder(agentDir) {
+export function placesUnder(agentDir: string) {
   return {
     declaration: path.join(agentDir, 'current', 'carbon.agent.json'),
     store: path.join(agentDir, 'store'),
@@ -85,7 +88,7 @@ export const GUIDANCE_NAMES = ['AGENTS.md', '.agents'];
 // this process.
 const MAX_GUIDANCE_DEPTH = 64;
 
-function copyResolved(from, to, name, depth = 0) {
+function copyResolved(from: string, to: string, name: string, depth = 0) {
   if (depth > MAX_GUIDANCE_DEPTH) {
     throw new RuntimeFault(fault('GUIDANCE_TOO_DEEP', from,
       `${name} in the checkout nests more than ${MAX_GUIDANCE_DEPTH} directories deep, which is what a symlink pointing back at its own parent looks like`,
@@ -102,7 +105,7 @@ function copyResolved(from, to, name, depth = 0) {
   }
 }
 
-export function placeGuidance({ work, checkout, log = () => {} }) {
+export function placeGuidance({ work, checkout, log = () => {} }: { work: string; checkout: string; log?: Log }) {
   if (!fs.existsSync(work)) {
     throw new RuntimeFault(fault('WORK_DIR_ABSENT', work,
       'the work directory is the directory a thread is opened on, and there is nothing at this path',
@@ -121,7 +124,7 @@ export function placeGuidance({ work, checkout, log = () => {} }) {
   return placed;
 }
 
-export function readDeclaration(file) {
+export function readDeclaration(file: string): unknown {
   if (!fs.existsSync(file)) {
     throw new RuntimeFault(fault('DECLARATION_ABSENT', file,
       'there is no declaration at this path, and the runtime reads every value it uses from one',
@@ -130,7 +133,7 @@ export function readDeclaration(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
-    throw new RuntimeFault(fault('DECLARATION_UNREADABLE', file, error.message,
+    throw new RuntimeFault(fault('DECLARATION_UNREADABLE', file, (error as { message?: unknown }).message, // Read the thrown message field verbatim; no string guarantee is made.
       'the declaration is one JSON object; run carbon declaration check against it'));
   }
 }
@@ -152,13 +155,13 @@ export function readDeclaration(file) {
 // The variable a key arrives under is the provider's own, which is why the mapping
 // is here and not in the declaration: a client repository does not get to name an
 // environment variable in this process.
-const PROVIDER_KEY_ENV = { openai: 'OPENAI_API_KEY' };
+const PROVIDER_KEY_ENV: Record<string, string> = { openai: 'OPENAI_API_KEY' };
 
 export const PROVIDER_AUTH = ['chatgpt', 'api_key'];
 
 // Returns the key file and the variable to pass it under, or null when the
 // harness authenticates itself.
-export function providerKey(declaration) {
+export function providerKey(declaration: Declaration) {
   const provider = declaration.provider ?? {};
   if (provider.auth === 'chatgpt') return null;
   if (provider.auth !== 'api_key') {
@@ -166,7 +169,8 @@ export function providerKey(declaration) {
       `a client agent authenticates by ${PROVIDER_AUTH.join(' or ')}, and this declaration says something else`,
       `declare provider.auth as ${PROVIDER_AUTH.join(' or ')}`));
   }
-  const name = PROVIDER_KEY_ENV[provider.name];
+// Preserve lookup of absent or inherited keys; no provider normalization occurs.
+  const name = PROVIDER_KEY_ENV[provider.name!];
   if (!name) {
     throw new RuntimeFault(fault('PROVIDER_UNKNOWN', String(provider.name),
       `this runtime knows how to pass a key to ${Object.keys(PROVIDER_KEY_ENV).join(', ')} and not to ${JSON.stringify(provider.name)}`,
@@ -181,7 +185,7 @@ export function providerKey(declaration) {
   return { path: secret.path, env: name };
 }
 
-export function harnessBinary(declaration, { harnessRoot, binary }) {
+export function harnessBinary(declaration: Declaration, { harnessRoot, binary }: { harnessRoot: string; binary?: string | null }) {
   if (binary) return binary;
   const version = declaration.harness?.version;
   const at = path.join(harnessRoot, String(version), 'codex');
@@ -193,20 +197,22 @@ export function harnessBinary(declaration, { harnessRoot, binary }) {
   return at;
 }
 
-function sleep(ms) {
+function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // The child dying mid-turn arrives as this fault rather than as a completion,
 // which is the harness's rule: a process exit is never a turn's completion.
-function isChildExit(error) {
-  return error?.fault?.code === 'HARNESS_CHILD_EXITED_MID_TURN'
-    || error?.faults?.some?.((f) => f.code === 'HARNESS_CHILD_EXITED_MID_TURN');
+function isChildExit(error: unknown) {
+  // Only the existing optional reads are assumed for arbitrary thrown values.
+  const fields = error as { fault?: { code?: unknown }; faults?: { some?: (test: (fault: { code?: unknown }) => boolean) => boolean } } | null | undefined;
+  return fields?.fault?.code === 'HARNESS_CHILD_EXITED_MID_TURN'
+    || fields?.faults?.some?.((f) => f.code === 'HARNESS_CHILD_EXITED_MID_TURN');
 }
 
 // Runs the agent. Returns an exit code; it does not call process.exit, so a test
 // can run it and read the answer.
-export async function run(options) {
+export async function run<S extends Session>(options: RunOptions<S>) {
   const {
     declaration, declarationPath, storeDir, codexHome, checkout, work, harnessRoot,
     binary = null, replyPort = REPLY_PORT, teachPort = TEACH_PORT,
@@ -224,26 +230,27 @@ export async function run(options) {
       'declare the channel the agent works on, or do not start a runtime for it'));
   }
 
-  const loaded = [];
+  const loaded: { channel: Channel; adapter: object; interval_ms: number | null }[] = [];
   const intervalFaults = [];
   for (const declaredChannel of channels) {
-    const channel = resolveChannel(declaration, declaredChannel);
+    // Resolution keeps raw transport overrides; this is the existing runtime operation contract.
+    const channel = resolveChannel(declaration, declaredChannel) as Channel;
     const adapter = adapters?.[channel.kind] ?? await loadAdapter(channel.kind);
     // The interval every channel is polled at, decided once, at start, against
     // the adapter's own floor. It is a refusal rather than a correction, and it
     // happens before a socket is opened: a declaration that would earn a day's
     // rate limit must not run for a minute first.
-    const { interval_ms, fault: named } = pollIntervalFor(channel, adapter);
+    const { interval_ms, fault: named } = pollIntervalFor(channel, adapter as { POLL_INTERVAL_FLOOR_MS?: number });
     if (named) intervalFaults.push(named);
     loaded.push({ channel, adapter, interval_ms });
   }
   if (intervalFaults.length > 0) throw new RuntimeFault(intervalFaults);
 
-  const locks = [];
-  const toolServers = [];
-  let reply = null;
-  let teach = null;
-  let session = null;
+  const locks: ReturnType<typeof takeLock>[] = [];
+  const toolServers: ReturnType<typeof startToolServers> = [];
+  let reply: Awaited<ReturnType<typeof serveReplyTool>> | null = null;
+  let teach: Awaited<ReturnType<typeof serveTeachTool>> | null = null;
+  let session: S | null = null;
   const stop = async () => {
     if (reply) await reply.close();
     if (teach) await teach.close();
@@ -254,12 +261,14 @@ export async function run(options) {
     // call keeps the process alive; on a box that is invisible, and off one it is
     // a command that never comes back.
     for (const { channel, adapter } of loaded) {
-      if (typeof adapter.stop !== 'function') continue;
+      // Optional adapter stop is used only after the existing callable check.
+      const operation = adapter as { stop?: (context: { store: Store; agent?: string; account: string; channel: Channel }) => unknown };
+      if (typeof operation.stop !== 'function') continue;
       try {
-        await adapter.stop({ store, agent: declaration.agent?.id, account: channel.account, channel });
+        await operation.stop({ store, agent: declaration.agent?.id, account: channel.account, channel });
       } catch (error) {
         log({ event: 'adapter.stop_failed', channel: channel.kind, account: channel.account,
-          problem: error?.message ?? String(error) });
+          problem: (error as { message?: unknown } | null)?.message ?? String(error) }); // Read the thrown message field verbatim; no string guarantee is made.
       }
     }
     for (const lock of locks) releaseLock(lock.file);
@@ -294,7 +303,7 @@ export async function run(options) {
     // a reply written in the management conversation waits where it is until the
     // runtime has asked the turn what it recorded. Every other conversation is
     // untouched by it.
-    reply = await serveReplyTool({ store, agent: declaration.agent?.id, declaration, work, port: replyPort });
+    reply = await serveReplyTool({ store, agent: declaration.agent?.id!, declaration, work, port: replyPort });
     log({ event: 'reply_tool.listening', url: reply.url });
 
     // The teaching tools, on the declaration's word and on nothing else. With
@@ -302,7 +311,7 @@ export async function run(options) {
     // harness is told about none, and nothing else about this process changes.
     if (declaration.teaching?.enabled === true) {
       teach = await serveTeachTool({
-        store, agent: declaration.agent?.id, declaration, port: teachPort
+        store, agent: declaration.agent?.id!, declaration, port: teachPort
       });
       log({ event: 'teach_tool.listening', url: teach.url });
     }
@@ -323,17 +332,18 @@ export async function run(options) {
 
     // The child dying is the end of this process. The pair is one unit; systemd
     // restarts both, and the store says what the restart owes.
-    let childExit = null;
+    let childExit: ChildExit | null = null;
     session.exit.then((exit) => { childExit = exit; });
 
     const loops = loaded.map(({ channel, adapter, interval_ms }) => {
       const loop = new ReleaseLoop({
-        declaration, channel, store, storeDir, adapter, harness, session,
-        agent: declaration.agent?.id, checkout, work, teach, log, now
+        declaration, channel, store, storeDir, adapter, harness, session: session!,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
+        agent: declaration.agent?.id!, checkout, work, teach, log, now // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
       });
-      loop.intervalMs = interval_ms;
+      // Interval faults were refused before any loop was created.
+      loop.intervalMs = interval_ms!;
       if (harness.onToolServerStatus) {
-        harness.onToolServerStatus(session, () => { loop.toolStatusStale = true; });
+        harness.onToolServerStatus(session!, () => { loop.toolStatusStale = true; });
       }
       return loop;
     });
@@ -351,7 +361,7 @@ export async function run(options) {
     while (done < passes) {
       if (childExit) break;
       for (const loop of loops) {
-        if (dueAt.get(loop) > now()) continue;
+        if (dueAt.get(loop)! > now()) continue;
         try {
           await loop.pass(items(loop.channel));
         } catch (error) {
@@ -364,13 +374,13 @@ export async function run(options) {
       }
       done += 1;
       if (done < passes && !childExit) {
-        await sleep(Math.max(0, Math.min(...loops.map((loop) => dueAt.get(loop))) - now()));
+        await sleep(Math.max(0, Math.min(...loops.map((loop) => dueAt.get(loop)!)) - now())); // dueAt was initialized for every loop above and entries are never removed.
       }
     }
 
     if (childExit) {
       report([fault('HARNESS_CHILD_EXITED', String(declaration.harness?.version),
-        `the app-server exited with code ${childExit.code} signal ${childExit.signal}`,
+        `the app-server exited with code ${(childExit as ChildExit).code} signal ${(childExit as ChildExit).signal}`, // Only the exit callback or caught child-exit path assigns this value; preserve the original event fields.
         'the unit restarts the pair; the store says what the restart owes')]);
       return EXIT.HARNESS_EXITED;
     }

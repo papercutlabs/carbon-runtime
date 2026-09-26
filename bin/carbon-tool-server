@@ -22,9 +22,9 @@
 
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.mjs';
-import { readDeclaration, placesUnder } from '../runtime/index.mjs';
-import { toolsUserServer, commandFor, environmentFor, serverNameFromInstance } from '../runtime/tool-servers.mjs';
+import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.ts';
+import { readDeclaration, placesUnder } from '../runtime/index.ts';
+import { toolsUserServer, commandFor, environmentFor, serverNameFromInstance } from '../runtime/tool-servers.ts';
 
 const HELP = `carbon-tool-server — run one tool server as the tools user, under its own unit
 

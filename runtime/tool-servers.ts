@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'node:child_process';
+import type { Declaration, Server, Log } from './types.ts';
 // The tool servers, and which of them this process starts.
 //
 // A stdio tool server is started by the harness, as the agent user, which is the
@@ -34,18 +36,18 @@
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
-import { fault, RuntimeFault } from './faults.mjs';
+import { fault, RuntimeFault } from './faults.ts';
 
 // The name of a secret becomes the environment variable that carries its path.
 // A tool that wants a different name says so in runtime.env, which is a path and
 // not a value, so nothing secret is written into an environment either way.
-export function secretEnvName(secretName) {
+export function secretEnvName(secretName: string) {
   return `CARBON_SECRET_${secretName.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
 }
 
-export function environmentFor(declaration, server) {
+export function environmentFor(declaration: Declaration, server: Server) {
   const byName = new Map((declaration.secrets ?? []).map((s) => [s.name, s]));
-  const env = {};
+  const env: NodeJS.ProcessEnv = {};
   for (const ref of server.secret_refs ?? []) {
     const secret = byName.get(ref);
     if (!secret) {
@@ -62,8 +64,9 @@ export function environmentFor(declaration, server) {
 // The argument vector, as one list, so the same thing is used to start the server,
 // to say in a log what was started, and to recognise the process in a check from
 // outside the box.
-export function commandFor(declaration, server, { declarationPath, node = process.execPath }) {
-  const address = new URL(server.url);
+export function commandFor(declaration: Declaration, server: Server, { declarationPath, node = process.execPath }: { declarationPath: string; node?: string }) {
+  // The declaration caller supplies the URL; URL retains its native refusal otherwise.
+  const address = new URL(server.url!);
   return {
     command: node,
     args: [
@@ -78,7 +81,7 @@ export function commandFor(declaration, server, { declarationPath, node = proces
 // The server's name, out of the systemd instance name and the agent id the
 // declaration carries. Splitting on the hyphen alone would be a guess: both halves
 // may hold one.
-export function serverNameFromInstance(instance, agentId) {
+export function serverNameFromInstance(instance: string, agentId: string) {
   const prefix = `${agentId}-`;
   if (!instance.startsWith(prefix) || instance.length === prefix.length) {
     throw new RuntimeFault(fault('TOOL_UNIT_INSTANCE_UNREADABLE', instance,
@@ -90,7 +93,7 @@ export function serverNameFromInstance(instance, agentId) {
 
 // The server the declaration names, found by name and checked to be the shape the
 // tool unit's launcher can start.
-export function toolsUserServer(declaration, name) {
+export function toolsUserServer(declaration: Declaration, name: string) {
   const server = (declaration.tool_servers ?? []).find((s) => s.name === name);
   if (!server) {
     throw new RuntimeFault(fault('TOOL_SERVER_UNDECLARED', name,
@@ -112,13 +115,13 @@ export function toolsUserServer(declaration, name) {
 
 // Which servers this process starts as its own children: the http ones that run as
 // the agent user. A tools-user server has its own unit and is never here.
-export function serversToStart(declaration) {
+export function serversToStart(declaration: Declaration) {
   return (declaration.tool_servers ?? [])
     .filter((s) => s.transport === 'http' && s.runs_as !== 'tools');
 }
 
 // Which servers this process waits for rather than starts.
-export function serversToAwait(declaration) {
+export function serversToAwait(declaration: Declaration) {
   return (declaration.tool_servers ?? [])
     .filter((s) => s.transport === 'http' && s.runs_as === 'tools');
 }
@@ -126,11 +129,11 @@ export function serversToAwait(declaration) {
 // Does something answer on this address? A tcp connect and nothing more: the
 // question is whether the unit that owns this port is up, and an MCP handshake
 // would be a second question with its own failure modes.
-export function answers(url, { timeoutMs = 2000, connect = net.connect } = {}) {
+export function answers(url: string, { timeoutMs = 2000, connect = net.connect } = {}): Promise<boolean> {
   const address = new URL(url);
   return new Promise((resolve) => {
     const socket = connect({ host: address.hostname, port: Number(address.port) });
-    const done = (value) => { socket.destroy(); resolve(value); };
+    const done = (value: boolean) => { socket.destroy(); resolve(value); };
     socket.setTimeout(timeoutMs);
     socket.on('connect', () => done(true));
     socket.on('timeout', () => done(false));
@@ -143,17 +146,17 @@ export function answers(url, { timeoutMs = 2000, connect = net.connect } = {}) {
 // carries on: the agent still has to read its mailbox, and release is held by name
 // while the server is down, which is the same thing that happens today when a
 // server this process started dies at hour three.
-export async function awaitToolServers(declaration, {
+export async function awaitToolServers(declaration: Declaration, {
   timeoutMs = 30000, intervalMs = 250, log = () => {}, now = () => Date.now(),
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), probe = answers
-} = {}) {
+}: { timeoutMs?: number; intervalMs?: number; log?: Log; now?: () => number; sleep?: (ms: number) => Promise<unknown>; probe?: (url: string) => Promise<boolean> } = {}) {
   const waiting = serversToAwait(declaration);
   const results = [];
   const deadline = now() + timeoutMs;
   for (const server of waiting) {
     let up = false;
     for (;;) {
-      up = await probe(server.url);
+      up = await probe(server.url!); // The declaration supplies the URL; the existing URL constructor retains its native refusal for malformed input.
       if (up || now() >= deadline) break;
       await sleep(intervalMs);
     }
@@ -179,7 +182,7 @@ export async function awaitToolServers(declaration, {
 // exits is not restarted here: the harness reports it down through
 // mcpServerStatus, and a required server that is down holds release, by name.
 // Restarting a thing that just died is how a box hides a broken credential.
-export function startToolServers(declaration, { declarationPath, spawnFn = spawn, onExit = () => {} }) {
+export function startToolServers(declaration: Declaration, { declarationPath, spawnFn = spawn, onExit = () => {} }: { declarationPath: string; spawnFn?: typeof spawn; onExit?: (name: string, code: number | null, signal: NodeJS.Signals | null) => void }) {
   const started = [];
   const faults = [];
   for (const server of serversToStart(declaration)) {
@@ -197,7 +200,9 @@ export function startToolServers(declaration, { declarationPath, spawnFn = spawn
     }
     const { command, args } = commandFor(declaration, server, { declarationPath });
     const env = environmentFor(declaration, server);
-    const child = spawnFn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env, cwd: server.cwd });
+    // Command presence was checked above; preserve the commandFor result
+    // as raw values publicly and narrow only this existing spawn operation.
+    const child = spawnFn(command, args as string[], { stdio: ['ignore', 'pipe', 'pipe'], env, cwd: server.cwd });
     child.on('exit', (code, signal) => onExit(server.name, code, signal));
     started.push({ name: server.name, url: server.url, child, command, args });
   }
@@ -208,7 +213,7 @@ export function startToolServers(declaration, { declarationPath, spawnFn = spawn
   return started;
 }
 
-export function stopToolServers(started) {
+export function stopToolServers(started: { child: Pick<ChildProcess, 'kill'> }[] | null | undefined) {
   for (const server of started ?? []) {
     try { server.child.kill('SIGTERM'); } catch { /* already gone */ }
   }

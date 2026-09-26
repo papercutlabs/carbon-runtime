@@ -1095,7 +1095,7 @@ function untestedSubcommands(root, modules, out, notes) {
   notes.push(`SHAPE_UNTESTED_SUBCOMMAND: ${counted} subcommands read off bin/`);
 }
 
-const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.ts', 'tools/lib/fault.mjs', 'runtime/faults.mjs', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
+const FAULT_LIBRARIES = new Set(['lib/faults.mjs', 'stream/faults.ts', 'tools/lib/fault.mjs', 'runtime/faults.ts', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
 
 function errorPaths(modules, out) {
   for (const module of modules.values()) {

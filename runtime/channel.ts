@@ -1,3 +1,4 @@
+import type { Declaration, Channel } from './types.ts';
 // What an adapter is handed as its channel.
 //
 // The declaration's channel block holds two kinds of thing. Some of it is policy
@@ -15,24 +16,25 @@
 // adapter at the moment it is used. A reference to a secret nobody declared is
 // refused here by name, at start, rather than at the first poll.
 
-import { fault, RuntimeFault } from './faults.mjs';
+import { fault, RuntimeFault } from './faults.ts';
 
 // Every transport key whose value is the name of a declared secret rather than a
 // value. The resolved path is written on the channel under the key with `_ref`
 // removed, which is the name the adapter reads.
 const SECRET_REFS = ['netrc_ref', 'bot_token_ref'];
 
-export function resolveChannel(declaration, channel) {
+export function resolveChannel(declaration: Declaration | null | undefined, channel: Channel): Record<string, unknown> {
   const faults = [];
   const declared = new Map((declaration?.secrets ?? []).map((s) => [s.name, s.path]));
   const transport = { ...(channel?.transport ?? {}) };
-  const resolved = {};
+  const resolved: Record<string, unknown> = {};
 
   for (const key of SECRET_REFS) {
     if (transport[key] === undefined) continue;
     const name = transport[key];
     delete transport[key];
-    const path = declared.get(name);
+    // Map lookup accepts the raw key; this operation does not coerce or validate it.
+    const path = declared.get(name as string);
     if (path === undefined) {
       faults.push(fault('CHANNEL_SECRET_UNDECLARED', `channels.${channel.kind}:${channel.account}.transport.${key}`,
         `the channel names the secret ${JSON.stringify(name)} and the declaration declares no secret by that name`,
@@ -49,7 +51,8 @@ export function resolveChannel(declaration, channel) {
       'write release: quiet and quiet_ms: 0'));
   }
   if (channel?.release === 'quiet'
-    && (!Number.isFinite(channel.quiet_ms) || !Number.isInteger(channel.quiet_ms) || channel.quiet_ms < 0)) {
+    // The preceding finite/integer tests reject an absent quiet interval.
+    && (!Number.isFinite(channel.quiet_ms) || !Number.isInteger(channel.quiet_ms) || channel.quiet_ms! < 0)) {
     faults.push(fault('RELEASE_QUIET_MS_ABSENT', `${subject}.quiet_ms`,
       'a quiet channel needs quiet_ms as a non-negative integer, and without it the runtime never releases',
       'set quiet_ms; 0 releases at once'));
@@ -80,7 +83,7 @@ export function resolveChannel(declaration, channel) {
 // what is taught there is taught to the agent everywhere. There is one per agent
 // and `carbon declaration check` refuses teaching that is enabled without
 // exactly one.
-export function conversationKindOf(channel, conversation_id) {
+export function conversationKindOf(channel: Partial<Channel> | null | undefined, conversation_id: unknown): unknown {
   const named = (channel?.conversations ?? []).find((c) => c?.id === conversation_id);
   if (named?.kind) return named.kind;
   // The declared default, and no default of this file's. A channel with no
@@ -93,7 +96,7 @@ export function conversationKindOf(channel, conversation_id) {
 // The one conversation this agent is taught in, across every channel, or null
 // when no channel declares one. The teach tools refuse a source message from
 // anywhere else, so this is what they refuse against.
-export function managementConversationOf(declaration) {
+export function managementConversationOf(declaration: Declaration | null | undefined) {
   const found = (declaration?.channels ?? [])
     .flatMap((channel) => channel?.conversations ?? [])
     .filter((conversation) => conversation?.kind === 'management');

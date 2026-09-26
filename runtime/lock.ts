@@ -12,13 +12,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fault, RuntimeFault, EXIT } from './faults.mjs';
+import { fault, RuntimeFault, EXIT } from './faults.ts';
 import { encodeComponent } from '../stream/encode.ts';
 
 // What `ps` says about a pid, or null when there is no such process. Reading our
 // own command line the same way is deliberate: the two strings are then produced
 // by the same tool and compare without a guess about how an argument was quoted.
-export function commandLineOf(pid) {
+export function commandLineOf(pid: unknown) {
   try {
     const out = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
     const line = out.split('\n')[0].trim();
@@ -28,13 +28,13 @@ export function commandLineOf(pid) {
   }
 }
 
-export function lockFile(storeDir, channelKey) {
+export function lockFile(storeDir: string, channelKey: string) {
   return path.join(storeDir, 'locks', `${encodeComponent(channelKey)}.json`);
 }
 
 // Returns { file, taken_over, previous }. Throws a RuntimeFault with EXIT.LOCK_HELD
 // when a live process of the same command line holds it.
-export function takeLock(storeDir, channelKey, { pid = process.pid, commandLine = null } = {}) {
+export function takeLock(storeDir: string, channelKey: string, { pid = process.pid, commandLine = null }: { pid?: number; commandLine?: string | null } = {}) {
   const file = lockFile(storeDir, channelKey);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const mine = {
@@ -44,7 +44,7 @@ export function takeLock(storeDir, channelKey, { pid = process.pid, commandLine 
     taken_at: new Date().toISOString()
   };
 
-  let previous = null;
+  let previous: unknown = null;
   let takenOver = false;
   if (fs.existsSync(file)) {
     try {
@@ -52,10 +52,12 @@ export function takeLock(storeDir, channelKey, { pid = process.pid, commandLine 
     } catch {
       previous = null;
     }
-    const holder = previous && Number.isInteger(previous.pid) ? commandLineOf(previous.pid) : null;
-    if (holder !== null && previous && holder === previous.command_line && previous.pid !== pid) {
+    // Only field reads are assumed here; the returned previous value stays unknown.
+    const fields = previous as { pid?: unknown; command_line?: unknown; taken_at?: unknown } | null;
+    const holder = previous && Number.isInteger(fields?.pid) ? commandLineOf(fields?.pid) : null;
+    if (holder !== null && previous && holder === fields?.command_line && fields?.pid !== pid) {
       throw new RuntimeFault(fault('ADAPTER_LOCK_HELD', channelKey,
-        `pid ${previous.pid} is alive, runs the same command line, and took this adapter's lock at ${previous.taken_at}`,
+        `pid ${fields?.pid} is alive, runs the same command line, and took this adapter's lock at ${fields?.taken_at}`,
         'stop the other runtime before starting this one; one adapter has one release loop'), EXIT.LOCK_HELD);
     }
     fs.unlinkSync(file);
@@ -72,6 +74,6 @@ export function takeLock(storeDir, channelKey, { pid = process.pid, commandLine 
   return { file, taken_over: takenOver, previous };
 }
 
-export function releaseLock(file) {
+export function releaseLock(file: string) {
   try { fs.unlinkSync(file); } catch { /* a lock already gone is a lock released */ }
 }

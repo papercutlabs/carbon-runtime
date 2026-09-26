@@ -2,7 +2,7 @@
   "schema": "carbon.tool-server.v1",
   "name": "carbon-teach",
   "version": "1",
-  "entry": "../teach-tool.mjs",
+  "entry": "../teach-tool.ts",
   "transport": "http",
   "secrets": [],
   "tools": [
