@@ -47,7 +47,7 @@ function botServerOf({ respond }: { respond: Respond }) {
   globalThis.fetch = (async (url: string, options: RequestInit = {}) => {
     if (url.includes('/getUpdates')) {
       calls += 1;
-      const params = JSON.parse(options.body as string); // The fixture supplies this text; the existing text assertion remains the runtime check.
+      const params = JSON.parse(options.body as string); // The adapter JSON-encodes this request; narrow RequestInit.body only for this fake fetch handler's JSON.parse.
       const offset = params.offset ?? null;
       const produced = respond({ call: calls, offset }) ?? [];
       const result = produced.filter((one) => offset === null || one.update_id >= offset);
@@ -56,7 +56,7 @@ function botServerOf({ respond }: { respond: Respond }) {
       return { status: 200, json: async () => ({ ok: true, result }) };
     }
     if (url.includes('/getFile')) {
-      const { file_id } = JSON.parse(options.body as string); // The fixture supplies this text; the existing text assertion remains the runtime check.
+      const { file_id } = JSON.parse(options.body as string); // The adapter JSON-encodes this request; narrow RequestInit.body only for this fake fetch handler's JSON.parse.
       return { status: 200, json: async () => ({ ok: true, result: { file_path: `files/${file_id}.jpg` } }) };
     }
     if (url.includes('/file/bot')) {
@@ -67,7 +67,7 @@ function botServerOf({ respond }: { respond: Respond }) {
       return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(bytes).buffer };
     }
     if (url.includes('/sendMessage')) {
-      const params = JSON.parse(options.body as string); // The fixture supplies this text; the existing text assertion remains the runtime check.
+      const params = JSON.parse(options.body as string); // The adapter JSON-encodes this request; narrow RequestInit.body only for this fake fetch handler's JSON.parse.
       sent.push(params);
       return {
         status: 200,
@@ -75,7 +75,7 @@ function botServerOf({ respond }: { respond: Respond }) {
       };
     }
     throw new Error(`unexpected fake request ${url}`);
-  }) as unknown as typeof fetch; // This fixture creates the selected value before this access; retain the original failure if it is absent.
+  }) as unknown as typeof fetch; // Install a synthetic fetch that accepts the adapter's string URLs and implements only the response fields used here: status, json, and file ok/arrayBuffer.
   return { asked, sent, restore: () => { globalThis.fetch = previous; } };
 }
 

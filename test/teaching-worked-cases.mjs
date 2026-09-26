@@ -228,10 +228,10 @@ function declarationFor(storeDir) {
       artifact_sha256: '0'.repeat(64)
     },
     runtime: {
-      // Pins the carbon-runtime release the scored turn is rendered by
-      // (PA-196): the codex adapter reads this repository's own
-      // runtime/loop.ts turnInput rather than composing a thinner turn of
-      // its own, so the case's turn is the same sentence a box would see.
+      // This older proof still pins 0.7.1, which carries runtime/loop.mjs
+      // and lacks stream/store.ts and stream/teachings.ts. The current
+      // scored-run loader requires those TypeScript modules, so this retained
+      // pin cannot demonstrate the converted loader without a separate update.
       version: '0.7.1',
       sha256: '8d5b25ce4bc2d3f455f856d706a1fd0b583ecb608aa74ee0062e378d0b3b708b',
       node_version: '22',
