@@ -36,7 +36,9 @@ const NAME = /^[a-z][a-z0-9_]*$/;
 type Thrown = { message?: unknown };
 type ReturnField = { name?: unknown; what?: unknown };
 type ReturnsSection = { what?: unknown; fields?: unknown };
-type ShapeTool = { returns?: { fields?: Array<{ name?: unknown }> } };
+// Public shapeReturn walks tool.returns.fields as the original property path.
+// Presence is not checked; a missing returns or fields still throws at that read.
+type ShapeTool = { returns: { fields: Iterable<{ name?: unknown }> } };
 
 export function manifestPath(serverDir: string) {
   return path.join(serverDir, MANIFEST_FILE);
@@ -48,7 +50,9 @@ export function readManifest(serverDir: string) {
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (error) {
-    // Node's thrown value is untyped; the original read of .message is preserved.
+    // Catch binding is unknown. .message is read as the original field access;
+    // it is not a string check. A non-string or missing message still reaches
+    // fault(), which refuses a non-string problem; a throwing getter still throws.
     refuseAll([fault('MANIFEST_UNREADABLE', file, (error as Thrown).message as string,
       `write ${MANIFEST_FILE} beside the server; carbon-core/tools/client-tool-reference.md section 3 gives its shape`)]);
   }
@@ -56,6 +60,8 @@ export function readManifest(serverDir: string) {
     // Unreadable files already refused, so text is the file body when parse runs.
     return JSON.parse(text as string);
   } catch (error) {
+    // Same catch as above: .message is untrusted and uncoerced; fault() still
+    // type-checks the problem at runtime the way the original call did.
     refuseAll([fault('MANIFEST_UNPARSEABLE', file, (error as Thrown).message as string, 'write valid JSON')]);
   }
   return null;
@@ -204,8 +210,12 @@ function checkReturns(returns: unknown, at: string) {
 // names, and nothing else. A raw upstream object is never the return.
 export function shapeReturn(tool: unknown, source: unknown) {
   const out: Record<string, unknown> = {};
-  // Field names are read off the caller's tool object; this does not re-validate the manifest.
-  for (const field of (tool as ShapeTool).returns!.fields!) {
+  // Untrusted public argument. The original walk is tool.returns.fields; this
+  // assertion names that path for the checker and does not default, skip, or
+  // re-validate. Missing returns or fields still throw at the property read.
+  for (const field of (tool as ShapeTool).returns.fields) {
+    // The output key is the field's name as originally read; `in` uses the
+    // ordinary property-key conversion. The name is not checked to be a string.
     const name = field.name as string;
     if (source && typeof source === 'object' && name in source) out[name] = (source as Record<string, unknown>)[name];
     else out[name] = null;

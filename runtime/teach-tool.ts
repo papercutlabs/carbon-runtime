@@ -113,21 +113,22 @@ function asToolFault(thrown: unknown) {
 // leaves nothing behind at all. It is the conversation the call names that is
 // checked; a source_message_id from another conversation is not in this
 // conversation's captures and stream/teachings.ts refuses it by name.
-function refuseOutsideManagement(management: string | null, { conversation_id }: { conversation_id?: string }) {
+function refuseOutsideManagement(management: string | null, { conversation_id }: Record<string, unknown>) {
   const faults = managementFaults(management, conversation_id);
   if (faults.length > 0) throw new ToolFault(faults);
 }
 
 function rememberHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }: HandlerOptions) {
-  return (args: TeachArgs) => {
+  // createServer leftover args; named fields below are the original reads.
+  return (args: Record<string, unknown>) => {
     refuseOutsideManagement(management, args);
     let written;
     try {
       written = remember(store, {
         agent,
-        text: args.text,
-        conversation_id: args.conversation_id,
-        source_message_id: args.source_message_id,
+        text: args.text as TeachArgs['text'],
+        conversation_id: args.conversation_id as TeachArgs['conversation_id'],
+        source_message_id: args.source_message_id as TeachArgs['source_message_id'],
         max_active: teaching.max_active,
         max_chars: teaching.max_chars,
         release_id: release(),
@@ -146,16 +147,16 @@ function rememberHandler({ store, agent, teaching, management, release = () => n
 }
 
 function raiseChangeHandler({ store, agent, teaching, management, release = () => null, now = () => new Date().toISOString() }: HandlerOptions) {
-  return (args: TeachArgs) => {
+  return (args: Record<string, unknown>) => {
     refuseOutsideManagement(management, args);
     let written;
     try {
       written = raiseChange(store, {
         agent,
-        text: args.text,
-        conversation_id: args.conversation_id,
-        source_message_id: args.source_message_id,
-        failed_question: args.failed_question,
+        text: args.text as TeachArgs['text'],
+        conversation_id: args.conversation_id as TeachArgs['conversation_id'],
+        source_message_id: args.source_message_id as TeachArgs['source_message_id'],
+        failed_question: args.failed_question as TeachArgs['failed_question'],
         max_chars: teaching.max_chars,
         release_id: release(),
         now: now()
@@ -175,14 +176,14 @@ function raiseChangeHandler({ store, agent, teaching, management, release = () =
 // was said; a revocation taken from a work chat would let one sentence there drop
 // a standing instruction the management conversation put up.
 function forgetHandler({ store, management, now = () => new Date().toISOString() }: Pick<HandlerOptions, 'store' | 'management' | 'now'>) {
-  return (args: TeachArgs) => {
+  return (args: Record<string, unknown>) => {
     refuseOutsideManagement(management, args);
     let written;
     try {
       written = forget(store, {
-        id: args.id,
-        conversation_id: args.conversation_id,
-        source_message_id: args.source_message_id,
+        id: args.id as TeachArgs['id'],
+        conversation_id: args.conversation_id as TeachArgs['conversation_id'],
+        source_message_id: args.source_message_id as TeachArgs['source_message_id'],
         now: now()
       });
     } catch (thrown) {

@@ -40,13 +40,16 @@ export function renderHelp(manifest: unknown, { serverUsage = [] }: { serverUsag
   lines.push('the only annotation.');
   lines.push('');
   lines.push('Tools:');
-  for (const tool of rec.tools as HelpTool[]) {
+  // Caller contract: for-of is the original walk. tools is not checked to be an
+  // array; a missing or non-iterable value still throws here.
+  for (const tool of rec.tools as Iterable<HelpTool>) {
     lines.push('');
     lines.push(`  ${tool.name}${tool.readOnlyHint ? '  (read only)' : ''}${tool.writes ? '  (writes; needs the declaration write gate)' : ''}`);
     for (const line of wrap(tool.description, 74)) lines.push(`    ${line}`);
+    // arguments is read by name when present; the && below is the original empty path.
     const toolArgs = tool.arguments as HelpArgs | undefined;
     const properties = (toolArgs && toolArgs.properties) || {};
-    const required = new Set(((toolArgs && toolArgs.required) || []) as unknown[]);
+    const required = new Set(((toolArgs && toolArgs.required) || []) as Iterable<unknown>);
     if (Object.keys(properties as object).length === 0) {
       lines.push('    Arguments: none.');
     } else {
@@ -61,9 +64,10 @@ export function renderHelp(manifest: unknown, { serverUsage = [] }: { serverUsag
         }
       }
     }
+    // returns is the original property walk; a missing returns still throws on .what / .fields.
     const returns = tool.returns as HelpReturns;
     lines.push(`    Returns: ${returns.what}`);
-    for (const field of returns.fields as HelpField[]) lines.push(`      ${field.name} — ${field.what}`);
+    for (const field of returns.fields as Iterable<HelpField>) lines.push(`      ${field.name} — ${field.what}`);
     lines.push(`    Example: ${JSON.stringify({ name: tool.name, arguments: exampleArguments(tool) })}`);
   }
   lines.push('');
@@ -77,7 +81,9 @@ function exampleArguments(tool: HelpTool) {
   const properties = (toolArgs && toolArgs.properties) || {};
   const required = (toolArgs && toolArgs.required) || Object.keys(properties as object);
   const out: Record<string, unknown> = {};
-  for (const name of required as unknown[]) {
+  // required is whatever the || produced; for-of is the original walk, not an array check.
+  for (const name of required as Iterable<unknown>) {
+    // name indexes the properties object as the original renderer did; it is not proven a string.
     const property = ((properties as Record<string, unknown>)[name as string] || {}) as HelpProperty;
     if (Array.isArray(property.enum)) out[name as string] = property.enum[0];
     else if (property.type === 'number' || property.type === 'integer') out[name as string] = 1;

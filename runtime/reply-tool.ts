@@ -234,13 +234,15 @@ export function teachCheckConversation(declaration: Declaration | null | undefin
 // as it always was.
 export function replyHandler({ store, agent, declaration = null, work = null, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
   const heldIn = teachCheckConversation(declaration);
-  return (args: ReplyArgs) => {
+  // createServer calls this with parseArguments leftovers (Record<string, unknown>)
+  // and unknown context. Named fields are the original reads, not a new check.
+  return (args: Record<string, unknown>) => {
     const record = outboundRecord(store, {
       agent,
-      conversation_id: args.conversation_id,
-      request_id: args.request_id,
-      text: args.text,
-      attachments: args.attachments,
+      conversation_id: args.conversation_id as string,
+      request_id: args.request_id as string,
+      text: args.text as string,
+      attachments: args.attachments as ReplyArgs['attachments'],
       work,
       now: now()
     });

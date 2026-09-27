@@ -48,10 +48,12 @@ type ServableManifest = {
   version: unknown;
   tools: ManifestTool[];
 };
-type HandlerFn = (args: Record<string, unknown>, context: unknown) => unknown;
-// Handler parameters are never so a declared-args callback remains assignable;
-// the call site below still passes parseArguments' leftover object.
-type RegisteredHandler = (args: never, context: never) => unknown;
+// parseArguments returns leftover named values as Record<string, unknown>.
+// createServer passes its context argument through as unknown. This is the
+// unvalidated call boundary: a handler may treat both as unknown, and a
+// handler that requires a narrower args or context object is not assignable
+// under strictFunctionTypes, because this server never proves those shapes.
+type RegisteredHandler = (args: Record<string, unknown>, context: unknown) => unknown;
 type CreateServerOptions = {
   manifest: unknown;
   handlers: Record<string, RegisteredHandler>;
@@ -125,8 +127,8 @@ export function createServer({ manifest, handlers, context = {} }: CreateServerO
       }
       try {
         const args = parseArguments(tool.arguments, rpcParams!.arguments, `${tool.name} arguments`);
-        // The handler table is keyed by declared names; arguments stay unvalidated leftovers.
-        const produced = await (handlers[tool.name] as HandlerFn)(args, context);
+        // args is the leftover Record from parseArguments; context is still unknown.
+        const produced = await (handlers[tool.name])(args, context);
         const producedRec = produced as Produced | null | undefined;
         const raw = producedRec && typeof producedRec === 'object' && 'data' in producedRec ? producedRec.data : produced;
         const data = shapeReturn(tool, raw);
