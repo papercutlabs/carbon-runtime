@@ -12,7 +12,7 @@
 //
 // It runs in both repositories. The file is byte-identical in both — carbon-core
 // is the authority and carbon-runtime carries a copy, under the same rule as the
-// harness copy, and carbon-core's test/public-copies.test.mjs compares the two.
+// harness copy, and carbon-core's test/public-copies.test.ts compares the two.
 // So it works out which repository it is looking at rather than being told.
 //
 // Usage:
