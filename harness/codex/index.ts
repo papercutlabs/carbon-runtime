@@ -24,6 +24,14 @@ export {
   CLIENT_INFO
 } from './session.ts';
 
+// One read beside the six operations, as `listSkills` is: which provider account
+// the open session is signed in to and what is left of its allowance. It asks the
+// app-server the runtime already holds, with refreshToken false, and returns no
+// token; it is not a seventh operation, because nothing depends on it to run an
+// agent.
+export { readAccount, rateLimitsFrom } from './session.ts';
+export type { AccountRead, AccountIdentity, RateLimitsRecord, RateLimitWindowRecord, AccountReadError } from './session.ts';
+
 export {
   turn,
   steer,

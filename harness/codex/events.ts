@@ -17,6 +17,8 @@ export const VOCABULARY = [
   'item.started',
   'item.completed',
   'tool_server.status',
+  'account.updated',
+  'account.rate_limits',
   'harness.error'
 ];
 
@@ -35,6 +37,11 @@ const MAP = new Map([
   ['item/started', 'item.started'],
   ['item/completed', 'item.completed'],
   ['mcpServer/startupStatus/updated', 'tool_server.status'],
+  // Carried whole like the rest. The rate-limit update is sparse by the schema's
+  // own description, so whoever keeps the last read merges it and never lets a
+  // null clear a value; `rateLimitsFrom` in session.ts is the one reading of it.
+  ['account/updated', 'account.updated'],
+  ['account/rateLimits/updated', 'account.rate_limits'],
   ['error', 'harness.error']
 ]);
 

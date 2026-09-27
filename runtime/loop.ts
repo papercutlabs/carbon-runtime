@@ -2,7 +2,7 @@ type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?:
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
@@ -536,10 +536,12 @@ export class ReleaseLoop<S = Session> {
   declare items: () => unknown[];
   declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null | undefined;
   declare intervalMs: number | undefined;
+  declare afterTurn: () => void;
 
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
-    agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null
+    agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
+    afterTurn = () => {}
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -574,6 +576,10 @@ export class ReleaseLoop<S = Session> {
     this.toolStatusStale = true;
     this.holdFaults = [];
     this.items = () => [];
+    // What happens once a turn has completed and its thread record is written:
+    // the provider-account read (PA-259). It starts after the turn and is never
+    // awaited, so it cannot delay, fail or change a turn.
+    this.afterTurn = afterTurn;
   }
 
   context(items: unknown = []): Context {
@@ -1058,6 +1064,12 @@ export class ReleaseLoop<S = Session> {
           : null
       }]
     });
+    try {
+      this.afterTurn();
+    } catch (error) {
+      // What follows a turn is never the turn's failure: it is logged and the turn stands.
+      this.log({ event: 'after_turn.failed', problem: (error as { message?: unknown } | null)?.message ?? String(error) }); // Read the thrown message field verbatim; no string guarantee is made.
+    }
     return { result, completedAt };
   }
 

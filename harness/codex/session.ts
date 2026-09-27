@@ -231,3 +231,142 @@ export async function resumeThread(session: Session, { threadId, cwd, model, eff
   session.threadId = resumed?.thread?.id ?? threadId;
   return resumed;
 }
+
+// ---- the account the harness is signed in to --------------------------------
+
+// Which provider account this app-server runs on, and how much of its allowance
+// is left, asked of the session that is already open. Two rules are carried here.
+// `account/read` is sent with refreshToken false and never true: a refresh asked
+// for by a reader makes the reader a writer of the login. And no second process is
+// started for it, because a freshly started app-server refreshes an expired login
+// before `initialize` returns and would be a second writer of that file.
+//
+// Each request is bounded by `timeoutMs`, because on the pinned binary
+// `account/rateLimits/read` goes to the provider's backend and an unreachable one
+// took twenty seconds to fail. A failed or timed-out request is returned as an
+// entry in `error`, never thrown, and the other request's answer is kept.
+//
+// What comes back is read field by field into a record that has no place for
+// anything else: account type, email and plan; whether the provider requires a
+// login; the rate-limit windows, credits and the account id when the backend
+// supplies one. Nothing else in either answer is carried, so a token the wire
+// happens to hold has nowhere to go.
+
+export type AccountIdentity = { type: string | null; email: string | null; plan_type: string | null };
+export type RateLimitWindowRecord = { used_percent: number | null; window_minutes: number | null; resets_at: number | null };
+export type RateLimitsRecord = {
+  account_id: string | null; limit_id: string | null; limit_name: string | null; plan_type: string | null;
+  primary: RateLimitWindowRecord | null; secondary: RateLimitWindowRecord | null;
+  credits: { has_credits: boolean | null; unlimited: boolean | null; balance: string | null } | null;
+  rate_limit_reached_type: string | null;
+};
+export type AccountReadError = { method: string; message: string };
+export type AccountRead = {
+  observed_at: string;
+  codex_version: string | null;
+  account: AccountIdentity | null;
+  requires_openai_auth: boolean | null;
+  rate_limits: RateLimitsRecord | null;
+  error: AccountReadError[] | null;
+};
+
+// A message the app-server put in an error is carried, cut short, because it is
+// what says why a read failed; nothing longer than this is a reason.
+const ERROR_MESSAGE_KEPT = 300;
+
+function field(value: unknown, key: string): unknown {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
+}
+function text(value: unknown) { return typeof value === 'string' ? value : null; }
+function count(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
+function flag(value: unknown) { return typeof value === 'boolean' ? value : null; }
+
+function windowFrom(value: unknown): RateLimitWindowRecord | null {
+  if (value === null || typeof value !== 'object') return null;
+  // resetsAt is carried as the protocol gives it, a Unix timestamp, unconverted.
+  return { used_percent: count(field(value, 'usedPercent')), window_minutes: count(field(value, 'windowDurationMins')), resets_at: count(field(value, 'resetsAt')) };
+}
+
+// One RateLimitSnapshot, from `account/rateLimits/read` or from the sparse
+// `account/rateLimits/updated`, read into the record. An absent value is null
+// here; it is the merging caller's rule that a null never clears a value it had.
+export function rateLimitsFrom(snapshot: unknown, accountId: unknown = null): RateLimitsRecord | null {
+  if (snapshot === null || typeof snapshot !== 'object') return null;
+  const credits = field(snapshot, 'credits');
+  return {
+    account_id: text(accountId),
+    limit_id: text(field(snapshot, 'limitId')),
+    limit_name: text(field(snapshot, 'limitName')),
+    plan_type: text(field(snapshot, 'planType')),
+    primary: windowFrom(field(snapshot, 'primary')),
+    secondary: windowFrom(field(snapshot, 'secondary')),
+    credits: credits !== null && typeof credits === 'object'
+      ? { has_credits: flag(field(credits, 'hasCredits')), unlimited: flag(field(credits, 'unlimited')), balance: text(field(credits, 'balance')) }
+      : null,
+    rate_limit_reached_type: text(field(snapshot, 'rateLimitReachedType'))
+  };
+}
+
+function accountFrom(value: unknown): AccountIdentity | null {
+  if (value === null || typeof value !== 'object') return null;
+  return { type: text(field(value, 'type')), email: text(field(value, 'email')), plan_type: text(field(value, 'planType')) };
+}
+
+// The version the app-server says it is, off the user agent `initialize` answered
+// with, which leads with `<originator>/<version>`. Null when it says nothing
+// recognisable, rather than a guess.
+function versionFrom(initializeResult: unknown) {
+  const agent = text(field(initializeResult, 'userAgent'));
+  const match = agent?.match(/\/(\d+\.\d+\.\d+[^\s;()]*)/);
+  return match ? match[1] : null;
+}
+
+function bounded(request: Promise<unknown>, method: string, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${method} did not answer within ${timeoutMs} ms`)), timeoutMs);
+    // A read nobody answered must not be what keeps a stopping process alive.
+    timer.unref?.();
+  });
+  return Promise.race([request, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+function failure(method: string, reason: unknown): AccountReadError {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return { method, message: message.slice(0, ERROR_MESSAGE_KEPT) };
+}
+
+export async function readAccount(session: Session, { timeoutMs }: { timeoutMs: number }): Promise<AccountRead> {
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new HarnessFault(fault('HARNESS_ACCOUNT_READ_UNBOUNDED', 'readAccount.timeoutMs',
+      'an account read was asked for with no bound on how long it may wait, and one of its two requests goes to the provider',
+      'pass timeoutMs; a read that never answers must not hold anything that waits on it'));
+  }
+  const observedAt = new Date().toISOString();
+  const [account, limits] = await Promise.allSettled([
+    bounded(session.request('account/read', { refreshToken: false }), 'account/read', timeoutMs),
+    bounded(session.request('account/rateLimits/read', undefined), 'account/rateLimits/read', timeoutMs)
+  ]);
+  const errors: AccountReadError[] = [];
+  const read: AccountRead = {
+    observed_at: observedAt,
+    codex_version: versionFrom(session.initializeResult),
+    account: null,
+    requires_openai_auth: null,
+    rate_limits: null,
+    error: null
+  };
+  if (account.status === 'fulfilled') {
+    read.account = accountFrom(field(account.value, 'account'));
+    read.requires_openai_auth = flag(field(account.value, 'requiresOpenaiAuth'));
+  } else {
+    errors.push(failure('account/read', account.reason));
+  }
+  if (limits.status === 'fulfilled') {
+    read.rate_limits = rateLimitsFrom(field(limits.value, 'rateLimits'), field(limits.value, 'accountId'));
+  } else {
+    errors.push(failure('account/rateLimits/read', limits.reason));
+  }
+  if (errors.length > 0) read.error = errors;
+  return read;
+}
