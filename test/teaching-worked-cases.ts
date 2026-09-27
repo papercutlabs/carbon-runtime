@@ -31,7 +31,7 @@
 //    same port from the runtime's own constant.
 //
 // Usage:
-//   node test/teaching-worked-cases.mjs --out <dir> --carbon <carbon-core checkout>
+//   node test/teaching-worked-cases.ts --out <dir> --carbon <carbon-core checkout>
 //     --binary <codex> --codex-account <name> --model <m> --effort <e>
 //     --max-turn-ms <n> [--case <id>]
 //
@@ -47,6 +47,17 @@ import { Store } from '../stream/store.ts';
 import { listTeachings } from '../stream/teachings.ts';
 import { holdApplies, releaseDecision } from '../runtime/loop.ts';
 import { resolveChannel } from '../runtime/channel.ts';
+import type { Declaration, Channel } from '../runtime/types.ts';
+import type { MessageRecord } from '../stream/store.ts';
+
+type CaseCheck = { kind: 'list_contains'; field: string; item: string } | { kind: 'field_matches'; field: string; pattern: string } | { kind: 'judge'; rubric: string };
+type CaseRow = { id: string; standing: string; property: string; source: string; settles: string; check?: CaseCheck };
+type CaseSpec = { title: string; conversation: string; sender: { id: string; name: string; role: MessageRecord['role'] }; body: string; expects: string; priorState: string; rows: CaseRow[] };
+type ProofMessage = { conversation: string; sender: CaseSpec['sender']; messageId: string; receivedAt: string; body: string; kind: string };
+type ProofArgs = Record<string, string | undefined>;
+type RunResult = { code: number; stdout: string; stderr: string };
+type ExecFailure = { status?: number; stdout?: string; stderr?: string };
+type ScoredResult = { verdict?: unknown; status?: unknown; properties?: Record<string, { verdict: unknown }>; tool_calls?: { name: string; status: string }[]; tokens?: { total: number } };
 
 const TEACH_TOOL = path.resolve(import.meta.dirname, '..', 'runtime', 'teach-tool.ts');
 const TEACH_PORT = 8731;
@@ -92,7 +103,7 @@ const ANSWER_SCHEMA = {
 // The wording is the client's, in role words: no name, no number, no identifier
 // and no text of anybody's belongs in either repository.
 
-const CASES = {
+const CASES: Record<string, CaseSpec> = {
   'teach-restraint-01': {
     title: 'The manager teaches a restraint',
     conversation: MANAGEMENT,
@@ -216,7 +227,7 @@ const CASES = {
 
 // ---- the repository ---------------------------------------------------------
 
-function declarationFor(storeDir) {
+function declarationFor(storeDir: string) {
   return {
     schema: 'carbon.agent-declaration.v1',
     agent: { id: 'proof-agent', client: 'the client' },
@@ -287,7 +298,7 @@ function declarationFor(storeDir) {
 // The message, as the agent is handed it. The four lines above the body are the
 // lines the runtime's own turn input carries about a message, so what the agent
 // is told about where this came from is what it is told on a box.
-function messageText({ conversation, sender, messageId, receivedAt, body }) {
+function messageText({ conversation, sender, messageId, receivedAt, body }: ProofMessage) {
   return [
     `A message arrived on conversation ${conversation}.`,
     `from: ${sender.name}`,
@@ -300,7 +311,7 @@ function messageText({ conversation, sender, messageId, receivedAt, body }) {
   ].join('\n');
 }
 
-function captureRecord({ conversation, sender, messageId, receivedAt, body, kind }) {
+function captureRecord({ conversation, sender, messageId, receivedAt, body, kind }: ProofMessage): MessageRecord {
   return {
     schema: 'carbon.message.v1',
     agent: 'proof-agent',
@@ -309,7 +320,8 @@ function captureRecord({ conversation, sender, messageId, receivedAt, body, kind
     conversation_id: conversation,
     conversation_kind: "group",
     message_id: messageId,
-    platform_message_id: messageId.split(':').at(-1),
+    // This generated id has a final component; retain the original split operation.
+    platform_message_id: messageId.split(':').at(-1) as string,
     revision: 0,
     direction: 'inbound',
     role: sender.role,
@@ -323,7 +335,7 @@ function captureRecord({ conversation, sender, messageId, receivedAt, body, kind
   };
 }
 
-function propertiesTable(rows) {
+function propertiesTable(rows: CaseRow[]) {
   const lines = [
     '# Expected properties',
     '',
@@ -336,7 +348,7 @@ function propertiesTable(rows) {
   return `${lines.join('\n')}\n`;
 }
 
-function caseRecord(caseId, spec, digest) {
+function caseRecord(caseId: string, spec: CaseSpec, digest: string) {
   return {
     schema: 'carbon.case.v1',
     id: caseId,
@@ -351,7 +363,7 @@ function caseRecord(caseId, spec, digest) {
     // under a no-network sandbox because 'pointer' names a client test
     // environment the turn cannot reach. Nothing here points at one — the
     // capture this case needs is seeded into the run's own store by
-    // runtimeTurnInput (runner-runtime-turn.mjs), not by prior_state — so
+    // runtimeTurnInput (runner-runtime-turn.ts), not by prior_state — so
     // 'none' is the accurate kind, unchanged from what was arranged before.
     // The same message the store's capture is built from (captureRecord,
     // below), in the shape carbon.case.v1 declares: the runtime's own
@@ -364,7 +376,7 @@ function caseRecord(caseId, spec, digest) {
     output_schema: 'references/answer.schema.json',
     properties: spec.rows.map((row) => {
       const at = row.source.lastIndexOf(', ');
-      const property = { id: row.id, standing: row.standing, source: row.source.slice(0, at), date: row.source.slice(at + 2) };
+      const property: { id: string; standing: string; source: string; date: string; check?: CaseRow['check'] } = { id: row.id, standing: row.standing, source: row.source.slice(0, at), date: row.source.slice(at + 2) };
       if (row.check) property.check = row.check;
       return property;
     })
@@ -373,13 +385,13 @@ function caseRecord(caseId, spec, digest) {
 
 // Writes one client repository, its store and its one case, and commits it.
 // Returns what the caller needs to run it and to read the store afterwards.
-export function buildProofRepo({ dir, storeDir, caseId, carbon, now = '2026-09-11T09:00:00.000Z' }) {
+export function buildProofRepo({ dir, storeDir, caseId, carbon, now = '2026-09-11T09:00:00.000Z' }: { dir: string; storeDir: string; caseId: string; carbon: string; now?: string }) {
   const spec = CASES[caseId];
   const messageId = `${spec.conversation}:${caseId}`;
   const declaration = declarationFor(storeDir);
   const kind = spec.conversation === MANAGEMENT ? 'management' : 'customer';
 
-  const write = (rel, text) => {
+  const write = (rel: string, text: string) => {
     const file = path.join(dir, rel);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, text);
@@ -428,7 +440,7 @@ export function buildProofRepo({ dir, storeDir, caseId, carbon, now = '2026-09-1
   const declared = run(carbon, ['declaration', 'check', path.join(dir, 'carbon.agent.json')]);
   if (declared.code !== 0) throw new Error(`carbon declaration check refused this declaration:\n${declared.stdout}${declared.stderr}`);
 
-  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  const git = (...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'proof@example.com');
   git('config', 'user.name', 'carbon proof');
@@ -438,11 +450,12 @@ export function buildProofRepo({ dir, storeDir, caseId, carbon, now = '2026-09-1
   return { dir, storeDir, caseId, declaration, messageId, commit: git('rev-parse', 'HEAD').trim() };
 }
 
-function run(carbon, args) {
+function run(carbon: string, args: string[]): RunResult {
   try {
     return { code: 0, stdout: execFileSync(process.execPath, [path.join(carbon, 'bin', 'carbon'), ...args], { encoding: 'utf8' }), stderr: '' };
   } catch (error) {
-    return { code: error.status ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+    // execFileSync throws a child-process error with these raw result fields; keep its existing fallback behavior.
+    return { code: (error as ExecFailure).status ?? 1, stdout: (error as ExecFailure).stdout ?? '', stderr: (error as ExecFailure).stderr ?? '' };
   }
 }
 
@@ -451,7 +464,7 @@ function run(carbon, args) {
 // Every teaching record the store holds, field by field, with nothing summarised
 // away. This is the independent read: the runner scores what it observed of the
 // turn, and this says what is actually on disk afterwards.
-export function storeAfter(storeDir) {
+export function storeAfter(storeDir: string) {
   const listed = listTeachings(new Store(storeDir));
   return {
     active: listed.active,
@@ -466,10 +479,11 @@ export function storeAfter(storeDir) {
 // own code rather than from a sentence about it. It is the third case's other
 // half: teaching is refused outside the management conversation, and the hold is
 // what a customer conversation does with a staff message in the first place.
-export function holdVerdicts(declaration) {
-  const channel = resolveChannel(declaration, declaration.channels[0]);
+export function holdVerdicts(declaration: Declaration) {
+  // declarationFor always supplies its one channel; resolveChannel merges that channel's policy fields for these readers.
+  const channel = resolveChannel(declaration, declaration.channels![0] as Channel) as Partial<Channel>;
   const store = { isHeld: () => false, recordsIn: () => [] };
-  const at = (conversation_id, role) => releaseDecision(declaration, channel, store, {
+  const at = (conversation_id: string, role: string) => releaseDecision(declaration, channel, store, {
     direction: 'inbound', conversation_id, role, body: 'x', received_at: '2026-09-11T09:00:00.000Z'
   }, { now: Date.parse('2026-09-11T09:00:00.000Z') });
   return [
@@ -480,8 +494,8 @@ export function holdVerdicts(declaration) {
 
 // ---- the driver -------------------------------------------------------------
 
-function parse(argv) {
-  const args = {};
+function parse(argv: string[]): ProofArgs {
+  const args: ProofArgs = {};
   for (let i = 0; i < argv.length; i += 1) {
     if (!argv[i].startsWith('--')) continue;
     args[argv[i].slice(2)] = argv[i + 1];
@@ -489,37 +503,42 @@ function parse(argv) {
   return args;
 }
 
-function runOne(args, caseId) {
-  const root = path.resolve(args.out);
+function runOne(args: ProofArgs, caseId: string) {
+  // The driver checks required flags before calling runOne; assertions retain the raw parser and missing-argument behavior.
+  const root = path.resolve(args.out as string);
   const dir = path.join(root, caseId, 'repo');
   const storeDir = path.join(root, caseId, 'store');
   fs.mkdirSync(dir, { recursive: true });
-  const built = buildProofRepo({ dir, storeDir, caseId, carbon: path.resolve(args.carbon) });
+  // The driver's required-flag check establishes --carbon before this raw argument is used.
+  const built = buildProofRepo({ dir, storeDir, caseId, carbon: path.resolve(args.carbon as string) });
 
   const outDir = path.join(root, caseId, 'runs');
   const started = Date.now();
-  const scored = run(path.resolve(args.carbon), [
+  // The driver checked every required flag; assertions retain its original raw child argument values.
+  const scored = run(path.resolve(args.carbon as string), [
     'run', '--client', dir, '--case-id', caseId, '--out', outDir,
-    '--max-turn-ms', args['max-turn-ms'], '--binary', args.binary,
-    '--codex-account', args['codex-account'], '--model', args.model, '--effort', args.effort,
-    '--judge-model', args.model, '--judge-effort', args.effort, '--judge-max-turn-ms', args['max-turn-ms']
+    '--max-turn-ms', args['max-turn-ms'] as string, '--binary', args.binary as string,
+    '--codex-account', args['codex-account'] as string, '--model', args.model as string, '--effort', args.effort as string,
+    '--judge-model', args.model as string, '--judge-effort', args.effort as string, '--judge-max-turn-ms', args['max-turn-ms'] as string
   ]);
   process.stdout.write(scored.stdout);
   process.stderr.write(scored.stderr);
 
   const runs = fs.existsSync(outDir) ? fs.readdirSync(outDir).sort() : [];
-  const resultFile = runs.length > 0 ? path.join(outDir, runs.at(-1), 'result.json') : null;
+  // This branch reads the last run name only when the directory listing is nonempty.
+  const resultFile = runs.length > 0 ? path.join(outDir, runs.at(-1) as string, 'result.json') : null;
   return {
     case_id: caseId,
     exit: scored.code,
     seconds: Math.round((Date.now() - started) / 1000),
     run_dir: resultFile === null ? null : path.dirname(resultFile),
-    result: resultFile && fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) : null,
+    result: resultFile && fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) as ScoredResult : null, // Raw run JSON is still unvalidated; this shape names only summary fields.
     output: resultFile && fs.existsSync(path.join(path.dirname(resultFile), 'agent-output.json'))
       ? JSON.parse(fs.readFileSync(path.join(path.dirname(resultFile), 'agent-output.json'), 'utf8'))
       : null,
     store: storeAfter(storeDir),
-    hold: holdVerdicts(built.declaration)
+    // The local declaration was constructed with the runtime's channel shape; keep its raw value for these readers.
+    hold: holdVerdicts(built.declaration as Declaration)
   };
 }
 
@@ -534,7 +553,8 @@ if (process.argv[1] === import.meta.filename) {
   const wanted = args.case ? [args.case] : Object.keys(CASES);
   const done = [];
   for (const caseId of wanted) done.push(runOne(args, caseId));
-  fs.writeFileSync(path.join(path.resolve(args.out), 'summary.json'), `${JSON.stringify(done, null, 2)}\n`);
+  // The required-flag check above established --out; keep the raw parsed value here.
+  fs.writeFileSync(path.join(path.resolve(args.out as string), 'summary.json'), `${JSON.stringify(done, null, 2)}\n`);
   console.log(JSON.stringify(done.map((d) => ({
     case_id: d.case_id,
     exit: d.exit,

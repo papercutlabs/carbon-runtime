@@ -72,7 +72,7 @@ The three differences from a box, and there are no others:
 ## How to run it again
 
 ```
-node test/teaching-worked-cases.mjs --out <dir> --carbon <carbon-core checkout> \
+node test/teaching-worked-cases.ts --out <dir> --carbon <carbon-core checkout> \
   --binary <codex> --codex-account <account> --model gpt-5.6-sol --effort low \
   --max-turn-ms 240000
 ```
