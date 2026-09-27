@@ -277,8 +277,8 @@ one run reported together, and any fault exits non-zero.
 
 ## Shape
 
-`node tools/shape-check.mjs --help` prints every rule with the reason it is a
-rule; `node tools/shape-check.mjs .` runs them, and the workflow runs it on every
+`node tools/shape-check.ts --help` prints every rule with the reason it is a
+rule; `node tools/shape-check.ts .` runs them, and the workflow runs it on every
 push. The script is a copy — the private half is its authority, under the same
 rule as the harness copy — so the two repositories cannot end up with two
 slightly different sets of rules. A rule with a cap is escaped by a

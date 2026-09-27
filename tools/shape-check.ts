@@ -16,7 +16,7 @@
 // So it works out which repository it is looking at rather than being told.
 //
 // Usage:
-//   node tools/shape-check.mjs [root] [--with <other checkout>] [--json] [--strict]
+//   node tools/shape-check.ts [root] [--with <other checkout>] [--json] [--strict]
 //
 // `root` defaults to the repository this script sits in. `--with` names a
 // checkout of the other half, which four rules need and say so when they do not
@@ -48,6 +48,39 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
 import { fault, report } from '../lib/faults.ts';
+
+type TokenKind = 'comment' | 'number' | 'string' | 'template' | 'regex' | 'name' | 'punct';
+type Token = { type: TokenKind; value: string; start: number; line: number };
+type ImportRecord = { from: string; line: number; dynamic?: boolean; reExport?: boolean };
+type ExportRecord = { name: string; line: number };
+type FunctionRecord = { name: string; from: number; to: number; startLine: number; endLine: number; arrow?: boolean };
+type ModuleRead = { tokens: Token[]; imports: ImportRecord[]; exports: ExportRecord[]; functions: FunctionRecord[] };
+type ImportTarget = { outside: boolean; rel: string };
+type ImportEdge = ImportRecord & { to: ImportTarget | null };
+type SourceModule = ModuleRead & {
+  rel: string; lines: number; text: string; layer: number | null; test: boolean;
+  justified: string | null; edges: ImportEdge[];
+};
+type RepoKind = 'core' | 'runtime' | null;
+type SourceTree = { root: string; kind: RepoKind; modules: Map<string, SourceModule> };
+type GraphNode = { rel: string; to: Set<string>; from: Set<string> };
+type Graph = Map<string, GraphNode>;
+type FaultRow = { code: string; subject: string; problem: string; fix: string };
+type TreePair = { label: RepoKind; root: string; modules: Map<string, SourceModule> };
+type CheckResult = {
+  root: string; kind: Exclude<RepoKind, null>; tree: SourceTree; graph: Graph;
+  violations: FaultRow[]; notes: string[]; surface: ReturnType<typeof surfaceOf>;
+};
+
+// A property read is deliberately left as a JavaScript property read: malformed
+// JSON keeps its existing throw or coercion behavior at each use site.
+function field(value: unknown, key: string): unknown {
+  return (value as Record<string, unknown>)[key];
+}
+
+function optionalField(value: unknown, key: string): unknown {
+  return value == null ? undefined : field(value, key);
+}
 
 // ---- what the rules are ----------------------------------------------------
 
@@ -130,8 +163,8 @@ const KEYWORDS = new Set([
   'yield', 'if', 'while', 'for', 'switch', 'function', 'const', 'let', 'var', 'import'
 ]);
 
-export function tokenize(source) {
-  const tokens = [];
+export function tokenize(source: string): Token[] {
+  const tokens: Token[] = [];
   let i = 0;
   let line = 1;
   const n = source.length;
@@ -145,7 +178,7 @@ export function tokenize(source) {
     return t.value === ')' || t.value === ']';
   };
 
-  const readString = (quote) => {
+  const readString = (quote: string): Token => {
     const start = i;
     i += 1;
     while (i < n) {
@@ -161,7 +194,7 @@ export function tokenize(source) {
   // A template literal is read whole, including any `${}` it carries, with the
   // nesting counted so a template inside a substitution does not end the outer
   // one. Nothing in these repositories needs the substitutions tokenized.
-  const readTemplate = () => {
+  const readTemplate = (): Token => {
     const start = i;
     i += 1;
     let depth = 0;
@@ -178,7 +211,7 @@ export function tokenize(source) {
     return { type: 'template', value: source.slice(start, i), start, line };
   };
 
-  const readRegex = () => {
+  const readRegex = (): Token => {
     const start = i;
     i += 1;
     let inClass = false;
@@ -246,11 +279,11 @@ export function tokenize(source) {
   return tokens;
 }
 
-const code = (tokens) => tokens.filter((t) => t.type !== 'comment');
+const code = (tokens: Token[]): Token[] => tokens.filter((t) => t.type !== 'comment');
 
 // ---- what a module is ------------------------------------------------------
 
-function matchBrace(tokens, at) {
+function matchBrace(tokens: Token[], at: number): number {
   let depth = 0;
   for (let i = at; i < tokens.length; i += 1) {
     const v = tokens[i].type === 'punct' ? tokens[i].value : null;
@@ -263,14 +296,14 @@ function matchBrace(tokens, at) {
   return tokens.length - 1;
 }
 
-const quoted = (t) => (t && t.type === 'string' ? t.value.slice(1, -1) : null);
+const quoted = (t: Token | undefined): string | null => (t && t.type === 'string' ? t.value.slice(1, -1) : null);
 
 // Imports, exports and functions, read off the tokens.
-export function readModule(source, { typescript = false } = {}) {
+export function readModule(source: string, { typescript = false }: { typescript?: boolean } = {}): ModuleRead {
   let t = code(tokenize(source));
-  const imports = [];
-  const exports_ = [];
-  const functions = [];
+  const imports: ImportRecord[] = [];
+  const exports_: ExportRecord[] = [];
+  const functions: FunctionRecord[] = [];
 
   for (let i = 0; i < t.length; i += 1) {
     const tok = t[i];
@@ -388,7 +421,7 @@ export function readModule(source, { typescript = false } = {}) {
 const BRANCH_WORDS = new Set(['if', 'for', 'while', 'case', 'catch']);
 const BRANCH_PUNCT = new Set(['&&', '||', '??', '?']);
 
-export function complexityOf(module, fn) {
+export function complexityOf(module: ModuleRead, fn: FunctionRecord): number {
   const nested = module.functions.filter((o) => o !== fn && o.from > fn.from && o.to <= fn.to);
   let score = 1;
   for (let i = fn.from; i <= fn.to; i += 1) {
@@ -408,11 +441,11 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', '.carbon-runtime', '.
 // would make the answer depend on whose machine it ran on: a half-written file
 // somebody has not committed is not part of the shape, and the workflow, which
 // only ever sees a commit, would disagree with the person running it by hand.
-const TRACKED = new Map();
+const TRACKED = new Map<string, string[] | null>();
 
-function trackedFiles(root) {
-  if (TRACKED.has(root)) return TRACKED.get(root);
-  let list = null;
+function trackedFiles(root: string): string[] | null {
+  if (TRACKED.has(root)) return TRACKED.get(root) ?? null;
+  let list: string[] | null = null;
   try {
     list = execFileSync('git', ['-C', root, 'ls-files'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
@@ -426,8 +459,8 @@ function trackedFiles(root) {
   return list;
 }
 
-function walkDisk(root, relative) {
-  const found = [];
+function walkDisk(root: string, relative: string): string[] {
+  const found: string[] = [];
   const at = path.join(root, relative);
   if (!fs.existsSync(at)) return found;
   for (const name of fs.readdirSync(at).sort()) {
@@ -439,7 +472,7 @@ function walkDisk(root, relative) {
   return found;
 }
 
-function walk(root, relative = '') {
+function walk(root: string, relative = ''): string[] {
   const tracked = trackedFiles(root);
   if (!tracked) return walkDisk(root, relative);
   const prefix = relative ? `${relative}/` : '';
@@ -448,16 +481,16 @@ function walk(root, relative = '') {
 
 // What counts as source: JavaScript and erasable TypeScript modules, and the
 // command lines under bin/, which have no extension and are run by hand.
-function isSource(rel) {
+function isSource(rel: string): boolean {
   if (rel.endsWith('.mjs') || rel.endsWith('.ts')) return true;
   return rel.startsWith('bin/') && !rel.includes('.');
 }
 
-const isTest = (rel) => rel.startsWith('test/') || rel.startsWith('conformance/');
+const isTest = (rel: string): boolean => rel.startsWith('test/') || rel.startsWith('conformance/');
 
 // Which repository is this. The private half has the installer and the host
 // contract; the public half has the store library. Neither has the other's.
-export function repoKindOf(root) {
+export function repoKindOf(root: string): RepoKind {
   if (fs.existsSync(path.join(root, 'stream', 'store.ts'))) return 'runtime';
   if (fs.existsSync(path.join(root, 'lib', 'install.mjs'))
     || fs.existsSync(path.join(root, 'lib', 'install.ts'))) return 'core';
@@ -466,7 +499,7 @@ export function repoKindOf(root) {
 
 // The layers, in the order imports are allowed to run. Same-layer imports are
 // fine; an import that goes up is not.
-const LAYERS = [
+const LAYERS: Array<[string, number]> = [
   ['schema/', 0],
   ['stream/', 1], ['lib/', 1], ['tools/lib/', 1], ['harness/', 1],
   ['adapters/', 2], ['import/', 2], ['conformance/', 2],
@@ -474,8 +507,8 @@ const LAYERS = [
   ['bin/', 4], ['tools/', 4], ['test/', 5]
 ];
 
-export function layerOf(rel) {
-  let best = null;
+export function layerOf(rel: string): number | null {
+  let best: [string, number] | null = null;
   for (const [prefix, layer] of LAYERS) {
     if (rel.startsWith(prefix) && (best === null || prefix.length > best[0].length)) best = [prefix, layer];
   }
@@ -492,18 +525,18 @@ export const VENDORED = [
   'tools/lib/manifest.ts',
   'tools/lib/mcp.ts',
   'tools/lib/help.ts',
-  'tools/shape-check.mjs',
+  'tools/shape-check.ts',
   'schema/carbon.message.v1.json'
 ];
 const VENDORED_TREES = ['harness/codex/'];
-export const isVendored = (rel) => VENDORED.includes(rel) || VENDORED_TREES.some((p) => rel.startsWith(p));
+export const isVendored = (rel: string): boolean => VENDORED.includes(rel) || VENDORED_TREES.some((p) => rel.startsWith(p));
 
 // ---- the model -------------------------------------------------------------
 
-export function analyse(root) {
+export function analyse(root: string): SourceTree {
   const kind = repoKindOf(root);
   const files = walk(root).filter(isSource);
-  const modules = new Map();
+  const modules = new Map<string, SourceModule>();
   for (const rel of files) {
     const source = fs.readFileSync(path.join(root, rel), 'utf8');
     const module = readModule(source, { typescript: rel.endsWith('.ts') });
@@ -524,7 +557,7 @@ export function analyse(root) {
   return { root, kind, modules };
 }
 
-function resolveImport(root, from, spec) {
+function resolveImport(root: string, from: string, spec: string): ImportTarget | null {
   if (!spec.startsWith('.')) return null;
   const resolved = path.resolve(path.dirname(path.join(root, from)), spec);
   const rel = path.relative(root, resolved);
@@ -534,84 +567,90 @@ function resolveImport(root, from, spec) {
 
 // ---- the rules -------------------------------------------------------------
 
-function shellOk(cmd, args, cwd) {
+function shellOk(cmd: string, args: string[], cwd: string): { ok: boolean; out: string } {
   try {
     execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     return { ok: true, out: '' };
   } catch (error) {
-    return { ok: false, out: `${error.stdout ?? ''}${error.stderr ?? ''}`.trim() };
+    return { ok: false, out: `${field(error, 'stdout') ?? ''}${field(error, 'stderr') ?? ''}`.trim() };
   }
 }
 
-function isExactPin(version) {
+function isExactPin(version: unknown): version is string {
   return typeof version === 'string'
     && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
-function pinnedTypeScript(pkg, out) {
-  const dev = pkg.devDependencies ?? {};
-  const names = Object.keys(dev);
-  if (names.length === 1 && names[0] === 'typescript' && isExactPin(dev.typescript)) return;
+function pinnedTypeScript(pkg: unknown, out: FaultRow[]): void {
+  const dev = field(pkg, 'devDependencies') ?? {};
+  // Object.keys accepts the same JSON value as before; this is only its input type.
+  const names = Object.keys(dev as object);
+  if (names.length === 1 && names[0] === 'typescript' && isExactPin(field(dev, 'typescript'))) return;
   out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json devDependencies',
     'the only development dependency is the exactly pinned TypeScript checker',
     'keep TypeScript as the sole development dependency and pin its exact version'));
 }
 
-function runtimePackage(pkg, out) {
-  const declared = pkg.dependencies ?? {};
-  const names = Object.keys(declared);
+function runtimePackage(pkg: unknown, out: FaultRow[]): void {
+  const declared = field(pkg, 'dependencies') ?? {};
+  // Preserve Object.keys coercion on malformed package JSON.
+  const names = Object.keys(declared as object);
   const expected = '@whiskeysockets/baileys';
   if (names.length !== 1 || names[0] !== expected) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
       `this repository declares ${names.length === 0 ? 'no dependency' : names.join(', ')}, and it has exactly one runtime dependency: ${expected}`,
       `remove the extra runtime dependency, or write what it does on a box into the README's one-dependency section and change this rule deliberately`));
-  } else if (!isExactPin(declared[expected])) {
+  } else if (!isExactPin(field(declared, expected))) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
-      `${expected} is declared as ${declared[expected]}, which is a range and not a version`,
+      `${expected} is declared as ${field(declared, expected)}, which is a range and not a version`,
       'pin the exact version, so the tarball that goes on a box is the one that was tested'));
   }
   pinnedTypeScript(pkg, out);
 }
 
-function corePackage(pkg, out) {
-  if (pkg.private !== true) {
+function corePackage(pkg: unknown, out: FaultRow[]): void {
+  if (field(pkg, 'private') !== true) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
       'the private carbon-core package is not marked private',
       'mark the package private so it cannot be published by mistake'));
   }
-  if (Object.keys(pkg.dependencies ?? {}).length !== 0) {
+  // Preserve Object.keys coercion on malformed package JSON.
+  if (Object.keys((field(pkg, 'dependencies') ?? {}) as object).length !== 0) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json dependencies',
       'carbon-core has no runtime dependencies',
       'keep runtime dependencies out of the private package'));
   }
-  const dev = pkg.devDependencies ?? {};
-  if (Object.keys(dev).length !== 2 || !isExactPin(dev.typescript) || !isExactPin(dev['@types/node'])) {
+  const dev = field(pkg, 'devDependencies') ?? {};
+  if (Object.keys(dev as object).length !== 2 || !isExactPin(field(dev, 'typescript')) || !isExactPin(field(dev, '@types/node'))) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json devDependencies',
       'carbon-core requires exactly pinned TypeScript and Node declarations as its only development dependencies',
       'keep only typescript and @types/node in devDependencies and pin both exact versions'));
   }
-  if (pkg.scripts?.typecheck !== 'tsc --noEmit') {
+  if (optionalField(field(pkg, 'scripts'), 'typecheck') !== 'tsc --noEmit') {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json scripts.typecheck',
       'carbon-core has no typecheck command for the normal checks to run',
       'add the tsc --noEmit typecheck script'));
   }
 }
 
-function oneDependency(root, kind, out) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+function oneDependency(root: string, kind: RepoKind, out: FaultRow[]): void {
+  const pkg: unknown = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   if (kind === 'runtime') runtimePackage(pkg, out);
   else corePackage(pkg, out);
 }
 
-function clientIdentifiers(root, kind, out, notes) {
+function clientIdentifiers(root: string, kind: RepoKind, out: FaultRow[], notes: string[]): void {
   if (kind === 'runtime') {
     const scan = path.join(root, 'tools', 'scan-identifiers.ts');
     const result = shellOk(process.execPath, [scan, root], root);
     if (!result.ok) {
       for (const line of result.out.split('\n').filter((l) => l.trim().startsWith('{'))) {
-        let parsed = null;
+        let parsed: unknown = null;
         try { parsed = JSON.parse(line); } catch { parsed = null; }
-        if (parsed) out.push(fault('SHAPE_CLIENT_IDENTIFIER', parsed.subject, parsed.problem, parsed.fix));
+        // The scan's fault fields are forwarded unchanged; these local type
+        // assertions do not validate or coerce malformed scan output.
+        if (parsed) out.push(fault('SHAPE_CLIENT_IDENTIFIER',
+          field(parsed, 'subject') as string, field(parsed, 'problem') as string, field(parsed, 'fix') as string));
       }
       if (!result.out.includes('{')) {
         out.push(fault('SHAPE_CLIENT_IDENTIFIER', 'tools/scan-identifiers.ts',
@@ -635,7 +674,7 @@ function clientIdentifiers(root, kind, out, notes) {
   notes.push('SHAPE_CLIENT_IDENTIFIER: carbon declaration check --core-clean over the whole core tree');
 }
 
-function vendoredCopies(root, kind, other, out, notes) {
+function vendoredCopies(root: string, kind: RepoKind, other: string | null, out: FaultRow[], notes: string[]): void {
   if (!other) {
     notes.push('SHAPE_VENDORED_COPY: not checked, --with was not given, so there is no second copy to compare against');
     if (kind === 'runtime') {
@@ -686,7 +725,7 @@ function vendoredCopies(root, kind, other, out, notes) {
   notes.push(`SHAPE_VENDORED_COPY: ${files.length} files compared byte for byte against ${authority}`);
 }
 
-function adapterReach(root, modules, out) {
+function adapterReach(root: string, modules: Map<string, SourceModule>, out: FaultRow[]): void {
   for (const module of modules.values()) {
     if (!module.rel.startsWith('adapters/')) continue;
     const own = module.rel.split('/').slice(0, 2).join('/');
@@ -704,7 +743,7 @@ function adapterReach(root, modules, out) {
   }
 }
 
-function repoDirection(root, kind, modules, out) {
+function repoDirection(root: string, kind: RepoKind, modules: Map<string, SourceModule>, out: FaultRow[]): void {
   const foreign = kind === 'core'
     ? ['stream/', 'adapters/', 'runtime/', 'conformance/']
     : ['host/', 'lib/install.mjs', 'lib/doctor.mjs', 'lib/runner.mjs', 'lib/declaration.mjs'];
@@ -718,9 +757,10 @@ function repoDirection(root, kind, modules, out) {
         continue;
       }
       if (isVendored(module.rel)) continue;
-      if (kind === 'runtime' && foreign.some((p) => edge.to.rel === p || edge.to.rel.startsWith(p))) {
+      const to = edge.to.rel;
+      if (kind === 'runtime' && foreign.some((p) => to === p || to.startsWith(p))) {
         out.push(fault('SHAPE_REPO_DIRECTION', `${module.rel}:${edge.line}`,
-          `this imports ${edge.to.rel}, which belongs to the private half`,
+          `this imports ${to}, which belongs to the private half`,
           'the public half stands on its own; what it needs is copied under the vendored-copy rule'));
       }
     }
@@ -736,20 +776,26 @@ function repoDirection(root, kind, modules, out) {
 }
 
 // Every leaf of the declaration schema, as a dotted path.
-export function declarationFields(schemaFile) {
-  const schema = JSON.parse(fs.readFileSync(schemaFile, 'utf8'));
-  const found = [];
-  const visit = (node, at) => {
+export function declarationFields(schemaFile: string): string[] {
+  const schema: unknown = JSON.parse(fs.readFileSync(schemaFile, 'utf8'));
+  const found: string[] = [];
+  const visit = (node: unknown, at: string): void => {
     if (!node || typeof node !== 'object') return;
-    if (node.properties) {
-      for (const key of Object.keys(node.properties)) {
+    const properties = field(node, 'properties');
+    if (properties) {
+      // The schema walk intentionally keeps Object.keys' previous coercion.
+      for (const key of Object.keys(properties as object)) {
         const next = at ? `${at}.${key}` : key;
         found.push(next);
-        visit(node.properties[key], next);
+        visit(field(properties, key), next);
       }
     }
-    if (node.items) visit(node.items, `${at}[]`);
-    for (const key of ['oneOf', 'anyOf', 'allOf']) if (Array.isArray(node[key])) node[key].forEach((sub) => visit(sub, at));
+    const items = field(node, 'items');
+    if (items) visit(items, `${at}[]`);
+    for (const key of ['oneOf', 'anyOf', 'allOf']) {
+      const variants = field(node, key);
+      if (Array.isArray(variants)) variants.forEach((sub: unknown) => visit(sub, at));
+    }
   };
   visit(schema, '');
   return [...new Set(found)];
@@ -761,7 +807,7 @@ export function declarationFields(schemaFile) {
 // the value is used; it catches the case this rule is for, a field added to the
 // schema and to nothing else. A common word like `name` passes trivially, and
 // that is the known limit of the check.
-function declaredFieldsRead(root, kind, other, out, notes) {
+function declaredFieldsRead(root: string, kind: RepoKind, other: string | null, out: FaultRow[], notes: string[]): void {
   // The readers of a declaration are split across the two halves — install and
   // doctor read it from outside the box, the release loop reads it on the box —
   // so this rule needs both checkouts or it would call a field the other half
@@ -777,8 +823,8 @@ function declaredFieldsRead(root, kind, other, out, notes) {
     notes.push('SHAPE_DECLARED_FIELD_UNREAD: not checked, the declaration schema lives in the private half and is not in reach');
     return;
   }
-  const readers = [];
-  const add = (base, dirs) => {
+  const readers: string[] = [];
+  const add = (base: string | null, dirs: string[]): void => {
     if (!base) return;
     for (const dir of dirs) {
       for (const rel of walk(base, dir).filter(isSource)) readers.push(fs.readFileSync(path.join(base, rel), 'utf8'));
@@ -802,9 +848,9 @@ function declaredFieldsRead(root, kind, other, out, notes) {
   const text = readers.join('\n');
   const words = new Set();
   for (const word of text.split(/[^A-Za-z0-9_]+/)) if (word) words.add(word);
-  const missing = [];
+  const missing: string[] = [];
   for (const field of declarationFields(schemaFile)) {
-    const leaf = field.split('.').pop().replace('[]', '');
+    const leaf = (field.split('.').pop() ?? '').replace('[]', '');
     if (!words.has(leaf)) missing.push(field);
   }
   for (const field of missing) {
@@ -818,7 +864,7 @@ function declaredFieldsRead(root, kind, other, out, notes) {
              : '; --with was not given, so the other half\'s readers were not read and a field it reads shows here'));
 }
 
-function prunePath(root, kind, out, notes) {
+function prunePath(root: string, kind: RepoKind, out: FaultRow[], notes: string[]): void {
   const dirs = kind === 'runtime'
     ? ['stream', 'adapters', 'import', 'conformance', 'bin', 'runtime']
     : ['lib', 'bin'];
@@ -841,7 +887,7 @@ function prunePath(root, kind, out, notes) {
   notes.push(`SHAPE_PRUNE_PATH: ${looked} files under ${dirs.join(', ')}`);
 }
 
-function fileLength(modules, out) {
+function fileLength(modules: Map<string, SourceModule>, out: FaultRow[]): void {
   for (const module of modules.values()) {
     if (module.lines <= CAPS.file) continue;
     if (module.justified) continue;
@@ -851,7 +897,7 @@ function fileLength(modules, out) {
   }
 }
 
-function functionShape(modules, out) {
+function functionShape(modules: Map<string, SourceModule>, out: FaultRow[]): void {
   for (const module of modules.values()) {
     if (module.test) continue;
     const lines = module.text.split('\n');
@@ -874,7 +920,7 @@ function functionShape(modules, out) {
   }
 }
 
-export function graphOf(modules) {
+export function graphOf(modules: Map<string, SourceModule>): Graph {
   const out = new Map();
   for (const rel of modules.keys()) out.set(rel, { rel, to: new Set(), from: new Set() });
   for (const module of modules.values()) {
@@ -888,7 +934,7 @@ export function graphOf(modules) {
   return out;
 }
 
-function fanOut(graph, modules, out) {
+function fanOut(graph: Graph, modules: Map<string, SourceModule>, out: FaultRow[]): void {
   for (const node of graph.values()) {
     if (modules.get(node.rel)?.test) continue;
     if (node.to.size <= CAPS.fanOut) continue;
@@ -899,11 +945,11 @@ function fanOut(graph, modules, out) {
   }
 }
 
-export function cyclesIn(graph) {
-  const colour = new Map();
-  const stack = [];
-  const found = [];
-  const visit = (rel) => {
+export function cyclesIn(graph: Graph): string[][] {
+  const colour = new Map<string, 'grey' | 'black'>();
+  const stack: string[] = [];
+  const found: string[][] = [];
+  const visit = (rel: string): void => {
     colour.set(rel, 'grey');
     stack.push(rel);
     for (const next of graph.get(rel)?.to ?? []) {
@@ -917,7 +963,7 @@ export function cyclesIn(graph) {
   return found;
 }
 
-function importCycles(graph, out) {
+function importCycles(graph: Graph, out: FaultRow[]): void {
   for (const cycle of cyclesIn(graph)) {
     out.push(fault('SHAPE_IMPORT_CYCLE', cycle[0],
       `this module is in an import cycle: ${cycle.join(' -> ')}`,
@@ -925,7 +971,7 @@ function importCycles(graph, out) {
   }
 }
 
-function layerDirection(modules, out) {
+function layerDirection(modules: Map<string, SourceModule>, out: FaultRow[]): void {
   for (const module of modules.values()) {
     if (module.layer === null) continue;
     for (const edge of module.edges) {
@@ -945,8 +991,8 @@ function layerDirection(modules, out) {
 // comments and blank lines dropped, is the same in two places. Comments are
 // dropped because two copies of a rule with different comments are still two
 // copies of the rule.
-function normalisedLines(text) {
-  const out = [];
+function normalisedLines(text: string): Array<{ line: number; text: string }> {
+  const out: Array<{ line: number; text: string }> = [];
   text.split('\n').forEach((line, i) => {
     const stripped = line.replace(/\/\/.*$/, '').trim().replace(/\s+/g, ' ');
     if (stripped.length > 0) out.push({ line: i + 1, text: stripped });
@@ -954,9 +1000,10 @@ function normalisedLines(text) {
   return out;
 }
 
-export function duplicationIn(trees) {
+export function duplicationIn(trees: TreePair[]): Array<Array<{ tree: RepoKind; rel: string; line: number }>> {
   // trees: [{ label, root, modules }]
-  const blocks = new Map();
+  type Location = { tree: RepoKind; rel: string; line: number };
+  const blocks = new Map<string, Location[]>();
   for (const tree of trees) {
     for (const module of tree.modules.values()) {
       if (module.test || isVendored(module.rel)) continue;
@@ -964,12 +1011,13 @@ export function duplicationIn(trees) {
       for (let i = 0; i + CAPS.duplication <= lines.length; i += 1) {
         const window = lines.slice(i, i + CAPS.duplication);
         const key = window.map((l) => l.text).join('\n');
-        if (!blocks.has(key)) blocks.set(key, []);
-        blocks.get(key).push({ tree: tree.label, rel: module.rel, line: window[0].line });
+        const locations = blocks.get(key) ?? [];
+        locations.push({ tree: tree.label, rel: module.rel, line: window[0].line });
+        blocks.set(key, locations);
       }
     }
   }
-  const groups = [];
+  const groups: Location[][] = [];
   for (const [, where] of blocks) {
     const distinct = [...new Map(where.map((w) => [`${w.tree}:${w.rel}`, w])).values()];
     if (distinct.length < 2) continue;
@@ -977,8 +1025,8 @@ export function duplicationIn(trees) {
   }
   // One long duplicated run makes many overlapping windows; keep the first of
   // each set of files and drop the rest, so the report names a place once.
-  const seen = new Set();
-  const kept = [];
+  const seen = new Set<string>();
+  const kept: Location[][] = [];
   for (const group of groups) {
     const key = group.map((g) => `${g.tree}:${g.rel}`).sort().join('|');
     if (seen.has(key)) continue;
@@ -988,7 +1036,7 @@ export function duplicationIn(trees) {
   return kept;
 }
 
-function duplication(trees, out) {
+function duplication(trees: TreePair[], out: FaultRow[]): void {
   for (const group of duplicationIn(trees)) {
     const where = group.map((g) => `${g.tree}/${g.rel}:${g.line}`).join(' and ');
     const crossRepo = new Set(group.map((g) => g.tree)).size > 1;
@@ -1000,7 +1048,7 @@ function duplication(trees, out) {
   }
 }
 
-function deadExports(modules, out) {
+function deadExports(modules: Map<string, SourceModule>, out: FaultRow[]): void {
   const imported = new Map();
   for (const module of modules.values()) {
     for (const edge of module.edges) {
@@ -1046,7 +1094,7 @@ function deadExports(modules, out) {
   }
 }
 
-function resolveImportRel(from, spec) {
+function resolveImportRel(from: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
   const joined = path.posix.normalize(path.posix.join(path.posix.dirname(from), spec));
   return joined.startsWith('..') ? null : joined;
@@ -1055,7 +1103,7 @@ function resolveImportRel(from, spec) {
 // A subcommand is a string literal a command line compares its argument against.
 // They are read off the tokens of bin/ files: `case 'x':` and `=== 'x'`. A
 // subcommand is tested when its name appears in a test file.
-export function subcommandsIn(modules) {
+export function subcommandsIn(modules: Map<string, SourceModule>): Map<string, Set<string>> {
   const found = new Map();
   for (const module of modules.values()) {
     if (!module.rel.startsWith('bin/')) continue;
@@ -1075,7 +1123,7 @@ export function subcommandsIn(modules) {
   return found;
 }
 
-function untestedSubcommands(root, modules, out, notes) {
+function untestedSubcommands(root: string, modules: Map<string, SourceModule>, out: FaultRow[], notes: string[]): void {
   const testFiles = walk(root, 'test').filter((rel) => rel.endsWith('.mjs') || rel.endsWith('.ts'));
   if (testFiles.length === 0) {
     out.push(fault('SHAPE_UNTESTED_SUBCOMMAND', 'test/',
@@ -1102,7 +1150,7 @@ function untestedSubcommands(root, modules, out, notes) {
 
 const FAULT_LIBRARIES = new Set(['lib/faults.ts', 'stream/faults.ts', 'tools/lib/fault.ts', 'runtime/faults.ts', 'adapters/email/curl.mjs', 'adapters/email/curl.ts']);
 
-function errorPaths(modules, out) {
+function errorPaths(modules: Map<string, SourceModule>, out: FaultRow[]): void {
   for (const module of modules.values()) {
     if (module.test || FAULT_LIBRARIES.has(module.rel) || isVendored(module.rel)) continue;
     const t = module.tokens;
@@ -1128,7 +1176,7 @@ function errorPaths(modules, out) {
 
 // ---- the public surface, as a number -------------------------------------
 
-export function surfaceOf(root, kind, modules, other) {
+export function surfaceOf(root: string, kind: RepoKind, modules: Map<string, SourceModule>, other: string | null): { exported_symbols: number; cli_subcommands: number; declaration_fields: number | null } {
   const exported = [...modules.values()]
     .filter((m) => !m.test && !m.rel.startsWith('bin/'))
     .reduce((sum, m) => sum + m.exports.length, 0);
@@ -1142,13 +1190,13 @@ export function surfaceOf(root, kind, modules, other) {
 
 // ---- running everything ----------------------------------------------------
 
-export function check(root, { other = null } = {}) {
+export function check(root: string, { other = null }: { other?: string | null } = {}): CheckResult {
   const tree = analyse(root);
   const kind = tree.kind;
   if (!kind) throw Object.assign(new Error(`${root} is neither half of Carbon`), { carbon: true });
   const otherTree = other ? analyse(other) : null;
-  const violations = [];
-  const notes = [];
+  const violations: FaultRow[] = [];
+  const notes: string[] = [];
   if (tree.modules.size === 0) {
     violations.push(fault('SHAPE_ARGUMENT', root,
       'the source-module walk found no files, so the shape rules would inspect an empty set',
@@ -1168,8 +1216,8 @@ export function check(root, { other = null } = {}) {
   fanOut(graph, tree.modules, violations);
   importCycles(graph, violations);
   layerDirection(tree.modules, violations);
-  const trees = [{ label: kind, root, modules: tree.modules }];
-  if (otherTree) trees.push({ label: otherTree.kind, root: other, modules: otherTree.modules });
+  const trees: TreePair[] = [{ label: kind, root, modules: tree.modules }];
+  if (otherTree && other) trees.push({ label: otherTree.kind, root: other, modules: otherTree.modules });
   else notes.push('SHAPE_DUPLICATION: the cross-repository half was not checked, --with was not given');
   duplication(trees, violations);
   deadExports(tree.modules, violations);
@@ -1181,37 +1229,41 @@ export function check(root, { other = null } = {}) {
 
 // ---- the baseline ----------------------------------------------------------
 
-function baselineFile(root) { return path.join(root, 'tools', 'shape-baseline.json'); }
+function baselineFile(root: string): string { return path.join(root, 'tools', 'shape-baseline.json'); }
 
 // A baseline entry has to survive somebody adding a line above the thing it
 // names, or every edit anywhere would look like a new violation. So the key is
 // the rule and the place, with the line number and the measured number taken
 // out, and the baseline records how many that place had. One more than that is
 // new and fails; one fewer is a fix and is printed.
-export function baselineKey(f) {
+export function baselineKey(f: FaultRow): string {
   return `${f.code} ${f.subject.replace(/:\d+/g, '').replace(/\s*\([^)]*\)\s*$/, '').trim()}`;
 }
 
-export function splitByBaseline(root, violations) {
+export function splitByBaseline(root: string, violations: FaultRow[]): { fresh: FaultRow[]; known: FaultRow[]; stale: string[] } {
   const file = baselineFile(root);
   if (!fs.existsSync(file)) return { fresh: violations, known: [], stale: [] };
-  const listed = JSON.parse(fs.readFileSync(file, 'utf8')).known ?? {};
-  const seen = new Map();
-  const fresh = [];
-  const known = [];
+  const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const listed: unknown = field(parsed, 'known') ?? {};
+  const seen = new Map<string, number>();
+  const fresh: FaultRow[] = [];
+  const known: FaultRow[] = [];
   for (const v of violations) {
     const key = baselineKey(v);
     const used = seen.get(key) ?? 0;
-    if (used < (listed[key] ?? 0)) { known.push(v); seen.set(key, used + 1); } else fresh.push(v);
+    // The numeric operation keeps the old behavior for an untrusted baseline value.
+    if (used < ((field(listed, key) as number | undefined) ?? 0)) { known.push(v); seen.set(key, used + 1); } else fresh.push(v);
   }
-  const stale = Object.entries(listed)
+  // Object.entries retains its original coercion; counts still pass through
+  // JavaScript's comparison and subtraction if malformed JSON supplies them.
+  const stale = Object.entries(listed as Record<string, number>)
     .filter(([key, count]) => (seen.get(key) ?? 0) < count)
     .map(([key, count]) => `${key} (${count - (seen.get(key) ?? 0)} of ${count} gone)`);
   return { fresh, known, stale };
 }
 
-export function baselineFrom(violations) {
-  const counts = {};
+export function baselineFrom(violations: FaultRow[]): { known: Record<string, number> } {
+  const counts: Record<string, number> = {};
   for (const v of violations) {
     const key = baselineKey(v);
     counts[key] = (counts[key] ?? 0) + 1;
@@ -1222,7 +1274,7 @@ export function baselineFrom(violations) {
 const HELP = `shape-check — is Carbon still the shape it says it is?
 
 Usage:
-  node tools/shape-check.mjs [root] [--with <other checkout>] [--json] [--strict]
+  node tools/shape-check.ts [root] [--with <other checkout>] [--json] [--strict]
 
   root      the repository to check; the one this script sits in by default
   --with    a checkout of the other half of Carbon. The vendored-copy rule, the
@@ -1246,7 +1298,7 @@ per-function caps. The cycle, layer, copy, dependency, identifier, prune,
 declared-field, dead-export, subcommand and error-path rules have no escape.
 `;
 
-export function main(argv) {
+export function main(argv: string[]): number {
   const args = argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) { process.stdout.write(HELP); return 0; }
   const json = args.includes('--json');
@@ -1266,7 +1318,7 @@ export function main(argv) {
   try {
     result = check(root, { other });
   } catch (error) {
-    report([fault('SHAPE_ARGUMENT', root, error.message, 'give the path to a carbon-core or carbon-runtime checkout')]);
+    report([fault('SHAPE_ARGUMENT', root, field(error, 'message'), 'give the path to a carbon-core or carbon-runtime checkout')]);
     return 1;
   }
 
@@ -1303,7 +1355,7 @@ export function main(argv) {
   return fresh.length === 0 ? 0 : 1;
 }
 
-export function modelFor(result, strict = false) {
+export function modelFor(result: CheckResult, strict = false) {
   const split = strict ? { fresh: result.violations, known: [], stale: [] } : splitByBaseline(result.root, result.violations);
   return {
     root: result.root,
@@ -1322,7 +1374,7 @@ export function modelFor(result, strict = false) {
       test: m.test,
       exports: m.exports.map((e) => e.name),
       functions: m.functions.length,
-      imports: m.edges.filter((e) => e.to && !e.to.outside).map((e) => e.to.rel),
+      imports: m.edges.filter((e): e is ImportEdge & { to: ImportTarget } => e.to !== null && !e.to.outside).map((e) => e.to.rel),
       external: m.imports.filter((e) => !e.from.startsWith('.')).map((e) => e.from)
     })),
     fan: [...result.graph.values()].map((n) => ({ rel: n.rel, in: n.from.size, out: n.to.size }))
