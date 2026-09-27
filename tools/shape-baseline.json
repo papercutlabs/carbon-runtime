@@ -20,11 +20,11 @@
     "SHAPE_COMPLEXITY tools/lib/help.ts renderHelp": 1,
     "SHAPE_COMPLEXITY tools/lib/manifest.ts checkManifest": 1,
     "SHAPE_COMPLEXITY tools/lib/mcp.ts handle": 1,
-    "SHAPE_COMPLEXITY tools/shape-check.mjs deadExports": 1,
-    "SHAPE_COMPLEXITY tools/shape-check.mjs main": 1,
-    "SHAPE_COMPLEXITY tools/shape-check.mjs readModule": 1,
-    "SHAPE_COMPLEXITY tools/shape-check.mjs repoDirection": 1,
-    "SHAPE_COMPLEXITY tools/shape-check.mjs tokenize": 1,
+    "SHAPE_COMPLEXITY tools/shape-check.ts deadExports": 1,
+    "SHAPE_COMPLEXITY tools/shape-check.ts main": 1,
+    "SHAPE_COMPLEXITY tools/shape-check.ts readModule": 1,
+    "SHAPE_COMPLEXITY tools/shape-check.ts repoDirection": 1,
+    "SHAPE_COMPLEXITY tools/shape-check.ts tokenize": 1,
     "SHAPE_DEAD_EXPORT adapters/email/curl.ts NEVER_ARRIVED": 1,
     "SHAPE_DEAD_EXPORT adapters/email/curl.ts curlBinary": 1,
     "SHAPE_DEAD_EXPORT adapters/email/curl.ts runCurl": 1,
@@ -108,7 +108,7 @@
     "SHAPE_FUNCTION_LENGTH stream/validate.ts validate": 1,
     "SHAPE_FUNCTION_LENGTH tools/lib/manifest.ts checkManifest": 1,
     "SHAPE_FUNCTION_LENGTH tools/lib/mcp.ts createServer": 1,
-    "SHAPE_FUNCTION_LENGTH tools/shape-check.mjs readModule": 1,
-    "SHAPE_FUNCTION_LENGTH tools/shape-check.mjs tokenize": 1
+    "SHAPE_FUNCTION_LENGTH tools/shape-check.ts readModule": 1,
+    "SHAPE_FUNCTION_LENGTH tools/shape-check.ts tokenize": 1
   }
 }
