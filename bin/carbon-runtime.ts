@@ -13,7 +13,7 @@ import { REPLY_PORT } from '../runtime/reply-tool.ts';
 import { TEACH_PORT } from '../runtime/teach-tool.ts';
 import { registeredKinds } from '../runtime/registry.ts';
 import type { Declaration, Harness, Log } from '../runtime/types.ts';
-import * as codex from '../harness/codex/index.mjs';
+import * as codex from '../harness/codex/index.ts';
 
 const HELP = `carbon-runtime — run one client agent: the harness, the adapters and the release loop
 

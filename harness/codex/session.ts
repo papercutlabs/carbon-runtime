@@ -13,8 +13,19 @@
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fault } from '../../lib/faults.ts';
-import { Connection } from './protocol.mjs';
-import { EventStream } from './events.mjs';
+import { Connection } from './protocol.ts';
+import { EventStream } from './events.ts';
+import type { HarnessEvent, NotificationParams } from './events.ts';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+
+type Fault = { code: string; subject: string; problem: string; fix: string };
+type ThreadReply = { thread?: { id?: unknown }; model?: unknown; reasoningEffort?: unknown; cwd?: unknown; approvalPolicy?: unknown; sandbox?: unknown } | null;
+type ConnectOptions = {
+  binary: string; codexHome: string; providerKeyPath?: string; providerKeyEnvName?: string;
+  extraEnv?: Record<string, string>; onEvent?: (event: HarnessEvent) => void;
+  onStderr?: (chunk: string) => void; onDropped?: (line: string) => void;
+  onWire?: (direction: string, line: string) => void;
+};
 
 export const CLIENT_INFO = { name: 'carbon', version: 'increment-3' };
 
@@ -23,15 +34,16 @@ export const CLIENT_INFO = { name: 'carbon', version: 'increment-3' };
 const INHERITED = ['PATH', 'HOME', 'LANG', 'TMPDIR'];
 
 export class HarnessFault extends Error {
-  constructor(f) {
+  fault: Fault;
+  constructor(f: Fault, _faults?: Fault[]) {
     super(f.problem);
     this.name = 'HarnessFault';
     this.fault = f;
   }
 }
 
-function childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv }) {
-  const env = {};
+function childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv }: Pick<ConnectOptions, 'codexHome' | 'providerKeyEnvName' | 'extraEnv'> & { providerKey?: string }) {
+  const env: NodeJS.ProcessEnv = {};
   for (const name of INHERITED) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
@@ -42,7 +54,21 @@ function childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv }) {
 }
 
 export class Session {
-  constructor({ child, connection, stream, binary, codexHome, stderr }) {
+  child: ChildProcessWithoutNullStreams;
+  connection: Connection;
+  stream: EventStream;
+  binary: string;
+  codexHome: string;
+  stderr: string[];
+  threadId: unknown;
+  thread: ThreadReply;
+  initializeResult: unknown;
+  exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+
+  constructor({ child, connection, stream, binary, codexHome, stderr }: {
+    child: ChildProcessWithoutNullStreams; connection: Connection; stream: EventStream;
+    binary: string; codexHome: string; stderr: string[];
+  }) {
     this.child = child;
     this.connection = connection;
     this.stream = stream;
@@ -55,14 +81,14 @@ export class Session {
     this.exit = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
   }
 
-  request(method, params) {
+  request(method: string, params: unknown) {
     return this.connection.request(method, params);
   }
 
   // A record of what was started, written to store/threads/<unit-id>.json by the
   // runtime before the first turn. The runtime half of increment 3 owns the write;
   // the harness owns the shape.
-  threadRecord(unitId) {
+  threadRecord(unitId?: string) {
     return {
       unit_id: unitId,
       thread_id: this.threadId,
@@ -92,7 +118,7 @@ export class Session {
 // Spawns the app-server and completes the handshake. Does not open a thread; that
 // is `openThread` or `resumeThread`, so a caller that only wants tool status pays
 // for nothing more.
-export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, onEvent, onStderr, onDropped, onWire }) {
+export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, onEvent, onStderr, onDropped, onWire }: ConnectOptions) {
   if (!fs.existsSync(codexHome)) {
     throw new HarnessFault(fault('HARNESS_CODEX_HOME_ABSENT', codexHome,
       'the CODEX_HOME directory does not exist, and the harness never creates it',
@@ -104,7 +130,7 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
       providerKey = fs.readFileSync(providerKeyPath, 'utf8').trim();
     } catch (error) {
       throw new HarnessFault(fault('HARNESS_PROVIDER_KEY_UNREADABLE', providerKeyPath,
-        error.message,
+        error instanceof Error ? error.message : String(error),
         'place the secret as a file readable by the agent user only, as the host contract requires'));
     }
     if (!providerKeyEnvName) {
@@ -119,7 +145,7 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
     env: childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv })
   });
 
-  const stderr = [];
+  const stderr: string[] = [];
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => {
     stderr.push(chunk);
@@ -130,7 +156,8 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
   const connection = new Connection({
     input: child.stdout,
     output: child.stdin,
-    onNotification: (method, params) => stream.accept(method, params),
+    // The stream keeps raw optional notification fields; it does not treat this wire value as validated.
+    onNotification: (method, params) => stream.accept(method, params as NotificationParams),
     onUnparsable: (line) => { if (onDropped) onDropped(line); },
     onWire
   });
@@ -144,8 +171,10 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
 // One thread per unit of work. `sandbox` is the thread's mode; the per-turn
 // sandboxPolicy on turn/start is what actually fences a turn, and turn.mjs sends it
 // every time.
-export async function openThread(session, { cwd, model, effort, sandbox, unitId }) {
-  const params = {
+export async function openThread(session: Session, { cwd, model, effort, sandbox, unitId }: {
+  cwd: string; model?: string; effort?: string; sandbox: string; unitId?: string;
+}) {
+  const params: { cwd: string; model?: string; sandbox: string; approvalPolicy: string; ephemeral: boolean; config?: { model_reasoning_effort: string } } = {
     cwd,
     model,
     sandbox,
@@ -153,7 +182,8 @@ export async function openThread(session, { cwd, model, effort, sandbox, unitId 
     ephemeral: false
   };
   if (effort) params.config = { model_reasoning_effort: effort };
-  const started = await session.request('thread/start', params);
+  // Optional wire fields are inspected below; missing or mismatched values still fault.
+  const started = await session.request('thread/start', params) as ThreadReply;
   session.thread = started;
   session.threadId = started?.thread?.id ?? null;
 
@@ -187,13 +217,16 @@ export async function openThread(session, { cwd, model, effort, sandbox, unitId 
 // Rejoins a thread the app-server already has on disk, which is what the runtime
 // does after a restart. The thread state the reply reports is returned whole,
 // because "what does the thread say it is" is the question a restart asks.
-export async function resumeThread(session, { threadId, cwd, model, effort, sandbox }) {
-  const params = { threadId };
+export async function resumeThread(session: Session, { threadId, cwd, model, effort, sandbox }: {
+  threadId: string; cwd?: string; model?: string; effort?: string; sandbox?: string;
+}) {
+  const params: { threadId: string; cwd?: string; model?: string; sandbox?: string; config?: { model_reasoning_effort: string } } = { threadId };
   if (cwd) params.cwd = cwd;
   if (model) params.model = model;
   if (sandbox) params.sandbox = sandbox;
   if (effort) params.config = { model_reasoning_effort: effort };
-  const resumed = await session.request('thread/resume', params);
+  // The returned record remains wire data; callers receive it whole after the existing id fallback.
+  const resumed = await session.request('thread/resume', params) as ThreadReply;
   session.thread = resumed;
   session.threadId = resumed?.thread?.id ?? threadId;
   return resumed;

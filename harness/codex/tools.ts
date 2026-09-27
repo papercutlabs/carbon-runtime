@@ -21,24 +21,30 @@
 
 import fs from 'node:fs';
 import { fault } from '../../lib/faults.ts';
+import type { Session } from './session.ts';
+import type { HarnessEvent } from './events.ts';
+
+type ToolServer = { name?: string; secret_refs?: string[]; transport?: string; command?: string; cwd?: string; url?: string; required?: boolean };
+type Declaration = { tool_servers?: ToolServer[]; secrets?: { name: string }[] } | null | undefined;
+type ToolStatus = { name?: string; runtimeStatus?: string | null };
 
 const BARE_KEY = /^[A-Za-z0-9_-]+$/;
 
 // The declaration is the grant. See the note above and the verification record.
 export const APPROVAL_MODE = 'approve';
 
-function tomlKey(name) {
+function tomlKey(name: string) {
   return BARE_KEY.test(name) ? name : JSON.stringify(name);
 }
 
-function tomlString(value) {
+function tomlString(value: unknown) {
   return JSON.stringify(String(value));
 }
 
 // Returns { toml, faults }. Every fault in the declaration's tool_servers is
 // collected, so one render tells the caller everything that is wrong.
-export function renderConfigToml(declaration, { header = true } = {}) {
-  const faults = [];
+export function renderConfigToml(declaration: Declaration, { header = true }: { header?: boolean } = {}) {
+  const faults: ReturnType<typeof fault>[] = [];
   const servers = declaration?.tool_servers ?? [];
   const declaredSecrets = new Set((declaration?.secrets ?? []).map((s) => s.name));
   const lines = [];
@@ -131,7 +137,7 @@ export function renderConfigToml(declaration, { header = true } = {}) {
   return { toml: lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n', faults };
 }
 
-export function writeConfigToml(declaration, destination) {
+export function writeConfigToml(declaration: Declaration, destination: string) {
   const { toml, faults } = renderConfigToml(declaration);
   if (faults.length) return { written: false, faults };
   fs.writeFileSync(destination, toml, { mode: 0o600 });
@@ -140,14 +146,15 @@ export function writeConfigToml(declaration, destination) {
 
 // Reads every page of mcpServerStatus/list. The protocol pages this list, and a
 // single page read as the whole list is how a required server goes missing.
-export async function listToolServerStatus(session, { threadId } = {}) {
-  const servers = [];
+export async function listToolServerStatus(session: Session, { threadId }: { threadId?: string } = {}) {
+  const servers: ToolStatus[] = [];
   let cursor = null;
   do {
-    const params = {};
+    const params: { threadId?: string; cursor?: string } = {};
     if (threadId) params.threadId = threadId;
     if (cursor) params.cursor = cursor;
-    const page = await session.request('mcpServerStatus/list', params);
+    // This optional wire shape is used only to read pages; no status is accepted until holdsRelease checks it.
+    const page = await session.request('mcpServerStatus/list', params) as { data?: ToolStatus[]; nextCursor?: string | null } | null;
     servers.push(...(page?.data ?? []));
     cursor = page?.nextCursor ?? null;
   } while (cursor);
@@ -163,7 +170,7 @@ export async function listToolServerStatus(session, { threadId } = {}) {
 // runtime connection belongs to a thread. A null is therefore "not known", not
 // "down", and it gets its own fault: reading it as down would hold every release
 // on a box whose servers are all healthy.
-export function holdsRelease(declaration, statuses) {
+export function holdsRelease(declaration: Declaration, statuses: ToolStatus[]) {
   const required = new Set((declaration?.tool_servers ?? []).filter((s) => s.required).map((s) => s.name));
   const byName = new Map(statuses.map((s) => [s.name, s]));
   const faults = [];
@@ -194,7 +201,7 @@ export function holdsRelease(declaration, statuses) {
 // The subscription. mcpServer/startupStatus/updated is a notification, so there is
 // nothing to subscribe to beyond listening; this names the listening so the caller
 // does not reach into the event stream by method name.
-export function onToolServerStatus(session, handler) {
+export function onToolServerStatus(session: Session, handler: (event: HarnessEvent) => void) {
   const previous = session.stream.onEvent;
   session.stream.onEvent = (event) => {
     previous(event);

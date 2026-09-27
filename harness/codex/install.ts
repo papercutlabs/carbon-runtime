@@ -15,10 +15,21 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { fault } from '../../lib/faults.ts';
-import { HarnessFault } from './session.mjs';
+import { HarnessFault } from './session.ts';
 import {
   sha256, bundleManifest, bundleSha256, assertMethodsExist, readSchemaPin
-} from './methods.mjs';
+} from './methods.ts';
+
+type GeneratedSchema = { document_path: string; document_sha256: string; bundle_sha256: string };
+type SchemaPin = { document_sha256?: unknown; bundle_sha256?: unknown };
+type InstallOptions = {
+  version?: string; tag?: string; asset?: string; artifactSha256?: string; dest?: string; cache?: string;
+  offlineAsset?: string | null; offlineBundle?: string | null; pin?: SchemaPin | null;
+};
+type ReleaseVerdict = {
+  signed_blob_sha256?: unknown; asset_sha256?: unknown; verified?: unknown;
+  identity_san?: unknown; identity_issuer?: unknown; rekor_log_index?: unknown; not_verified?: unknown;
+};
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const VERIFY_RELEASE = path.join(HERE, '..', '..', 'tools', 'verify-release.mjs');
@@ -31,7 +42,7 @@ export const SCHEMA_DOCUMENT_NAME = 'codex_app_server_protocol.schemas.json';
 // The archives hold exactly one file, so the first ustar header is enough. The same
 // reader lives in tools/verify-release.mjs, which reads the member to hash it; this
 // one reads it to write it out.
-function singleFileFromTarGz(archive) {
+function singleFileFromTarGz(archive: Buffer) {
   const tar = zlib.gunzipSync(archive);
   const name = tar.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
   const size = parseInt(tar.subarray(124, 136).toString('utf8').replace(/[\0 ]/g, ''), 8);
@@ -43,7 +54,7 @@ function singleFileFromTarGz(archive) {
 // will actually run, and returns the bundle's two digests. `bundle_sha256` covers
 // every file the subcommand wrote, through a manifest; `document_sha256` covers the
 // one merged document carbon checks its method names against.
-export function generateProtocolSchema(binary, outDir) {
+export function generateProtocolSchema(binary: string, outDir: string) {
   fs.mkdirSync(outDir, { recursive: true });
   execFileSync(binary, [...SCHEMA_COMMAND, outDir], { stdio: ['ignore', 'pipe', 'pipe'] });
   const documentPath = path.join(outDir, SCHEMA_DOCUMENT_NAME);
@@ -66,9 +77,10 @@ export function generateProtocolSchema(binary, outDir) {
 
 // Compares a generated schema against what carbon pinned, and against the method
 // names the harness sends. Returns every fault at once.
-export function checkProtocolSchema(generated, { pin = null, documentPath = null } = {}) {
-  const faults = [];
-  const expected = pin ?? readSchemaPin();
+export function checkProtocolSchema(generated: GeneratedSchema, { pin = null, documentPath = null }: { pin?: SchemaPin | null; documentPath?: string | null } = {}) {
+  const faults: ReturnType<typeof fault>[] = [];
+  // Pin JSON stays untrusted; the existing digest comparisons inspect its optional fields.
+  const expected = pin ?? (readSchemaPin() as SchemaPin);
   if (expected.bundle_sha256 && expected.bundle_sha256 !== generated.bundle_sha256) {
     faults.push(fault('HARNESS_PROTOCOL_SCHEMA_MOVED', 'protocol schema bundle',
       `carbon pins ${expected.bundle_sha256} and this binary generates ${generated.bundle_sha256}`,
@@ -91,8 +103,8 @@ export function checkProtocolSchema(generated, { pin = null, documentPath = null
 export function install({
   version, tag, asset, artifactSha256, dest, cache,
   offlineAsset = null, offlineBundle = null, pin = null
-}) {
-  const faults = [];
+}: InstallOptions) {
+  const faults: ReturnType<typeof fault>[] = [];
   for (const [name, value] of Object.entries({ version, tag, asset, artifactSha256, dest, cache })) {
     if (!value) {
       faults.push(fault('MISSING_ARGUMENT', name,
@@ -101,23 +113,29 @@ export function install({
   }
   if (faults.length) return { installed: false, faults };
 
-  fs.mkdirSync(cache, { recursive: true });
-  const verifyArgs = [VERIFY_RELEASE, '--tag', tag, '--asset', asset, '--sha256', artifactSha256, '--out', cache];
-  if (offlineAsset) verifyArgs.push('--offline-asset', offlineAsset, '--offline-bundle', offlineBundle);
-  let verdict;
+  // The six required values were checked above; the compiler cannot narrow them through the faults array.
+  const required = { version: version!, tag: tag!, asset: asset!, artifactSha256: artifactSha256!, dest: dest!, cache: cache! };
+  fs.mkdirSync(required.cache, { recursive: true });
+  const verifyArgs = [VERIFY_RELEASE, '--tag', required.tag, '--asset', required.asset, '--sha256', required.artifactSha256, '--out', required.cache];
+  // A missing offline bundle is passed unchanged and rejected by the existing verifier invocation.
+  if (offlineAsset) verifyArgs.push('--offline-asset', offlineAsset, '--offline-bundle', offlineBundle!);
+  let verdict: ReleaseVerdict;
   try {
-    verdict = JSON.parse(execFileSync(process.execPath, verifyArgs, { encoding: 'utf8', maxBuffer: 1 << 28 }));
+    // The verifier's JSON is untrusted; every field remains unknown until its existing use checks it.
+    verdict = JSON.parse(execFileSync(process.execPath, verifyArgs, { encoding: 'utf8', maxBuffer: 1 << 28 })) as ReleaseVerdict;
   } catch (error) {
-    const lines = String(error.stdout ?? '').split('\n').filter(Boolean);
+    const stdout = error && typeof error === 'object' && 'stdout' in error ? error.stdout : '';
+    const lines = String(stdout ?? '').split('\n').filter(Boolean);
     const reported = lines.map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
     return {
       installed: false,
-      faults: reported.length ? reported : [fault('HARNESS_RELEASE_UNVERIFIED', asset,
-        String(error.message), 'read tools/verify-release.mjs --help and run it by hand against this tag')]
+      faults: reported.length ? reported : [fault('HARNESS_RELEASE_UNVERIFIED', required.asset,
+        // The caught value is unknown; this optional property read preserves the verifier error text.
+        String((error as { message?: unknown }).message), 'read tools/verify-release.mjs --help and run it by hand against this tag')]
     };
   }
 
-  const assetPath = offlineAsset ?? path.join(cache, asset);
+  const assetPath = offlineAsset ?? path.join(required.cache, required.asset);
   const { name, bytes } = singleFileFromTarGz(fs.readFileSync(assetPath));
   if (sha256(bytes) !== verdict.signed_blob_sha256) {
     return { installed: false, faults: [fault('HARNESS_BINARY_DIGEST_MISMATCH', name,
@@ -125,7 +143,7 @@ export function install({
       'refuse the release and re-fetch')] };
   }
 
-  const versionDir = path.join(dest, version);
+  const versionDir = path.join(required.dest, required.version);
   fs.mkdirSync(versionDir, { recursive: true });
   const binary = path.join(versionDir, 'codex');
   fs.writeFileSync(binary, bytes, { mode: 0o755 });
@@ -155,7 +173,7 @@ export function install({
 // Records a schema pin from a binary already on this machine. This is how the pin
 // under harness/codex/schema/ is produced and re-produced; a box install never uses
 // it, because a box installs from a verified release and nothing else.
-export function pinFromLocalBinary(binary, outDir) {
+export function pinFromLocalBinary(binary: string, outDir: string) {
   const generated = generateProtocolSchema(binary, outDir);
   const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
   return { ...generated, codex_version: version };
