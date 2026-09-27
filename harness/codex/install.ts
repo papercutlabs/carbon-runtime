@@ -32,7 +32,7 @@ type ReleaseVerdict = {
 };
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
-const VERIFY_RELEASE = path.join(HERE, '..', '..', 'tools', 'verify-release.mjs');
+const VERIFY_RELEASE = path.join(HERE, '..', '..', 'tools', 'verify-release.ts');
 
 // The subcommand 0.153.4 offers. Recorded as a constant because a version that
 // renames it must fail loudly here rather than produce an empty bundle.
@@ -40,7 +40,7 @@ export const SCHEMA_COMMAND = ['app-server', 'generate-json-schema', '--out'];
 export const SCHEMA_DOCUMENT_NAME = 'codex_app_server_protocol.schemas.json';
 
 // The archives hold exactly one file, so the first ustar header is enough. The same
-// reader lives in tools/verify-release.mjs, which reads the member to hash it; this
+// reader lives in tools/verify-release.ts, which reads the member to hash it; this
 // one reads it to write it out.
 function singleFileFromTarGz(archive: Buffer) {
   const tar = zlib.gunzipSync(archive);
@@ -131,7 +131,7 @@ export function install({
       installed: false,
       faults: reported.length ? reported : [fault('HARNESS_RELEASE_UNVERIFIED', required.asset,
         // The caught value is unknown; this optional property read preserves the verifier error text.
-        String((error as { message?: unknown }).message), 'read tools/verify-release.mjs --help and run it by hand against this tag')]
+        String((error as { message?: unknown }).message), 'read tools/verify-release.ts --help and run it by hand against this tag')]
     };
   }
 

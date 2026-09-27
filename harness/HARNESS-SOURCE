@@ -1,9 +1,8 @@
 Where the copied files under this repository came from, and what may be done to them.
 
 source repository   the private half of Carbon, named in that repository's README
-source commit       9df19f27a3e3c3bb21db2c0c0372c68e096b5d95
-copied on           2026-09-27 (PA-259: account/read and account/rateLimits/read, readAccount;
-                    carbon-core PR 113)
+source commit       f45ff65f784908f54040e6128fc63f99c37cedd2
+copied on           2026-09-27 (PA-318: typed remaining tools and verifier path)
 
 Copied verbatim, as whole files, with no edit of any kind:
 
