@@ -47,6 +47,10 @@ export function secretEnvName(secretName: string) {
 }
 
 export function environmentFor(declaration: Declaration, server: Server) {
+  // The provider proxy holds the provider key and needs nothing from the
+  // declaration, so it is handed an empty environment: no runtime.env override can
+  // reach the process that holds the key (PA-259).
+  if (isProviderProxy(server)) return {};
   const byName = new Map((declaration.secrets ?? []).map((s) => [s.name, s]));
   const env: NodeJS.ProcessEnv = {};
   for (const ref of server.secret_refs ?? []) {

@@ -78,8 +78,16 @@ test('the only secret a server is handed on stdin is the one it names, and only 
   assert.deepEqual(faultCodes(() => stdinSecretFor(declarationWith(server), proxyServer({ stdin_secret: 'missing' }))), ['SECRET_REF_UNDECLARED']);
 });
 
-test('the tool unit hands the proxy its key as stdin, from the file, and the launcher neither reads nor logs it', () => {
+// Each test's directory holds a synthetic key, and it goes when the test does.
+// spawnSync has already waited for the launcher and its child when this runs.
+function agentDirFor(t: { after: (fn: () => void) => void }) {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-proxy-'));
+  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
+  return agentDir;
+}
+
+test('the tool unit hands the proxy its key as stdin, from the file, and the launcher neither reads nor logs it', (t) => {
+  const agentDir = agentDirFor(t);
   const work = path.join(agentDir, 'tools-work');
   fs.mkdirSync(work);
   fs.mkdirSync(path.join(agentDir, 'secrets'));
@@ -93,20 +101,23 @@ test('the tool unit hands the proxy its key as stdin, from the file, and the lau
   const stub = path.join(binDir, PROVIDER_PROXY_BINARY);
   fs.writeFileSync(stub, '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > args.txt\nenv > env.txt\ncat > stdin.bin\n', { mode: 0o755 });
   const server = proxyServer({ cwd: work });
-  fs.writeFileSync(path.join(agentDir, 'current', 'carbon.agent.json'), JSON.stringify(declarationWith(server, keyPath)));
+  // A declared override reaches MCP servers, and never the key holder.
+  const declaration = { ...declarationWith(server, keyPath), runtime: { env: [{ name: 'PA259_OVERRIDE', value: 'declared' }] } } as Declaration;
+  fs.writeFileSync(path.join(agentDir, 'current', 'carbon.agent.json'), JSON.stringify(declaration));
 
   const ran = spawnSync(process.execPath, [LAUNCHER, '--agent-dir', agentDir, '--instance', `${AGENT}-provider-proxy`], { encoding: 'utf8', timeout: 20000 });
   assert.equal(ran.status, 0, ran.stderr);
   assert.equal(fs.readFileSync(path.join(work, 'stdin.bin'), 'utf8'), key, 'the key arrives whole on stdin');
   assert.deepEqual(fs.readFileSync(path.join(work, 'args.txt'), 'utf8').trim().split('\n'), ['--port', '8765', '--upstream-url', UPSTREAM]);
   assert.doesNotMatch(fs.readFileSync(path.join(work, 'env.txt'), 'utf8'), /CARBON_SECRET_|PA259CANARY/, 'no secret path and no key in the environment');
+  assert.doesNotMatch(fs.readFileSync(path.join(work, 'env.txt'), 'utf8'), /PA259_OVERRIDE/, 'no runtime.env override in the key holder\'s environment');
   assert.doesNotMatch(ran.stdout + ran.stderr, /PA259CANARY/, 'the launcher says the path it opened and never what is in it');
   const starting = JSON.parse(ran.stdout.split('\n').find((l) => l.includes('tool_server.starting')) ?? '{}');
   assert.equal(starting.stdin, keyPath);
 });
 
-test('a key file the tools user cannot open ends the launch by name, and nothing is started', () => {
-  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-proxy-'));
+test('a key file the tools user cannot open ends the launch by name, and nothing is started', (t) => {
+  const agentDir = agentDirFor(t);
   fs.mkdirSync(path.join(agentDir, 'current'));
   fs.mkdirSync(path.join(agentDir, 'current', PROVIDER_PROXY_DIR), { recursive: true });
   const marker = path.join(agentDir, 'started');
