@@ -27,7 +27,7 @@ type ReplyOptions = { store: Store; agent: string; declaration?: Declaration | n
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createServer } from '../tools/lib/mcp.mjs';
+import { createServer } from '../tools/lib/mcp.ts';
 import { StreamFault } from '../stream/store.ts';
 import { fault } from '../stream/faults.ts';
 import { managementConversationOf } from './channel.ts';
@@ -234,13 +234,15 @@ export function teachCheckConversation(declaration: Declaration | null | undefin
 // as it always was.
 export function replyHandler({ store, agent, declaration = null, work = null, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
   const heldIn = teachCheckConversation(declaration);
-  return (args: ReplyArgs) => {
+  // createServer calls this with parseArguments leftovers (Record<string, unknown>)
+  // and unknown context. Named fields are the original reads, not a new check.
+  return (args: Record<string, unknown>) => {
     const record = outboundRecord(store, {
       agent,
-      conversation_id: args.conversation_id,
-      request_id: args.request_id,
-      text: args.text,
-      attachments: args.attachments,
+      conversation_id: args.conversation_id as string,
+      request_id: args.request_id as string,
+      text: args.text as string,
+      attachments: args.attachments as ReplyArgs['attachments'],
       work,
       now: now()
     });

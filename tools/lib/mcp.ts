@@ -13,48 +13,94 @@
 // a dropped safety hint reads as safe.
 
 import http from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import readline from 'node:readline';
-import { asFaults, faultText } from './fault.mjs';
-import { parseArguments } from './args.mjs';
-import { checkManifest, shapeReturn } from './manifest.mjs';
+import { asFaults, faultText } from './fault.ts';
+import { parseArguments } from './args.ts';
+import { checkManifest, shapeReturn } from './manifest.ts';
 
 export const ADVERTISED_PROTOCOL = '2025-06-18';
 export const ACCEPTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
 
+// JSON-RPC request fields as they arrive. Presence is not a protocol check.
+type RpcMessage = {
+  jsonrpc?: unknown;
+  method?: unknown;
+  id?: unknown;
+  params?: unknown;
+};
+type RpcParams = {
+  protocolVersion?: unknown;
+  name?: unknown;
+  arguments?: unknown;
+};
+// Fields createServer reads after checkManifest. This is not a second validator.
+type ManifestTool = {
+  name: string;
+  description: unknown;
+  arguments: unknown;
+  returns: { what: unknown; fields: Array<{ name: unknown; what: unknown }> };
+  readOnlyHint: unknown;
+};
+type ServableManifest = {
+  name: unknown;
+  version: unknown;
+  tools: ManifestTool[];
+};
+// parseArguments returns leftover named values as Record<string, unknown>.
+// createServer passes its context argument through as unknown. This is the
+// unvalidated call boundary: a handler may treat both as unknown, and a
+// handler that requires a narrower args or context object is not assignable
+// under strictFunctionTypes, because this server never proves those shapes.
+type RegisteredHandler = (args: Record<string, unknown>, context: unknown) => unknown;
+type CreateServerOptions = {
+  manifest: unknown;
+  handlers: Record<string, RegisteredHandler>;
+  context?: unknown;
+};
+type Produced = { data?: unknown; text?: unknown };
+type Handle = (message: unknown) => Promise<unknown>;
+type StdioOptions = { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream };
+type HttpOptions = { host?: string; port?: number; path?: string };
+
 // handlers is {<tool name>: async (args, context) => object | {data, text}}.
-export function createServer({ manifest, handlers, context = {} }) {
+export function createServer({ manifest, handlers, context = {} }: CreateServerOptions) {
   const manifestFaults = checkManifest(manifest);
   if (manifestFaults.length > 0) {
     throw new Error(`the manifest is not servable:\n${faultText(manifestFaults)}`);
   }
-  for (const tool of manifest.tools) {
+  // Remaining field reads follow the check above; they do not re-validate JSON.
+  const servable = manifest as ServableManifest;
+  for (const tool of servable.tools) {
     if (typeof handlers[tool.name] !== 'function') {
       throw new Error(`the manifest declares ${tool.name} and no handler implements it`);
     }
   }
   for (const name of Object.keys(handlers)) {
-    if (!manifest.tools.some((t) => t.name === name)) {
+    if (!servable.tools.some((t) => t.name === name)) {
       throw new Error(`${name} is implemented and not declared in the manifest`);
     }
   }
 
-  const byName = new Map(manifest.tools.map((t) => [t.name, t]));
+  const byName = new Map(servable.tools.map((t) => [t.name, t]));
 
-  async function handle(message) {
-    if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
-      return error(message && message.id !== undefined ? message.id : null, -32600,
+  async function handle(message: unknown) {
+    const req = message as RpcMessage | null | undefined;
+    if (!req || req.jsonrpc !== '2.0' || typeof req.method !== 'string') {
+      return error(req && req.id !== undefined ? req.id : null, -32600,
         'not a JSON-RPC 2.0 request');
     }
-    const { id, method, params } = message;
+    const { id, method, params } = req;
     const isNotification = id === undefined;
+    const rpcParams = params as RpcParams | null | undefined;
 
     if (method === 'initialize') {
-      const asked = params && typeof params.protocolVersion === 'string' ? params.protocolVersion : null;
+      const asked = rpcParams && typeof rpcParams.protocolVersion === 'string' ? rpcParams.protocolVersion : null;
       return ok(id, {
-        protocolVersion: ACCEPTED_PROTOCOLS.includes(asked) ? asked : ADVERTISED_PROTOCOL,
+        protocolVersion: ACCEPTED_PROTOCOLS.includes(asked as string) ? asked : ADVERTISED_PROTOCOL,
         capabilities: { tools: {} },
-        serverInfo: { name: manifest.name, version: manifest.version }
+        serverInfo: { name: servable.name, version: servable.version }
       });
     }
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') return null;
@@ -62,7 +108,7 @@ export function createServer({ manifest, handlers, context = {} }) {
 
     if (method === 'tools/list') {
       return ok(id, {
-        tools: manifest.tools.map((tool) => ({
+        tools: servable.tools.map((tool) => ({
           name: tool.name,
           description: describe(tool),
           inputSchema: tool.arguments,
@@ -72,20 +118,22 @@ export function createServer({ manifest, handlers, context = {} }) {
     }
 
     if (method === 'tools/call') {
-      const name = params && params.name;
-      const tool = byName.get(name);
+      const name = rpcParams && rpcParams.name;
+      const tool = byName.get(name as string);
       // An unknown tool is a bad call, so it fails at the protocol. A bad
       // argument is something the model can correct, so it comes back as content.
       if (!tool) {
         return error(id, -32602, `no tool named ${JSON.stringify(name ?? null)}; call tools/list`);
       }
       try {
-        const args = parseArguments(tool.arguments, params.arguments, `${tool.name} arguments`);
-        const produced = await handlers[tool.name](args, context);
-        const raw = produced && typeof produced === 'object' && 'data' in produced ? produced.data : produced;
+        const args = parseArguments(tool.arguments, rpcParams!.arguments, `${tool.name} arguments`);
+        // args is the leftover Record from parseArguments; context is still unknown.
+        const produced = await (handlers[tool.name])(args, context);
+        const producedRec = produced as Produced | null | undefined;
+        const raw = producedRec && typeof producedRec === 'object' && 'data' in producedRec ? producedRec.data : produced;
         const data = shapeReturn(tool, raw);
-        const text = produced && typeof produced === 'object' && typeof produced.text === 'string'
-          ? produced.text
+        const text = producedRec && typeof producedRec === 'object' && typeof producedRec.text === 'string'
+          ? producedRec.text
           : renderText(tool, data);
         return ok(id, {
           content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data, null, 2)}` }],
@@ -106,29 +154,29 @@ export function createServer({ manifest, handlers, context = {} }) {
     return error(id, -32601, `${method} is not implemented; this server carries tools/list and tools/call only`);
   }
 
-  return { manifest, handle, serveStdio: () => serveStdio(handle), serveHttp: (o) => serveHttp(handle, o) };
+  return { manifest, handle, serveStdio: () => serveStdio(handle), serveHttp: (o?: HttpOptions) => serveHttp(handle, o) };
 }
 
-function describe(tool) {
+function describe(tool: ManifestTool) {
   const fields = tool.returns.fields.map((f) => `${f.name} (${f.what})`).join('; ');
   return `${tool.description}\n\nReturns ${tool.returns.what} Fields: ${fields}.`;
 }
 
-function renderText(tool, data) {
+function renderText(tool: ManifestTool, data: Record<string, unknown>) {
   const lines = [`${tool.name}: ${tool.returns.what}`];
   for (const field of tool.returns.fields) {
-    const value = data[field.name];
+    const value = data[field.name as string];
     lines.push(`  ${field.name}: ${typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)}`);
   }
   return lines.join('\n');
 }
 
-function ok(id, result) { return { jsonrpc: '2.0', id, result }; }
-function error(id, code, message) { return { jsonrpc: '2.0', id, error: { code, message } }; }
+function ok(id: unknown, result: unknown) { return { jsonrpc: '2.0', id, result }; }
+function error(id: unknown, code: number, message: string) { return { jsonrpc: '2.0', id, error: { code, message } }; }
 
 // stdio: one JSON-RPC message per line, in and out. No framing header, which is
 // what every harness on this transport reads today.
-export function serveStdio(handle, { input = process.stdin, output = process.stdout } = {}) {
+export function serveStdio(handle: Handle, { input = process.stdin, output = process.stdout }: StdioOptions = {}) {
   const lines = readline.createInterface({ input, crlfDelay: Infinity });
   let queue = Promise.resolve();
   lines.on('line', (line) => {
@@ -150,21 +198,22 @@ export function serveStdio(handle, { input = process.stdin, output = process.std
 // and the response comes back as JSON. There is no SSE stream and no session
 // resumption, because a client tool server has nothing to stream. The bind
 // address is loopback and a request from anywhere else never arrives.
-export function serveHttp(handle, { host = '127.0.0.1', port, path = '/mcp' } = {}) {
+export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/mcp' }: HttpOptions = {}) {
   if (!LOOPBACK.has(host)) {
     throw new Error(`a tool server binds loopback only, and ${host} is not loopback`);
   }
-  if (!Number.isInteger(port)) throw new Error('serveHttp needs an explicit port');
+  // port is optional at the type boundary; the runtime still refuses a missing one.
+  if (!Number.isInteger(port as number)) throw new Error('serveHttp needs an explicit port');
 
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url, `http://${host}`);
+  const server = http.createServer((request: IncomingMessage, response: ServerResponse) => {
+    const url = new URL(request.url as string, `http://${host}`);
     if (url.pathname !== path) return send(response, 404, { error: 'no such path' });
     // DNS rebinding: a browser on the box could otherwise post here.
     const origin = request.headers.origin;
     if (origin !== undefined) {
-      let originHost = null;
-      try { originHost = new URL(origin).hostname; } catch { originHost = null; }
-      if (!LOOPBACK.has(originHost)) return send(response, 403, { error: 'origin refused' });
+      let originHost: string | null = null;
+      try { originHost = new URL(origin as string).hostname; } catch { originHost = null; }
+      if (!LOOPBACK.has(originHost as string)) return send(response, 403, { error: 'origin refused' });
     }
     if (request.method === 'GET') {
       return send(response, 405, { error: 'this server carries POST only; there is no event stream' });
@@ -174,7 +223,8 @@ export function serveHttp(handle, { host = '127.0.0.1', port, path = '/mcp' } = 
     let body = '';
     let tooBig = false;
     request.on('data', (chunk) => {
-      body += chunk;
+      // data chunks still concatenate through +=; Buffer is stringified at runtime as before.
+      body += chunk as unknown as string;
       if (body.length > 4 * 1024 * 1024 && !tooBig) { tooBig = true; request.destroy(); }
     });
     request.on('end', async () => {
@@ -189,12 +239,12 @@ export function serveHttp(handle, { host = '127.0.0.1', port, path = '/mcp' } = 
     });
   });
 
-  return new Promise((resolve) => {
+  return new Promise<{ server: http.Server; url: string }>((resolve) => {
     server.listen(port, host, () => resolve({ server, url: `http://${host}:${port}${path}` }));
   });
 }
 
-function send(response, status, payload) {
+function send(response: ServerResponse, status: number, payload: unknown) {
   const text = JSON.stringify(payload);
   response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
   response.end(text);
