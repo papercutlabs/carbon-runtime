@@ -16,18 +16,20 @@
 // failed to read is not a directory with no skills.
 
 import { fault } from '../../lib/faults.ts';
-import { HarnessFault } from './session.mjs';
+import { HarnessFault } from './session.ts';
+import type { Session } from './session.ts';
 
 // Returns { skills: [{name, path, cwd}], errors: [...] }. `cwds` is explicit: the
 // protocol defaults an empty list to the session's own working directory, and a
 // default that guesses is exactly what this repository does not do.
-export async function listSkills(session, { cwds }) {
+export async function listSkills(session: Session, { cwds }: { cwds: string[] }) {
   if (!Array.isArray(cwds) || cwds.length === 0) {
     throw new HarnessFault(fault('HARNESS_SKILLS_CWDS_ABSENT', 'skills/list.cwds',
       'skills were asked for with no working directory to look in, and the protocol would silently substitute its own',
       'pass the directories explicitly; for one unit of work that is the checkout the thread was opened on'));
   }
-  const response = await session.request('skills/list', { cwds });
+  // Optional wire fields are flattened as received; this does not certify the reply's schema.
+  const response = await session.request('skills/list', { cwds }) as { data?: { cwd?: string; skills?: { name?: string; path?: string }[]; errors?: unknown[] }[] } | null;
   const entries = response?.data ?? [];
   const skills = [];
   const errors = [];

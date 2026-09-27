@@ -9,14 +9,27 @@
 // explicit-arguments rule exists to prevent.
 
 import { fault } from '../../lib/faults.ts';
-import { HarnessFault } from './session.mjs';
+import { HarnessFault } from './session.ts';
+import type { Session } from './session.ts';
+import type { HarnessEvent } from './events.ts';
+
+type TurnItem = { item?: TurnItem; type?: string; text?: string; content?: { text?: string }[]; [key: string]: unknown };
+type TurnRecord = {
+  id?: string; status?: string; startedAt?: string; completedAt?: string; durationMs?: number;
+  error?: unknown; items?: TurnItem[]; itemsView?: string;
+};
+type PolicyOptions = { writableRoots?: string[]; networkAccess?: boolean };
+type TurnOptions = {
+  threadId?: string; input: string | unknown[]; effort?: string; sandboxPolicy?: unknown;
+  clientUserMessageId?: string; model?: string; timeoutMs?: number;
+};
 
 // The workspace-write policy the plan names: the work directory writable, the
 // store writable, the network closed. `/tmp` stays writable because LibreOffice
 // creates its IPC socket only under `/tmp` or `/var/tmp` and ignores TMPDIR for
 // that path (PA-246 live turn: `ERROR: no valid pipe path found`). `$TMPDIR`
 // outside the declared roots stays closed.
-export function workspaceWritePolicy({ writableRoots, networkAccess }) {
+export function workspaceWritePolicy({ writableRoots, networkAccess }: PolicyOptions) {
   if (!Array.isArray(writableRoots)) {
     throw new HarnessFault(fault('HARNESS_WRITABLE_ROOTS_ABSENT', 'sandboxPolicy.writableRoots',
       'a workspace-write turn was asked for with no list of writable roots',
@@ -30,7 +43,7 @@ export function workspaceWritePolicy({ writableRoots, networkAccess }) {
   return { type: 'workspaceWrite', writableRoots, networkAccess, excludeSlashTmp: false, excludeTmpdirEnvVar: true };
 }
 
-export function readOnlyPolicy({ networkAccess }) {
+export function readOnlyPolicy({ networkAccess }: PolicyOptions) {
   if (typeof networkAccess !== 'boolean') {
     throw new HarnessFault(fault('HARNESS_NETWORK_ACCESS_UNSTATED', 'sandboxPolicy.networkAccess',
       'a turn was asked for without saying whether the model may reach the network',
@@ -39,7 +52,7 @@ export function readOnlyPolicy({ networkAccess }) {
   return { type: 'readOnly', networkAccess };
 }
 
-export function policyFor(mode, { writableRoots, networkAccess }) {
+export function policyFor(mode: string, { writableRoots, networkAccess }: PolicyOptions) {
   if (mode === 'workspace-write') return workspaceWritePolicy({ writableRoots, networkAccess });
   if (mode === 'read-only') return readOnlyPolicy({ networkAccess });
   throw new HarnessFault(fault('HARNESS_SANDBOX_MODE_REFUSED', mode,
@@ -50,14 +63,15 @@ export function policyFor(mode, { writableRoots, networkAccess }) {
 // Waits for the completion of one turn, correlated by both ids. Resolves with the
 // Turn record the app-server sent, whose `status` is recorded verbatim by the
 // caller, `failed` included.
-function awaitCompletion(session, threadId, turnId, { timeoutMs }) {
-  return new Promise((resolve, reject) => {
+function awaitCompletion(session: Session, threadId: string, turnId: string, { timeoutMs }: { timeoutMs?: number }) {
+  return new Promise<TurnRecord>((resolve, reject) => {
     const already = session.stream.forTurn(threadId, turnId).find((e) => e.kind === 'turn.completed');
-    if (already) return resolve(already.params.turn);
+    // The completion payload remains wire data; only its correlation ids were checked by forTurn.
+    if (already) return resolve(already.params?.turn as TurnRecord);
 
     const previous = session.stream.onEvent;
-    let timer = null;
-    const done = (fn, value) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const done = <T>(fn: (value: T) => void, value: T) => {
       session.stream.onEvent = previous;
       if (timer) clearTimeout(timer);
       fn(value);
@@ -65,7 +79,8 @@ function awaitCompletion(session, threadId, turnId, { timeoutMs }) {
     session.stream.onEvent = (event) => {
       previous(event);
       if (event.kind === 'turn.completed' && event.threadId === threadId && event.params?.turn?.id === turnId) {
-        done(resolve, event.params.turn);
+        // Matching id establishes correlation, not schema validity of the carried turn.
+        done(resolve, event.params.turn as TurnRecord);
       }
     };
     session.exit.then(({ code, signal }) => done(reject, new HarnessFault(
@@ -84,9 +99,9 @@ function awaitCompletion(session, threadId, turnId, { timeoutMs }) {
 // One turn. `clientUserMessageId` is the release id, so the same release re-issued
 // after a restart carries the same value; whether the app-server deduplicates on it
 // is recorded in harness/codex/verifications.
-export async function turn(session, {
+export async function turn(session: Session, {
   threadId, input, effort, sandboxPolicy, clientUserMessageId, model, timeoutMs
-}) {
+}: TurnOptions) {
   if (!threadId) {
     throw new HarnessFault(fault('HARNESS_THREAD_ID_ABSENT', 'turn/start.threadId',
       'a turn was asked for with no thread', 'open or resume the unit\'s thread first'));
@@ -96,12 +111,13 @@ export async function turn(session, {
       'a turn was asked for with no sandbox policy, and an omitted policy inherits the last one silently',
       'build the policy with policyFor() from the declaration and pass it on every turn'));
   }
-  const params = { threadId, input: inputItems(input), sandboxPolicy, approvalPolicy: 'never' };
+  const params: { threadId: string; input: unknown[]; sandboxPolicy: unknown; approvalPolicy: string; effort?: string; model?: string; clientUserMessageId?: string } = { threadId, input: inputItems(input), sandboxPolicy, approvalPolicy: 'never' };
   if (effort) params.effort = effort;
   if (model) params.model = model;
   if (clientUserMessageId) params.clientUserMessageId = clientUserMessageId;
 
-  const started = await session.request('turn/start', params);
+  // The existing missing-id fault below is the runtime check for this optional wire field.
+  const started = await session.request('turn/start', params) as { turn?: { id?: string } } | null;
   const turnId = started?.turn?.id ?? null;
   if (!turnId) {
     throw new HarnessFault(fault('HARNESS_TURN_ID_ABSENT', 'turn/start',
@@ -145,7 +161,7 @@ export async function turn(session, {
 // When neither source has anything — no item notifications streamed, and the
 // completion did not say `itemsView: "full"` — the record is empty on purpose, and
 // `items_detail` names why rather than leaving the caller to guess at a silent [].
-export function itemsFrom(turnRecord, events = []) {
+export function itemsFrom(turnRecord: TurnRecord | null | undefined, events: HarnessEvent[] = []) {
   const streamed = events
     .filter((event) => event.kind === 'item.completed')
     .map((event) => event.params?.item)
@@ -174,7 +190,7 @@ export function itemsFrom(turnRecord, events = []) {
 // app-server sends whole, and the deltas it streamed. Neither is guaranteed by
 // the pinned protocol, so both are read defensively and the absence of both is
 // null rather than an invention.
-export function agentMessageFrom(turnRecord, events = []) {
+export function agentMessageFrom(turnRecord: TurnRecord | null | undefined, events: HarnessEvent[] = []) {
   const items = Array.isArray(turnRecord?.items) ? turnRecord.items : [];
   const texts = items
     .map((item) => item?.item ?? item)
@@ -194,7 +210,7 @@ export function agentMessageFrom(turnRecord, events = []) {
 // What the turn cost, read off the record the provider sent and never computed
 // here. The last update of the turn is the one that counts; a turn nobody
 // reported usage for is null rather than zero, because zero is a claim.
-export function tokenUsageFrom(events = []) {
+export function tokenUsageFrom(events: HarnessEvent[] = []) {
   const last = events.filter((e) => e.kind === 'turn.token_usage').at(-1);
   const total = last?.params?.tokenUsage?.total;
   if (!total || typeof total !== 'object') return null;
@@ -209,7 +225,7 @@ export function tokenUsageFrom(events = []) {
 // Text in, protocol input items out. The protocol also carries images and skills;
 // carbon sends text, because a channel record's body is text and an attachment is a
 // file the model reads through its own tools.
-export function inputItems(input) {
+export function inputItems(input: unknown): unknown[] {
   if (typeof input === 'string') return [{ type: 'text', text: input }];
   if (Array.isArray(input)) return input;
   throw new HarnessFault(fault('HARNESS_INPUT_UNSUPPORTED', 'turn/start.input',
@@ -220,8 +236,10 @@ export function inputItems(input) {
 // turn/steer delivers a message into the turn that is already running. Whether it
 // works on the pinned binary is recorded in harness/codex/verifications; the runtime
 // offers it as on_busy: steer only where that record says it does.
-export async function steer(session, { threadId, expectedTurnId, input, clientUserMessageId }) {
-  const params = { threadId, expectedTurnId, input: inputItems(input) };
+export async function steer(session: Session, { threadId, expectedTurnId, input, clientUserMessageId }: {
+  threadId: string; expectedTurnId: string; input: unknown; clientUserMessageId?: string;
+}) {
+  const params: { threadId: string; expectedTurnId: string; input: unknown[]; clientUserMessageId?: string } = { threadId, expectedTurnId, input: inputItems(input) };
   if (clientUserMessageId) params.clientUserMessageId = clientUserMessageId;
   return session.request('turn/steer', params);
 }
@@ -229,6 +247,6 @@ export async function steer(session, { threadId, expectedTurnId, input, clientUs
 // The last resort, not a feature: the plan refuses a mid-turn interrupt of the
 // agent, and this exists so a stuck turn can be ended by a person rather than by a
 // kill of the process.
-export function interrupt(session, { threadId, turnId }) {
+export function interrupt(session: Session, { threadId, turnId }: { threadId: string; turnId: string }) {
   return session.request('turn/interrupt', { threadId, turnId });
 }

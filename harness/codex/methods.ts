@@ -57,7 +57,7 @@ export function allListenedNotifications() {
   return [...NOTIFICATIONS].sort();
 }
 
-export function sha256(buffer) {
+export function sha256(buffer: crypto.BinaryLike) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
@@ -65,9 +65,9 @@ export function sha256(buffer) {
 // writes a directory, so the digest is taken over a manifest of every file in it:
 // one "<sha256>  <relative path>" line per file, sorted by path. One hex string
 // covers the whole bundle, and the manifest itself says which file moved.
-export function bundleManifest(dir) {
-  const lines = [];
-  const walk = (current) => {
+export function bundleManifest(dir: string) {
+  const lines: string[] = [];
+  const walk = (current: string) => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(current, entry.name);
       if (entry.isDirectory()) walk(full);
@@ -79,17 +79,29 @@ export function bundleManifest(dir) {
   return lines.join('\n') + '\n';
 }
 
-export function bundleSha256(dir) {
+export function bundleSha256(dir: string) {
   return sha256(Buffer.from(bundleManifest(dir), 'utf8'));
 }
 
 // Reads the method names out of a generated protocol schema document. The document
 // is draft-07 with every request shape under definitions.ClientRequest.oneOf, each
 // carrying its method as a one-value enum.
-export function methodsInSchema(document) {
-  const read = (name) => (document?.definitions?.[name]?.oneOf ?? [])
-    .map((shape) => shape?.properties?.method?.enum?.[0])
+// Optional property reads leave malformed schema JSON with its original read behavior.
+function optionalField(value: unknown, key: string): unknown {
+  return value == null ? undefined : (value as Record<string, unknown>)[key];
+}
+
+export function methodsInSchema(document: unknown) {
+  const read = (name: string) => {
+    // The schema's oneOf value remains unvalidated: a non-array still fails at .map as before.
+    const shapes = (optionalField(optionalField(optionalField(document, 'definitions'), name), 'oneOf') ?? []) as unknown[];
+    return shapes.map((shape) => {
+      const choices = optionalField(optionalField(optionalField(shape, 'properties'), 'method'), 'enum');
+      // The original optional index read accepts any indexable wire value.
+      return choices == null ? undefined : (choices as Record<number, unknown>)[0];
+    })
     .filter((method) => typeof method === 'string');
+  };
   return {
     clientRequests: new Set(read('ClientRequest')),
     clientNotifications: new Set(read('ClientNotification')),
@@ -98,21 +110,21 @@ export function methodsInSchema(document) {
   };
 }
 
-export function readPinnedSchema() {
+export function readPinnedSchema(): unknown {
   return JSON.parse(fs.readFileSync(PINNED_SCHEMA_DOCUMENT, 'utf8'));
 }
 
-export function readSchemaPin() {
+export function readSchemaPin(): unknown {
   return JSON.parse(fs.readFileSync(PINNED_SCHEMA_PIN, 'utf8'));
 }
 
 // Returns a fault for every name carbon uses that the schema does not carry.
 // `subject` names where the schema came from, so a fault from install and a fault
 // from the test read differently.
-export function assertMethodsExist(document, subject) {
+export function assertMethodsExist(document: unknown, subject: string) {
   const present = methodsInSchema(document);
-  const faults = [];
-  const check = (names, set, kind) => {
+  const faults: ReturnType<typeof fault>[] = [];
+  const check = (names: string[], set: Set<string>, kind: string) => {
     for (const name of names) {
       if (!set.has(name)) {
         faults.push(fault('HARNESS_METHOD_ABSENT', `${subject}:${name}`,

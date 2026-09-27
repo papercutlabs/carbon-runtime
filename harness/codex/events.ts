@@ -40,7 +40,21 @@ const MAP = new Map([
 
 // The app-server puts the ids in different places per notification, so reading
 // them is one function rather than a field name repeated nine times.
-function correlate(method, params) {
+export type NotificationParams = {
+  threadId?: unknown; thread?: { id?: unknown }; turnId?: unknown;
+  turn?: { id?: unknown; status?: unknown; [key: string]: unknown };
+  item?: { turnId?: unknown; [key: string]: unknown };
+  name?: unknown; status?: unknown; delta?: unknown; text?: unknown;
+  tokenUsage?: { total?: { inputTokens?: unknown; cachedInputTokens?: unknown; outputTokens?: unknown; reasoningOutputTokens?: unknown } };
+  [key: string]: unknown;
+} | null | undefined;
+
+export type HarnessEvent = {
+  kind: string; method: string; threadId: unknown; turnId: unknown;
+  params: NotificationParams; status?: unknown; server?: unknown;
+};
+
+function correlate(method: string, params: NotificationParams) {
   const threadId = params?.threadId ?? params?.thread?.id ?? null;
   let turnId = params?.turnId ?? params?.turn?.id ?? null;
   if (turnId === null && method.startsWith('item/')) turnId = params?.item?.turnId ?? null;
@@ -50,11 +64,11 @@ function correlate(method, params) {
 // Returns the Carbon event, or null when the method is not in the vocabulary. The
 // raw params are carried whole: the runtime records `turn/completed`'s TurnStatus
 // verbatim and never re-spells it.
-export function mapNotification(method, params) {
+export function mapNotification(method: string, params: NotificationParams): HarnessEvent | null {
   const kind = MAP.get(method);
   if (!kind) return null;
   const { threadId, turnId } = correlate(method, params);
-  const event = { kind, method, threadId, turnId, params };
+  const event: HarnessEvent = { kind, method, threadId, turnId, params };
   if (kind === 'turn.completed') event.status = params?.turn?.status ?? null;
   if (kind === 'tool_server.status') {
     event.server = params?.name ?? null;
@@ -66,13 +80,17 @@ export function mapNotification(method, params) {
 // The subscription itself. Holds the dropped method names by count so a version
 // bump shows up as a list rather than as silence.
 export class EventStream {
-  constructor(onEvent) {
+  onEvent: (event: HarnessEvent) => void;
+  dropped: Map<string, number>;
+  events: HarnessEvent[];
+
+  constructor(onEvent?: (event: HarnessEvent) => void) {
     this.onEvent = onEvent ?? (() => {});
     this.dropped = new Map();
     this.events = [];
   }
 
-  accept(method, params) {
+  accept(method: string, params: NotificationParams) {
     const event = mapNotification(method, params);
     if (!event) {
       this.dropped.set(method, (this.dropped.get(method) ?? 0) + 1);
@@ -85,7 +103,7 @@ export class EventStream {
 
   // Every event carbon recorded for one turn, in arrival order, selected by the two
   // ids rather than by position in the stream.
-  forTurn(threadId, turnId) {
+  forTurn(threadId: unknown, turnId: unknown) {
     return this.events.filter((e) => e.threadId === threadId && e.turnId === turnId);
   }
 
