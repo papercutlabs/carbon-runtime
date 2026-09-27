@@ -163,6 +163,7 @@ async function smoke(values: Record<string, string | undefined>) {
   const probeFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-email-smoke-')), 'probe.eml');
   fs.writeFileSync(probeFile, probe, { mode: 0o600 });
   const sent = sendMessage({
+    // The channel fields were supplied by the required flags above; sendMessage uses those same strings.
     netrc: channel.netrc as string, host: channel.smtp_host as string, port: 465,
     from: values.account!, to: [values['send-to']!], file: probeFile
   });
@@ -181,6 +182,7 @@ async function smoke(values: Record<string, string | undefined>) {
   while (arrived === null && Date.now() < deadline) {
     await sleep(adapter.POLL_INTERVAL_FLOOR_MS);
     context.now = Date.now();
+    // The IMAP context selects the synchronous poll result used in the first poll above.
     polled = adapter.poll(context) as { items: import('../adapters/email/index.ts').EmailItem[]; uidvalidity: number; from_uid: number; rescanned: boolean };
     for (const item of polled.items) {
       const written = // Store<EmailRecord> already exposes capture/park; EmailStore is the adapter's view of the same operations.
@@ -267,6 +269,7 @@ async function main(argv: string[]) {
   } catch (error) {
     if (error instanceof TransportFault || error instanceof StreamFault) report(error.faults);
     else {
+      // Unknown smoke failures retain direct name and message reads, including failure on a null throw.
       const err = error as { name?: string; message?: string };
       report([fault('SMOKE_FAILED', err.name ?? 'error', (err.message ?? String(error)).split('\n')[0],
         'read the step the output stopped at')]);

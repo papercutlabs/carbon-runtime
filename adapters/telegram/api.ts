@@ -88,6 +88,7 @@ export function readToken(file: unknown) {
     text = fs.readFileSync(file, 'utf8');
   } catch (error) {
     throw new TelegramFault([fault('CHANNEL_TOKEN_UNREADABLE', file,
+      // A failed file read may carry errno and message; these optional reads leave arbitrary throws unvalidated.
       (error as Fields | null | undefined)?.code === 'ENOENT'
         ? 'there is no file at this path'
         : `this account cannot read the file: ${(error as Fields | null | undefined)?.code ?? (error as Fields | null | undefined)?.message}`,
@@ -122,12 +123,14 @@ export async function call(transport: Transport, method: string, params: Fields 
     body = await response.json();
   } catch (error) {
     throw new TelegramFault([fault('BOT_API_UNREACHABLE', method,
+      // A failed fetch may throw any value; the optional message is scrubbed before it reaches the fault.
       scrub((error as Fields | null | undefined)?.message ?? String(error), token),
       `check that ${apiHost} is reachable from this box; it is the host the declaration names in outbound_hosts`)]);
   } finally {
     clearTimeout(timer);
   }
 
+  // The Bot API JSON remains untrusted; these optional reads preserve the refusal and retry fields as received.
   if ((body as Fields | null)?.ok !== true) {
     const code = (body as Fields | null)?.error_code ?? status;
     throw new TelegramFault([fault('BOT_API_REFUSED', method,
@@ -137,6 +140,7 @@ export async function call(transport: Transport, method: string, params: Fields 
         : 'read the description; it is the server\'s own words for what it refused')],
     { errorCode: code, retryAfter: ((body as Fields | null)?.parameters as Fields | null)?.retry_after ?? null });
   }
+  // A true ok flag selects the result field; the Bot API payload is not schema validated here.
   return (body as Fields).result;
 }
 
@@ -157,6 +161,7 @@ export async function download(transport: Transport, filePath: string, { timeout
   } catch (error) {
     if (error instanceof TelegramFault) throw error;
     throw new TelegramFault([fault('ATTACHMENT_DOWNLOAD_FAILED', filePath,
+      // A failed download may throw any value; the optional message is scrubbed before reporting it.
       scrub((error as Fields | null | undefined)?.message ?? String(error), token),
       'the record keeps the attachment as download_failed and is released anyway')]);
   } finally {

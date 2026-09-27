@@ -115,6 +115,7 @@ function layeredFs(root: string, overlay: Map<string, string>, aliasNames: strin
     },
     getAccessibleEntries(directoryName: string) {
       if (path.resolve(directoryName) !== binDir) return undefined;
+      // An absent bin directory has no directories; this empty list meets the entrypoint host interface.
       if (!fs.existsSync(binDir)) return { files: [...aliasNames], directories: [] as string[] };
       const real = fs.readdirSync(binDir, { withFileTypes: true });
       const files = real.filter((d) => d.isFile()).map((d) => d.name);
@@ -218,6 +219,7 @@ function main(argv: string[]) {
       for (const f of error.faults) process.stderr.write(`${JSON.stringify(f)}\n`);
       return 1;
     }
+    // This direct stack read preserves the caught Error path and its original null-throw behavior.
     process.stderr.write(`${(error as Error).stack ?? error}\n`);
     return 1;
   }

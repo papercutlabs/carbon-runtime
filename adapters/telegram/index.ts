@@ -174,7 +174,7 @@ function pastCursors(context: Context, item: Item) {
   // edit already written carries the moment it was made, and one that is not
   // there is pending however the positions fall.
   if (kind !== 'revision') return false;
-  const editedAt = (messageOf(item.update).message as Fields | null)?.edit_date;
+  const editedAt = (messageOf(item.update).message as Fields | null)?.edit_date; // The provider edit timestamp is read only for duplicate comparison, without validating the update payload.
   return !context.store.recordsIn(conversation)
     .some((record) => record.adapter_fields?.edit_date === editedAt);
 }
@@ -195,7 +195,7 @@ export function consume(context: Context, item: Item) {
     context.store.advanceCursor(conversation, kindOf(item), // advanceCursor owns the existing conversion/refusal of a null position.
       item.position as string);
   }
-  const updateId = (item?.update as Fields | null | undefined)?.update_id;
+  const updateId = (item?.update as Fields | null | undefined)?.update_id; // The provider update id is read optionally; offsetPositionOf retains its own conversion behavior.
   if (updateId !== undefined) {
     context.store.advanceCursor(updatesConversation(context.account), 'message', offsetPositionOf(updateId));
   }
@@ -219,7 +219,7 @@ export function payload(context: Context, items: Item[]) {
     if (read.message === null) {
       parked.push({
         record: smallestRecord(context, item, `${context.account}:unreadable`,
-          `${context.account}:unreadable:update-${(item.update as Fields | null | undefined)?.update_id ?? 'unknown'}`,
+          `${context.account}:unreadable:update-${(item.update as Fields | null | undefined)?.update_id ?? 'unknown'}`, // An unreadable update still carries its original optional id into the parked record.
           String((item.update as Fields | null | undefined)?.update_id ?? 'unknown')),
         raw,
         cursor,
@@ -279,7 +279,7 @@ export function payload(context: Context, items: Item[]) {
     const sentAt = typeof message.date === 'number' ? new Date(message.date * 1000).toISOString() : null;
     if (sentAt) record.sent_at = sentAt;
     if (sender.name !== undefined) record.sender_name = sender.name;
-    if ((message.reply_to_message as Fields | null)?.message_id !== undefined) {
+    if ((message.reply_to_message as Fields | null)?.message_id !== undefined) { // The reply target is provider data; this view reads message_id without validating the nested object.
       record.reply_to = String((message.reply_to_message as Fields).message_id);
     }
 
@@ -383,7 +383,7 @@ function attachmentsFor(item: Item, media: Media | null): unknown[] {
 export function matchesDelivery(context: Context, item: Item, delivery: { chunk_ids?: string[]; text_sha256?: string } | null | undefined) {
   const { message } = messageOf(item?.update);
   if (message === null) return false;
-  if ((delivery?.chunk_ids ?? []).includes(String((message as Fields).message_id))) return true;
+  if ((delivery?.chunk_ids ?? []).includes(String((message as Fields).message_id))) return true; // Delivery matching reads the provider message id and preserves its string conversion.
   return sha256(bodyOf(message)) === delivery?.text_sha256;
 }
 
@@ -481,7 +481,7 @@ async function sendLive(context: Context, record: Reply, channel: Channel, chat:
     } catch (error) {
       return { status: outcomeOf(error, chunk_ids.length), chunk_ids };
     }
-    chunk_ids.push(String((sent as Fields | null | undefined)?.message_id ?? ''));
+    chunk_ids.push(String((sent as Fields | null | undefined)?.message_id ?? '')); // The sendMessage result is provider data; retain its optional message id and empty-string fallback.
   }
 
   // An attachment the model put on the reply. It goes as a document rather than
@@ -496,7 +496,7 @@ async function sendLive(context: Context, record: Reply, channel: Channel, chat:
     } catch (error) {
       return { status: outcomeOf(error, chunk_ids.length), chunk_ids };
     }
-    chunk_ids.push(String((sent as Fields | null | undefined)?.message_id ?? ''));
+    chunk_ids.push(String((sent as Fields | null | undefined)?.message_id ?? '')); // The attachment send result retains its optional provider message id and empty-string fallback.
   }
 
   return { status: 'sent', chunk_ids };
@@ -530,7 +530,7 @@ async function callForm(transport: Transport, method: string, form: FormData): P
   const { token, apiHost = 'api.telegram.org' } = transport;
   const response = await fetch(`https://${apiHost}/bot${token}/${method}`, { method: 'POST', body: form });
   const body: unknown = await response.json().catch(() => null);
-  if ((body as Fields | null)?.ok !== true) {
+  if ((body as Fields | null)?.ok !== true) { // Multipart Bot API JSON remains untrusted; this reads its refusal fields and result as originally returned.
     throw new TelegramFault([fault('BOT_API_REFUSED', method,
       `the Bot API answered ${(body as Fields | null)?.error_code ?? response.status}`,
       'read the record\'s attachment; the reply text went out and the file did not')],

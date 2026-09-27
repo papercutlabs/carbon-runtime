@@ -113,6 +113,7 @@ function parse(argv: string[]) {
         faults.push(fault('ARGUMENT_WITHOUT_VALUE', argv[i - 1], 'this argument was given with no value', 'give it a value'));
         continue;
       }
+      // The recognized flag name indexes argv strings; FLAGS membership above selects this assignment.
       args[name as FlagName] = value;
       continue;
     }

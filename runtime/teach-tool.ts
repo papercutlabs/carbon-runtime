@@ -153,6 +153,7 @@ function raiseChangeHandler({ store, agent, teaching, management, release = () =
     try {
       written = raiseChange(store, {
         agent,
+        // Through the tool server these names come from manifest-parsed arguments; the handler adds no type check.
         text: args.text as TeachArgs['text'],
         conversation_id: args.conversation_id as TeachArgs['conversation_id'],
         source_message_id: args.source_message_id as TeachArgs['source_message_id'],
@@ -181,6 +182,7 @@ function forgetHandler({ store, management, now = () => new Date().toISOString()
     let written;
     try {
       written = forget(store, {
+        // Through the tool server these names come from manifest-parsed arguments; the handler adds no type check.
         id: args.id as TeachArgs['id'],
         conversation_id: args.conversation_id as TeachArgs['conversation_id'],
         source_message_id: args.source_message_id as TeachArgs['source_message_id'],

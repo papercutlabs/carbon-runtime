@@ -74,6 +74,7 @@ export function checkManifest(manifest: unknown, at = MANIFEST_FILE) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return [fault('MANIFEST_NOT_AN_OBJECT', at, 'the manifest is one JSON object', 'see the reference')];
   }
+  // The preceding object guard permits these named manifest reads; every field is checked below.
   const rec = manifest as Record<string, unknown>;
   for (const key of Object.keys(rec)) {
     if (!MANIFEST_KEYS.has(key)) {
@@ -119,6 +120,7 @@ export function checkManifest(manifest: unknown, at = MANIFEST_FILE) {
   }
 
   const seen = new Set();
+  // Array.isArray above permits iteration; each tool remains untrusted until the object and field checks below.
   for (const [i, tool] of (tools as unknown[]).entries()) {
     const where = `${at}.tools[${i}]`;
     if (!tool || typeof tool !== 'object' || Array.isArray(tool)) {
@@ -182,6 +184,7 @@ function checkReturns(returns: unknown, at: string) {
       'no returns section, so nothing says what this tool gives back and the caller is handed whatever the upstream system said',
       'declare {"what": "...", "fields": [{"name": "...", "what": "..."}]} and build the return with shapeReturn')];
   }
+  // The object check above permits named reads; return fields are still checked individually.
   const rec = returns as ReturnsSection;
   if (typeof rec.what !== 'string' || rec.what.trim() === '') {
     faults.push(fault('RETURNS_UNDESCRIBED', `${at}.what`,
@@ -194,6 +197,7 @@ function checkReturns(returns: unknown, at: string) {
       'name each field as {"name": "...", "what": "..."} and build the return with shapeReturn'));
     return faults;
   }
+  // Array.isArray above permits iteration; each return field is checked after this read.
   for (const [i, field] of (rec.fields as unknown[]).entries()) {
     const item = field as ReturnField;
     if (!field || typeof field !== 'object' || typeof item.name !== 'string'

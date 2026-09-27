@@ -34,6 +34,7 @@ export function checkSchema(schema: unknown, at = 'arguments') {
       'write {"type": "object", "properties": {...}, "required": [...], "additionalProperties": false}'));
     return faults;
   }
+  // The object guard above permits field reads; the checks below inspect each schema field.
   const rec = schema as SchemaObject;
   if (rec.type !== 'object') {
     faults.push(fault('SCHEMA_NOT_AN_OBJECT_TYPE', `${at}.type`,
@@ -45,6 +46,7 @@ export function checkSchema(schema: unknown, at = 'arguments') {
       'an argument nobody declared is an argument nobody checked',
       'set "additionalProperties": false'));
   }
+  // The schema is checked above as an object; a malformed properties value retains the original Object.entries behavior.
   const properties = rec.properties && typeof rec.properties === 'object' ? rec.properties as Record<string, unknown> : {};
   for (const [name, property] of Object.entries(properties)) {
     const where = `${at}.properties.${name}`;
@@ -54,6 +56,7 @@ export function checkSchema(schema: unknown, at = 'arguments') {
         'write {"type": "string", "description": "..."}'));
       continue;
     }
+    // The preceding object check permits field reads; each property is still checked below.
     const spec = property as SchemaProperty;
     if ('default' in spec) {
       faults.push(fault('IMPLICIT_ARGUMENT', where,
@@ -72,6 +75,7 @@ export function checkSchema(schema: unknown, at = 'arguments') {
         'write one sentence saying what it is, with an example value'));
     }
   }
+  // Only the array check permits iteration; its members remain unchecked required names.
   for (const name of Array.isArray(rec.required) ? rec.required as unknown[] : []) {
     if (!(name as PropertyKey in properties)) {
       faults.push(fault('SCHEMA_REQUIRES_UNDECLARED', `${at}.required`,
@@ -128,6 +132,7 @@ export function parseArguments(schema: unknown, given: unknown, at = 'arguments'
     }
   }
   for (const name of required) {
+    // Required names come from the schema array; preserve their original key coercion and property lookup.
     if (!((name as PropertyKey) in rec) || rec[name as string] === undefined) {
       const property = (properties[name as string] || {}) as SchemaProperty;
       faults.push(fault('ARGUMENT_MISSING', `${at}.${name}`,
@@ -138,6 +143,7 @@ export function parseArguments(schema: unknown, given: unknown, at = 'arguments'
   for (const [name, property] of Object.entries(properties)) {
     if (!(name in rec) || rec[name] === undefined) continue;
     const v = rec[name];
+    // Each declared property is read through its existing fallback; typeOk checks its value afterward.
     const spec = (property || {}) as SchemaProperty;
     if (!typeOk(spec.type, v)) {
       faults.push(fault('ARGUMENT_WRONG_TYPE', `${at}.${name}`,

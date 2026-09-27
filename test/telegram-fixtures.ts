@@ -79,6 +79,7 @@ export function scriptedServerOf({ respond, failCall = null, filtered = true, by
   globalThis.fetch = (async (url: string, options: RequestInit = {}) => {
     if (url.includes('/getUpdates')) {
       calls += 1;
+      // The fetch stub receives the adapter's JSON request body on these scripted calls.
       const params = JSON.parse(options.body as string);
       const offset = params.offset ?? null;
       if (calls === failCall) {
@@ -97,6 +98,7 @@ export function scriptedServerOf({ respond, failCall = null, filtered = true, by
       return { status: 200, json: async () => ({ ok: true, result }) };
     }
     if (url.includes('/getFile')) {
+      // The getFile stub receives the adapter's JSON request body on this scripted call.
       const { file_id } = JSON.parse(options.body as string);
       fetched.set(file_id, (fetched.get(file_id) ?? 0) + 1);
       media.push({ stage: 'getFile', file_id, at: Date.now() });
@@ -108,6 +110,7 @@ export function scriptedServerOf({ respond, failCall = null, filtered = true, by
       return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(bytesOf(file_id)).buffer };
     }
     throw new Error(`unexpected fake request ${url}`);
+  // This fetch stub implements only the request and response behavior exercised by the adapter tests.
   }) as unknown as typeof fetch;
   return { asked, fetched, media, restore: () => { globalThis.fetch = previous; } };
 }
@@ -156,6 +159,7 @@ export function captureBatch(context: Context, items: Item[]) {
 }
 
 export function idsOf(items: Item[]) {
+  // The scripted updates contain update_id; this helper reads that fixture field directly.
   return items.map((one) => (one.update as Fields).update_id);
 }
 
