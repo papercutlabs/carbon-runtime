@@ -2,7 +2,7 @@ type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?:
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
@@ -44,6 +44,10 @@ import { latch } from './latch.ts';
 import { REPLY_SERVER_NAME } from './reply-tool.ts';
 import { TEACH_SERVER_NAME } from './teach-tool.ts';
 import { conversationKindOf } from './channel.ts';
+// The recorder runs beside the loops rather than in one: the runtime process
+// makes one and every loop's after-turn hook asks it for a read. It is reached
+// through this module, which already names what follows a turn.
+export { ProviderAccountRecorder } from './provider-account.ts';
 import { startTyping } from './typing.ts';
 import { teachCheckConversation } from './reply-tool.ts';
 import {
@@ -536,10 +540,12 @@ export class ReleaseLoop<S = Session> {
   declare items: () => unknown[];
   declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null | undefined;
   declare intervalMs: number | undefined;
+  declare afterTurn: () => void;
 
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
-    agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null
+    agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
+    afterTurn = () => {}
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -574,6 +580,11 @@ export class ReleaseLoop<S = Session> {
     this.toolStatusStale = true;
     this.holdFaults = [];
     this.items = () => [];
+    // What happens once a turn has completed and its thread record is written:
+    // asking for the provider-account read (PA-259). Asking returns at once; the
+    // read runs on a later tick and is never awaited, so it cannot delay or
+    // change a turn. A hook that throws a process-ending fault is rethrown.
+    this.afterTurn = afterTurn;
   }
 
   context(items: unknown = []): Context {
@@ -1058,6 +1069,15 @@ export class ReleaseLoop<S = Session> {
           : null
       }]
     });
+    try {
+      this.afterTurn();
+    } catch (error) {
+      // A fault that ends the process ends it from here as from anywhere in the
+      // loop. Anything else that follows a turn is not the turn's failure: it is
+      // logged and the turn stands.
+      if (endsTheProcess(error)) throw error;
+      this.log({ event: 'after_turn.failed', problem: (error as { message?: unknown } | null)?.message ?? String(error) }); // Read the thrown message field verbatim; no string guarantee is made.
+    }
     return { result, completedAt };
   }
 

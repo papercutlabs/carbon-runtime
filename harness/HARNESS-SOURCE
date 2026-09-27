@@ -1,8 +1,9 @@
 Where the copied files under this repository came from, and what may be done to them.
 
 source repository   the private half of Carbon, named in that repository's README
-source commit       35fa0742d1b5ee93d87257e7c20b112fc597a8d4
-copied on           2026-09-16 (harness/codex/turn.mjs: PA-246, excludeSlashTmp false for LibreOffice IPC pipe)
+source commit       9df19f27a3e3c3bb21db2c0c0372c68e096b5d95
+copied on           2026-09-27 (PA-259: account/read and account/rateLimits/read, readAccount;
+                    carbon-core PR 113)
 
 Copied verbatim, as whole files, with no edit of any kind:
 

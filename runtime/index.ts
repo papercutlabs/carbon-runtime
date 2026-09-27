@@ -25,7 +25,7 @@ import { loadAdapter } from './registry.ts';
 import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.ts';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.ts';
 import { serveTeachTool, TEACH_PORT } from './teach-tool.ts';
-import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny } from './loop.ts';
+import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny, ProviderAccountRecorder } from './loop.ts';
 import type { SandboxDenyGate } from './loop.ts';
 import { pollIntervalFor } from './poll.ts';
 import { resolveChannel } from './channel.ts';
@@ -254,7 +254,14 @@ export async function run<S extends Session>(options: RunOptions<S>) {
   let reply: Awaited<ReturnType<typeof serveReplyTool>> | null = null;
   let teach: Awaited<ReturnType<typeof serveTeachTool>> | null = null;
   let session: S | null = null;
+  // PA-259: which provider account the harness runs on, recorded to the store
+  // from this session and never from a second process on the login.
+  const version = declaration.harness?.version;
+  const providerAccount = new ProviderAccountRecorder<S>({
+    storeDir, codexHome, harness, codexVersion: version === undefined || version === null ? null : String(version), log, now
+  });
   const stop = async () => {
+    providerAccount.close();
     if (reply) await reply.close();
     if (teach) await teach.close();
     stopToolServers(toolServers);
@@ -331,7 +338,10 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       codexHome,
       providerKeyPath: key?.path,
       providerKeyEnvName: key?.env,
-      onEvent: (event) => log({ event: 'harness', kind: event.kind, thread_id: event.threadId, turn_id: event.turnId }),
+      onEvent: (event) => {
+        log({ event: 'harness', kind: event.kind, thread_id: event.threadId, turn_id: event.turnId });
+        providerAccount.accept(event);
+      },
       onStderr: () => {}
     });
 
@@ -340,10 +350,16 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     let childExit: ChildExit | null = null;
     session.exit.then((exit) => { childExit = exit; });
 
+    // Read once the harness is up. Asking returns at once, the read starts on a
+    // later tick, and nothing waits for it.
+    providerAccount.attach(session);
+    providerAccount.request('connect');
+
     const loops = loaded.map(({ channel, adapter, interval_ms }) => {
       const loop = new ReleaseLoop({
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
-        agent: declaration.agent?.id!, checkout, work, teach, log, now // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
+        agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
+        afterTurn: () => { providerAccount.request('turn'); }
       });
       // Interval faults were refused before any loop was created.
       loop.intervalMs = interval_ms!;
