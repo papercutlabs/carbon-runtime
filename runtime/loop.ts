@@ -2,7 +2,7 @@ type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?:
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
@@ -463,7 +463,46 @@ export function teachCheckInput(record: RenderRecord, releaseId: string, { store
 // than one message: an app-server listing tool servers nobody declared is an
 // agent that is not the agent the declaration describes, and parking messages
 // under it would answer with tools nobody granted.
+// HC-14's deny file (PA-259). The harness copies the file's deny_read list into a
+// thread when the thread opens or resumes, and says nothing when the file is absent,
+// so a thread opened without it lets the model's shell read the provider login and
+// secrets/. The runtime therefore checks the file itself before the harness starts,
+// before any thread is opened or resumed, and before every turn, and a file that is
+// not exactly bootstrap.sh's ends the process rather than one conversation: systemd
+// restarts the pair, and the start check refuses again until the file is right.
+export const SANDBOX_DENY_FILE = '/etc/codex/requirements.toml';
+export type SandboxDenyGate = { file: string; root: string; ownerUid: number };
+
+// The bytes bootstrap.sh writes for an agent directory (carbon-core host/bootstrap.sh).
+export function sandboxDenyBody(root: string) {
+  return '# Placed by carbon bootstrap.sh for HC-14. The model\'s shell may not read the\n'
+    + '# provider login or the secrets directory. Nothing else is set here.\n'
+    + '[permissions.filesystem]\n'
+    + `deny_read = ["${root}/codex-home/auth.json", "${root}/secrets"]\n`;
+}
+
+export function checkSandboxDeny(gate: SandboxDenyGate, when: string) {
+  const wrong: string[] = [];
+  let stat: fs.Stats | null = null;
+  try { stat = fs.lstatSync(gate.file); } catch { wrong.push('it is absent'); }
+  if (stat) {
+    if (stat.isSymbolicLink()) wrong.push('it is a symlink');
+    else if (!stat.isFile()) wrong.push('it is not a regular file');
+    if (stat.uid !== gate.ownerUid) wrong.push(`it is owned by uid ${stat.uid}, not ${gate.ownerUid}`);
+    if ((stat.mode & 0o7777) !== 0o644) wrong.push(`its mode is ${(stat.mode & 0o7777).toString(8)}, not 644`);
+    let body: string | null = null;
+    try { body = stat.isFile() ? fs.readFileSync(gate.file, 'utf8') : null; } catch { body = null; }
+    if (body !== sandboxDenyBody(gate.root)) wrong.push(`its content is not exactly the two deny_read paths under ${gate.root}`);
+  }
+  if (wrong.length > 0) {
+    throw new RuntimeFault(fault('SANDBOX_DENY_NOT_PLACED', gate.file,
+      `${when}, ${gate.file} is not placed: ${wrong.join('; ')}, so a thread would let the model's shell read the provider login or secrets/`,
+      'apply the host-contract bump that places it (HC-14, bump 12) and restart the agent; nothing runs until the file is exact'));
+  }
+}
+
 const ENDS_THE_PROCESS = new Set([
+  'SANDBOX_DENY_NOT_PLACED',
   'HARNESS_CHILD_EXITED_MID_TURN',
   'TOOL_SERVER_UNDECLARED',
   'TOOL_SERVER_NOT_LISTED'
@@ -490,6 +529,7 @@ export class ReleaseLoop<S = Session> {
   declare log: Log;
   declare now: () => number;
   declare threads: Map<string, unknown>;
+  declare sandboxDeny: SandboxDenyGate | null;
   declare toolStatusRead: boolean;
   declare toolStatusStale: boolean;
   declare holdFaults: Fault[];
@@ -499,7 +539,7 @@ export class ReleaseLoop<S = Session> {
 
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
-    agent, checkout, work, teach = null, log = () => {}, now = () => Date.now()
+    agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -507,6 +547,8 @@ export class ReleaseLoop<S = Session> {
         'pass the agent\'s work directory; on a box it is <agent dir>/work'));
     }
     this.declaration = declaration;
+    // Null only where a caller builds a loop by hand; run() always passes the gate.
+    this.sandboxDeny = sandboxDeny;
     this.channel = channel;
     this.store = store;
     this.storeDir = storeDir;
@@ -554,6 +596,7 @@ export class ReleaseLoop<S = Session> {
   // and cannot be resumed, so resuming it is an error where starting again is
   // free.
   async threadFor(unitId: string): Promise<unknown> {
+    if (this.sandboxDeny) checkSandboxDeny(this.sandboxDeny, 'before a thread was opened or resumed');
     if (this.threads.has(unitId)) return this.threads.get(unitId);
     // Thread state is not schema-validated. These local operation fields preserve its old use.
     const existing = this.store.readThread(unitId) as { thread_id?: unknown; completed_turns: number } | null;
@@ -1021,6 +1064,7 @@ export class ReleaseLoop<S = Session> {
   // The turn itself, with everything the declaration decides about it in one
   // place and nothing about the store in it.
   async turnOf({ threadId, input, clientUserMessageId }: Pick<TakeTurnOptions, 'threadId' | 'input' | 'clientUserMessageId'>) {
+    if (this.sandboxDeny) checkSandboxDeny(this.sandboxDeny, 'before a turn');
     return this.harness.turn(this.session, {
       threadId,
       input,
