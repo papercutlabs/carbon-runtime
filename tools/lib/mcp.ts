@@ -14,47 +14,60 @@
 
 import http from 'node:http';
 import readline from 'node:readline';
-import { asFaults, faultText } from './fault.mjs';
-import { parseArguments } from './args.mjs';
-import { checkManifest, shapeReturn } from './manifest.mjs';
+import type { Readable, Writable } from 'node:stream';
+import { asFaults, faultText } from './fault.ts';
+import { parseArguments } from './args.ts';
+import { checkManifest, shapeReturn } from './manifest.ts';
+import type { ManifestSpec, ToolSpec } from './manifest.ts';
 
 export const ADVERTISED_PROTOCOL = '2025-06-18';
 export const ACCEPTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
-const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
+const LOOPBACK = new Set<string | null>(['127.0.0.1', '::1', 'localhost']);
+type Handle = (message: unknown) => Promise<unknown>;
+type Handler = (...args: never[]) => unknown;
+type HttpOptions = { host?: string; port?: number; path?: string };
 
 // handlers is {<tool name>: async (args, context) => object | {data, text}}.
-export function createServer({ manifest, handlers, context = {} }) {
+export function createServer({ manifest, handlers, context = {} }: { manifest: unknown; handlers: Record<string, Handler>; context?: unknown }) {
   const manifestFaults = checkManifest(manifest);
   if (manifestFaults.length > 0) {
     throw new Error(`the manifest is not servable:\n${faultText(manifestFaults)}`);
   }
-  for (const tool of manifest.tools) {
+  // checkManifest has established the fields this server reads. The assertion
+  // follows that check and does not type the untrusted input at the boundary.
+  const document = manifest as ManifestSpec;
+  for (const tool of document.tools) {
     if (typeof handlers[tool.name] !== 'function') {
       throw new Error(`the manifest declares ${tool.name} and no handler implements it`);
     }
   }
   for (const name of Object.keys(handlers)) {
-    if (!manifest.tools.some((t) => t.name === name)) {
+    if (!document.tools.some((t) => t.name === name)) {
       throw new Error(`${name} is implemented and not declared in the manifest`);
     }
   }
 
-  const byName = new Map(manifest.tools.map((t) => [t.name, t]));
+  const byName = new Map<unknown, ToolSpec>(document.tools.map((t) => [t.name, t]));
 
-  async function handle(message) {
-    if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
-      return error(message && message.id !== undefined ? message.id : null, -32600,
+  async function handle(message: unknown) {
+    // JSON-RPC input remains unknown until the existing request checks run.
+    // Optional property reads here match JavaScript's handling of primitives.
+    const request = message as { jsonrpc?: unknown; method?: unknown; id?: unknown; params?: unknown } | null;
+    if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
+      return error(request && request.id !== undefined ? request.id : null, -32600,
         'not a JSON-RPC 2.0 request');
     }
-    const { id, method, params } = message;
+    const { id, method, params } = request;
+    // Existing code reads optional fields even when params has the wrong shape.
+    const argumentsPart = params as { protocolVersion?: unknown; name?: unknown; arguments?: unknown } | null;
     const isNotification = id === undefined;
 
     if (method === 'initialize') {
-      const asked = params && typeof params.protocolVersion === 'string' ? params.protocolVersion : null;
+      const asked = argumentsPart && typeof argumentsPart.protocolVersion === 'string' ? argumentsPart.protocolVersion : null;
       return ok(id, {
-        protocolVersion: ACCEPTED_PROTOCOLS.includes(asked) ? asked : ADVERTISED_PROTOCOL,
+        protocolVersion: ACCEPTED_PROTOCOLS.includes(asked as string) ? asked : ADVERTISED_PROTOCOL, // includes accepts null at runtime and simply finds no match.
         capabilities: { tools: {} },
-        serverInfo: { name: manifest.name, version: manifest.version }
+        serverInfo: { name: document.name, version: document.version }
       });
     }
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') return null;
@@ -62,7 +75,7 @@ export function createServer({ manifest, handlers, context = {} }) {
 
     if (method === 'tools/list') {
       return ok(id, {
-        tools: manifest.tools.map((tool) => ({
+        tools: document.tools.map((tool) => ({
           name: tool.name,
           description: describe(tool),
           inputSchema: tool.arguments,
@@ -72,7 +85,7 @@ export function createServer({ manifest, handlers, context = {} }) {
     }
 
     if (method === 'tools/call') {
-      const name = params && params.name;
+      const name = argumentsPart && argumentsPart.name;
       const tool = byName.get(name);
       // An unknown tool is a bad call, so it fails at the protocol. A bad
       // argument is something the model can correct, so it comes back as content.
@@ -80,12 +93,17 @@ export function createServer({ manifest, handlers, context = {} }) {
         return error(id, -32602, `no tool named ${JSON.stringify(name ?? null)}; call tools/list`);
       }
       try {
-        const args = parseArguments(tool.arguments, params.arguments, `${tool.name} arguments`);
-        const produced = await handlers[tool.name](args, context);
+        const args = parseArguments(tool.arguments, argumentsPart?.arguments, `${tool.name} arguments`);
+        // Each named handler has its own parameter type. The manifest selects it
+        // at runtime; never asserts that untrusted args have a handler's type.
+        const produced = await handlers[tool.name](args as never, context as never);
         const raw = produced && typeof produced === 'object' && 'data' in produced ? produced.data : produced;
         const data = shapeReturn(tool, raw);
-        const text = produced && typeof produced === 'object' && typeof produced.text === 'string'
-          ? produced.text
+        // A handler's return is untrusted; this cast models the original
+        // optional property read without claiming it returned a result shape.
+        const returned = produced as { text?: unknown } | null;
+        const text = returned && typeof returned === 'object' && typeof returned.text === 'string'
+          ? returned.text
           : renderText(tool, data);
         return ok(id, {
           content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data, null, 2)}` }],
@@ -106,15 +124,15 @@ export function createServer({ manifest, handlers, context = {} }) {
     return error(id, -32601, `${method} is not implemented; this server carries tools/list and tools/call only`);
   }
 
-  return { manifest, handle, serveStdio: () => serveStdio(handle), serveHttp: (o) => serveHttp(handle, o) };
+  return { manifest, handle, serveStdio: () => serveStdio(handle), serveHttp: (o?: HttpOptions) => serveHttp(handle, o) };
 }
 
-function describe(tool) {
+function describe(tool: ToolSpec) {
   const fields = tool.returns.fields.map((f) => `${f.name} (${f.what})`).join('; ');
   return `${tool.description}\n\nReturns ${tool.returns.what} Fields: ${fields}.`;
 }
 
-function renderText(tool, data) {
+function renderText(tool: ToolSpec, data: Record<string, unknown>) {
   const lines = [`${tool.name}: ${tool.returns.what}`];
   for (const field of tool.returns.fields) {
     const value = data[field.name];
@@ -123,12 +141,12 @@ function renderText(tool, data) {
   return lines.join('\n');
 }
 
-function ok(id, result) { return { jsonrpc: '2.0', id, result }; }
-function error(id, code, message) { return { jsonrpc: '2.0', id, error: { code, message } }; }
+function ok(id: unknown, result: unknown) { return { jsonrpc: '2.0', id, result }; }
+function error(id: unknown, code: number, message: string) { return { jsonrpc: '2.0', id, error: { code, message } }; }
 
 // stdio: one JSON-RPC message per line, in and out. No framing header, which is
 // what every harness on this transport reads today.
-export function serveStdio(handle, { input = process.stdin, output = process.stdout } = {}) {
+export function serveStdio(handle: Handle, { input = process.stdin, output = process.stdout }: { input?: Readable; output?: Writable } = {}) {
   const lines = readline.createInterface({ input, crlfDelay: Infinity });
   let queue = Promise.resolve();
   lines.on('line', (line) => {
@@ -150,14 +168,14 @@ export function serveStdio(handle, { input = process.stdin, output = process.std
 // and the response comes back as JSON. There is no SSE stream and no session
 // resumption, because a client tool server has nothing to stream. The bind
 // address is loopback and a request from anywhere else never arrives.
-export function serveHttp(handle, { host = '127.0.0.1', port, path = '/mcp' } = {}) {
+export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/mcp' }: HttpOptions = {}): Promise<{ server: http.Server; url: string }> {
   if (!LOOPBACK.has(host)) {
     throw new Error(`a tool server binds loopback only, and ${host} is not loopback`);
   }
   if (!Number.isInteger(port)) throw new Error('serveHttp needs an explicit port');
 
   const server = http.createServer((request, response) => {
-    const url = new URL(request.url, `http://${host}`);
+    const url = new URL(request.url!, `http://${host}`); // HTTP requests handled here always carry a URL.
     if (url.pathname !== path) return send(response, 404, { error: 'no such path' });
     // DNS rebinding: a browser on the box could otherwise post here.
     const origin = request.headers.origin;
@@ -190,11 +208,11 @@ export function serveHttp(handle, { host = '127.0.0.1', port, path = '/mcp' } = 
   });
 
   return new Promise((resolve) => {
-    server.listen(port, host, () => resolve({ server, url: `http://${host}:${port}${path}` }));
+    server.listen(port!, host, () => resolve({ server, url: `http://${host}:${port}${path}` })); // Number.isInteger above requires an explicit port.
   });
 }
 
-function send(response, status, payload) {
+function send(response: http.ServerResponse, status: number, payload: unknown) {
   const text = JSON.stringify(payload);
   response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
   response.end(text);

@@ -50,10 +50,10 @@ type HandlerOptions = { store: Store; agent: string; teaching: Teaching; managem
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { createServer } from '../tools/lib/mcp.mjs';
-import { readManifest } from '../tools/lib/manifest.mjs';
-import { renderHelp } from '../tools/lib/help.mjs';
-import { ToolFault, fault as toolFault } from '../tools/lib/fault.mjs';
+import { createServer } from '../tools/lib/mcp.ts';
+import { readManifest } from '../tools/lib/manifest.ts';
+import { renderHelp } from '../tools/lib/help.ts';
+import { ToolFault, fault as toolFault } from '../tools/lib/fault.ts';
 import { Store, StreamFault } from '../stream/store.ts';
 import { remember, raiseChange, forget } from '../stream/teachings.ts';
 import { fault, report, RuntimeFault, EXIT } from './faults.ts';

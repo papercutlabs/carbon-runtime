@@ -27,7 +27,7 @@ type ReplyOptions = { store: Store; agent: string; declaration?: Declaration | n
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createServer } from '../tools/lib/mcp.mjs';
+import { createServer } from '../tools/lib/mcp.ts';
 import { StreamFault } from '../stream/store.ts';
 import { fault } from '../stream/faults.ts';
 import { managementConversationOf } from './channel.ts';

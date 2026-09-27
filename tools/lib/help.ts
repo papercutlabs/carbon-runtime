@@ -2,8 +2,14 @@
 // harness sees are the same text. Help is the primary document: an agent reads it
 // before it reads any skill, and it lists every argument's valid values and one
 // example call.
+import type { ManifestSpec, ToolSpec } from './manifest.ts';
+type HelpProperty = { type?: unknown; description?: unknown; enum?: unknown };
+type HelpSchema = { properties?: Record<string, HelpProperty>; required?: string[] };
 
-export function renderHelp(manifest, { serverUsage = [] } = {}) {
+export function renderHelp(rawManifest: unknown, { serverUsage = [] }: { serverUsage?: string[] } = {}) {
+  // Existing help rendering reads the manifest before validation. Keep its
+  // unchecked property reads and failures; this assertion does not validate JSON.
+  const manifest = rawManifest as ManifestSpec;
   const lines = [];
   lines.push(`${manifest.name} — an MCP tool server for one client system`);
   lines.push('');
@@ -23,8 +29,11 @@ export function renderHelp(manifest, { serverUsage = [] } = {}) {
     lines.push('');
     lines.push(`  ${tool.name}${tool.readOnlyHint ? '  (read only)' : ''}${tool.writes ? '  (writes; needs the declaration write gate)' : ''}`);
     for (const line of wrap(tool.description, 74)) lines.push(`    ${line}`);
-    const properties = (tool.arguments && tool.arguments.properties) || {};
-    const required = new Set((tool.arguments && tool.arguments.required) || []);
+    // The historical renderer assumes a schema shape; these types express its
+    // property reads without adding a validator or changing malformed input.
+    const schema = tool.arguments as HelpSchema | null;
+    const properties = (schema && schema.properties) || {};
+    const required = new Set((schema && schema.required) || []);
     if (Object.keys(properties).length === 0) {
       lines.push('    Arguments: none.');
     } else {
@@ -48,10 +57,12 @@ export function renderHelp(manifest, { serverUsage = [] } = {}) {
   return lines.join('\n');
 }
 
-function exampleArguments(tool) {
-  const properties = (tool.arguments && tool.arguments.properties) || {};
-  const required = (tool.arguments && tool.arguments.required) || Object.keys(properties);
-  const out = {};
+function exampleArguments(tool: ToolSpec) {
+  // As above, retain unchecked rendering of the caller's schema.
+  const schema = tool.arguments as HelpSchema | null;
+  const properties = (schema && schema.properties) || {};
+  const required = (schema && schema.required) || Object.keys(properties);
+  const out: Record<string, unknown> = {};
   for (const name of required) {
     const property = properties[name] || {};
     if (Array.isArray(property.enum)) out[name] = property.enum[0];
@@ -64,7 +75,7 @@ function exampleArguments(tool) {
   return out;
 }
 
-function wrap(text, width) {
+function wrap(text: unknown, width: number) {
   const words = String(text).split(/\s+/).filter(Boolean);
   const lines = [];
   let line = '';
