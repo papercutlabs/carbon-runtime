@@ -1,5 +1,6 @@
 import type { Store, MessageRecord } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
+import type { AccountRead, RateLimitsRecord } from '../harness/codex/index.ts';
 
 // Caller contracts describe the operations this runtime performs, not a schema
 // validator. Values read from disk and providers remain unknown at those edges.
@@ -68,7 +69,7 @@ export type Session = { stop?(): Promise<unknown>; exit: Promise<ChildExit> };
 export type Harness<S = Session> = {
   connect(options: {
     binary: string; codexHome: string; providerKeyPath?: string;
-    providerKeyEnvName?: string; onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown }): unknown;
+    providerKeyEnvName?: string; onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;
     onStderr(): void;
   }): Promise<S>;
   openThread(session: S, options: ThreadOpening): Promise<{ thread_id: string; [key: string]: unknown }>;
@@ -78,6 +79,10 @@ export type Harness<S = Session> = {
   onToolServerStatus?(session: S, handler: () => void): unknown;
   holdsRelease(declaration: Declaration, statuses: Status[]): Fault[];
   policyFor(mode: string | undefined, options: { writableRoots: string[]; networkAccess: boolean }): unknown;
+  // The provider account the session is signed in to (PA-259). Optional, so a
+  // harness without it records nothing and runs as before.
+  readAccount?(session: S, options: { timeoutMs: number }): Promise<AccountRead>;
+  rateLimitsFrom?(snapshot: unknown): RateLimitsRecord | null;
 };
 export type TeachHandle = { setRelease(id: string | null): void };
 export type TurnOptions = { store?: Store | null; checkout?: string | null; declaration?: Declaration | null };

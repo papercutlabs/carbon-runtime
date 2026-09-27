@@ -24,7 +24,13 @@ export const REQUESTS = {
   // question. `tools` is about the servers carbon rendered from the declaration;
   // this reads back what the harness itself found in the working directory it was
   // given, by its own conventions, and carbon neither renders nor names it.
-  skills: ['skills/list']
+  skills: ['skills/list'],
+  // Which provider account the harness is signed in to, and how much of its
+  // allowance is left, asked of the one app-server the runtime already holds.
+  // `account/read` is always sent with refreshToken false: a second process on
+  // the login would be a second refresh writer, and a refresh asked for here
+  // would be this process writing the login on a reader's behalf.
+  account: ['account/read', 'account/rateLimits/read']
 };
 
 // Notifications carbon listens for. Anything else the app-server sends is logged
@@ -43,6 +49,10 @@ export const NOTIFICATIONS = [
   'item/agentMessage/delta',
   'item/commandExecution/outputDelta',
   'mcpServer/startupStatus/updated',
+  // The account the harness is signed in to changed, and a sparse rolling update
+  // of its rate limits. Neither is a turn event; the runtime records both.
+  'account/updated',
+  'account/rateLimits/updated',
   'error'
 ];
 
