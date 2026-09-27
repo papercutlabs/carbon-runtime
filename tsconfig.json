@@ -9,8 +9,8 @@
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
-    // Transitional: converted TypeScript is checked while the remaining .mjs files wait their turn.
+    // Keep the installed-consumer index.mjs compatibility re-export in the checked roots.
     "allowJs": true,
-    "checkJs": false
+    "checkJs": true
   }
 }
