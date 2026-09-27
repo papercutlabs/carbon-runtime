@@ -25,11 +25,10 @@ import { loadAdapter } from './registry.ts';
 import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.ts';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.ts';
 import { serveTeachTool, TEACH_PORT } from './teach-tool.ts';
-import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny } from './loop.ts';
+import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny, ProviderAccountRecorder } from './loop.ts';
 import type { SandboxDenyGate } from './loop.ts';
 import { pollIntervalFor } from './poll.ts';
 import { resolveChannel } from './channel.ts';
-import { ProviderAccountRecorder } from './provider-account.ts';
 
 // Where each thing lives under an agent directory. Install renders the left-hand
 // side; the runtime reads it and guesses none of it.
@@ -351,7 +350,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     let childExit: ChildExit | null = null;
     session.exit.then((exit) => { childExit = exit; });
 
-    // Read once the harness is up. It starts after this line and nothing waits for it.
+    // Read once the harness is up. Asking returns at once, the read starts on a
+    // later tick, and nothing waits for it.
     providerAccount.attach(session);
     providerAccount.request('connect');
 

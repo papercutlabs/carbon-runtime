@@ -44,6 +44,10 @@ import { latch } from './latch.ts';
 import { REPLY_SERVER_NAME } from './reply-tool.ts';
 import { TEACH_SERVER_NAME } from './teach-tool.ts';
 import { conversationKindOf } from './channel.ts';
+// The recorder runs beside the loops rather than in one: the runtime process
+// makes one and every loop's after-turn hook asks it for a read. It is reached
+// through this module, which already names what follows a turn.
+export { ProviderAccountRecorder } from './provider-account.ts';
 import { startTyping } from './typing.ts';
 import { teachCheckConversation } from './reply-tool.ts';
 import {
@@ -577,8 +581,9 @@ export class ReleaseLoop<S = Session> {
     this.holdFaults = [];
     this.items = () => [];
     // What happens once a turn has completed and its thread record is written:
-    // the provider-account read (PA-259). It starts after the turn and is never
-    // awaited, so it cannot delay, fail or change a turn.
+    // asking for the provider-account read (PA-259). Asking returns at once; the
+    // read runs on a later tick and is never awaited, so it cannot delay or
+    // change a turn. A hook that throws a process-ending fault is rethrown.
     this.afterTurn = afterTurn;
   }
 
@@ -1067,7 +1072,10 @@ export class ReleaseLoop<S = Session> {
     try {
       this.afterTurn();
     } catch (error) {
-      // What follows a turn is never the turn's failure: it is logged and the turn stands.
+      // A fault that ends the process ends it from here as from anywhere in the
+      // loop. Anything else that follows a turn is not the turn's failure: it is
+      // logged and the turn stands.
+      if (endsTheProcess(error)) throw error;
       this.log({ event: 'after_turn.failed', problem: (error as { message?: unknown } | null)?.message ?? String(error) }); // Read the thrown message field verbatim; no string guarantee is made.
     }
     return { result, completedAt };

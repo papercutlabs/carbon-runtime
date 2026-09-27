@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fault } from '../../lib/faults.ts';
-import { Connection } from './protocol.ts';
+import { Connection, RpcError } from './protocol.ts';
 import { EventStream } from './events.ts';
 import type { HarnessEvent, NotificationParams } from './events.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -243,14 +243,23 @@ export async function resumeThread(session: Session, { threadId, cwd, model, eff
 //
 // Each request is bounded by `timeoutMs`, because on the pinned binary
 // `account/rateLimits/read` goes to the provider's backend and an unreachable one
-// took twenty seconds to fail. A failed or timed-out request is returned as an
-// entry in `error`, never thrown, and the other request's answer is kept.
+// took twenty seconds to fail. A request that fails, times out, throws as it is
+// sent or is skipped is returned as an entry in `error`, never thrown, and the
+// other request's answer is kept.
+//
+// A bound ends the wait, not the request: the connection keeps a request it sent
+// until the app-server answers it or closes. So a session has at most one of each
+// account request outstanding. While one is, a new read does not send another; it
+// records that method as still pending, so a server that never answers holds two
+// entries in the connection, not one per turn.
 //
 // What comes back is read field by field into a record that has no place for
 // anything else: account type, email and plan; whether the provider requires a
 // login; the rate-limit windows, credits and the account id when the backend
 // supplies one. Nothing else in either answer is carried, so a token the wire
-// happens to hold has nowhere to go.
+// happens to hold has nowhere to go. An error is carried the same way: a fixed
+// code, a fixed summary and the JSON-RPC error number, and never the text the
+// app-server or the provider wrote, which can quote anything.
 
 export type AccountIdentity = { type: string | null; email: string | null; plan_type: string | null };
 export type RateLimitWindowRecord = { used_percent: number | null; window_minutes: number | null; resets_at: number | null };
@@ -260,7 +269,7 @@ export type RateLimitsRecord = {
   credits: { has_credits: boolean | null; unlimited: boolean | null; balance: string | null } | null;
   rate_limit_reached_type: string | null;
 };
-export type AccountReadError = { method: string; message: string };
+export type AccountReadError = { method: string; code: string; summary: string; rpc_code: number | null };
 export type AccountRead = {
   observed_at: string;
   codex_version: string | null;
@@ -270,9 +279,27 @@ export type AccountRead = {
   error: AccountReadError[] | null;
 };
 
-// A message the app-server put in an error is carried, cut short, because it is
-// what says why a read failed; nothing longer than this is a reason.
-const ERROR_MESSAGE_KEPT = 300;
+// Why a request failed, by kind. The summary is the whole of what is said, and
+// each is fixed text, so nothing the wire carried can reach it.
+const FAILURES = {
+  REJECTED: 'the app-server answered with an error; its text is not kept',
+  TIMED_OUT: 'the app-server did not answer within the bound',
+  NOT_SENT: 'the request failed as it was sent',
+  STILL_PENDING: 'the last request of this kind is still unanswered, so none was sent'
+};
+type FailureKind = keyof typeof FAILURES;
+
+// The code names the method as well as the kind, so a record read on its own says
+// which of the two answers is missing.
+const CODE_PREFIX: Record<string, string> = { 'account/read': 'ACCOUNT_READ', 'account/rateLimits/read': 'RATE_LIMITS_READ' };
+
+class AccountRequestFailure extends Error {
+  kind: FailureKind;
+  constructor(kind: FailureKind) {
+    super(FAILURES[kind]);
+    this.kind = kind;
+  }
+}
 
 function field(value: unknown, key: string): unknown {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
@@ -321,19 +348,52 @@ function versionFrom(initializeResult: unknown) {
   return match ? match[1] : null;
 }
 
-function bounded(request: Promise<unknown>, method: string, timeoutMs: number) {
+function bounded(request: Promise<unknown>, timeoutMs: number) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${method} did not answer within ${timeoutMs} ms`)), timeoutMs);
+    timer = setTimeout(() => reject(new AccountRequestFailure('TIMED_OUT')), timeoutMs);
     // A read nobody answered must not be what keeps a stopping process alive.
     timer.unref?.();
   });
   return Promise.race([request, timeout]).finally(() => { if (timer) clearTimeout(timer); });
 }
 
+// The account requests each session has sent and not yet had answered, by method.
+const outstanding = new WeakMap<object, Set<string>>();
+
+// One account request: skipped while the last of its method is unanswered, sent
+// inside a try so a request that throws as it is sent is a rejection like any
+// other, and bounded. The method is marked outstanding until the request itself
+// settles, not until the bound ends the wait for it.
+function ask(session: Session, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  let busy = outstanding.get(session);
+  if (!busy) outstanding.set(session, busy = new Set());
+  if (busy.has(method)) return Promise.reject(new AccountRequestFailure('STILL_PENDING'));
+  let request: Promise<unknown>;
+  try {
+    request = Promise.resolve(session.request(method, params));
+  } catch {
+    return Promise.reject(new AccountRequestFailure('NOT_SENT'));
+  }
+  const held = busy;
+  held.add(method);
+  const release = () => { held.delete(method); };
+  request.then(release, release);
+  return bounded(request, timeoutMs);
+}
+
+// What a failed request is recorded as: its method, a code and summary fixed by
+// the kind of failure, and the JSON-RPC error number when the app-server gave one.
+// The reason's own message is never read.
 function failure(method: string, reason: unknown): AccountReadError {
-  const message = reason instanceof Error ? reason.message : String(reason);
-  return { method, message: message.slice(0, ERROR_MESSAGE_KEPT) };
+  const kind: FailureKind = reason instanceof AccountRequestFailure ? reason.kind : 'REJECTED';
+  const number = reason instanceof RpcError ? field(reason.rpcError, 'code') : null;
+  return {
+    method,
+    code: `${CODE_PREFIX[method]}_${kind}`,
+    summary: `${method}: ${FAILURES[kind]}`,
+    rpc_code: typeof number === 'number' && Number.isSafeInteger(number) ? number : null
+  };
 }
 
 export async function readAccount(session: Session, { timeoutMs }: { timeoutMs: number }): Promise<AccountRead> {
@@ -344,8 +404,8 @@ export async function readAccount(session: Session, { timeoutMs }: { timeoutMs: 
   }
   const observedAt = new Date().toISOString();
   const [account, limits] = await Promise.allSettled([
-    bounded(session.request('account/read', { refreshToken: false }), 'account/read', timeoutMs),
-    bounded(session.request('account/rateLimits/read', undefined), 'account/rateLimits/read', timeoutMs)
+    ask(session, 'account/read', { refreshToken: false }, timeoutMs),
+    ask(session, 'account/rateLimits/read', undefined, timeoutMs)
   ]);
   const errors: AccountReadError[] = [];
   const read: AccountRead = {

@@ -1,5 +1,5 @@
 // One subscription, mapped to a small Carbon vocabulary. Everything the runtime
-// upstream of the harness reacts to is one of these eight kinds; every other
+// upstream of the harness reacts to is one of these twelve kinds; every other
 // app-server notification is logged by its method name and dropped, so a Codex
 // version that adds forty notifications adds nothing to reason about here.
 //
