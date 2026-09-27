@@ -7,6 +7,11 @@
 // interleaves two threads on one connection and a turn's completion can arrive
 // after the next turn's start.
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  // After the object check, this cast exposes keys while every field stays unknown.
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+}
+
 export const VOCABULARY = [
   'thread.started',
   'thread.named',
@@ -18,10 +23,21 @@ export const VOCABULARY = [
   'item.completed',
   'tool_server.status',
   'harness.error'
-];
+] as const;
+
+export type EventKind = typeof VOCABULARY[number];
+export type CarbonEvent = {
+  kind: EventKind;
+  method: string;
+  threadId: unknown;
+  turnId: unknown;
+  params: unknown;
+  status?: unknown;
+  server?: unknown;
+};
 
 // method -> the Carbon kind it becomes. A method absent from this map is dropped.
-const MAP = new Map([
+const MAP = new Map<string, EventKind>([
   ['thread/started', 'thread.started'],
   ['thread/name/updated', 'thread.named'],
   ['turn/started', 'turn.started'],
@@ -40,25 +56,31 @@ const MAP = new Map([
 
 // The app-server puts the ids in different places per notification, so reading
 // them is one function rather than a field name repeated nine times.
-function correlate(method, params) {
-  const threadId = params?.threadId ?? params?.thread?.id ?? null;
-  let turnId = params?.turnId ?? params?.turn?.id ?? null;
-  if (turnId === null && method.startsWith('item/')) turnId = params?.item?.turnId ?? null;
+function correlate(method: string, params: unknown): { threadId: unknown; turnId: unknown } {
+  const record = asRecord(params);
+  const thread = asRecord(record?.thread);
+  const turn = asRecord(record?.turn);
+  const item = asRecord(record?.item);
+  const threadId = record?.threadId ?? thread?.id ?? null;
+  let turnId = record?.turnId ?? turn?.id ?? null;
+  if (turnId === null && method.startsWith('item/')) turnId = item?.turnId ?? null;
   return { threadId, turnId };
 }
 
 // Returns the Carbon event, or null when the method is not in the vocabulary. The
 // raw params are carried whole: the runtime records `turn/completed`'s TurnStatus
 // verbatim and never re-spells it.
-export function mapNotification(method, params) {
+export function mapNotification(method: string, params: unknown): CarbonEvent | null {
   const kind = MAP.get(method);
   if (!kind) return null;
   const { threadId, turnId } = correlate(method, params);
-  const event = { kind, method, threadId, turnId, params };
-  if (kind === 'turn.completed') event.status = params?.turn?.status ?? null;
+  const event: CarbonEvent = { kind, method, threadId, turnId, params };
+  const record = asRecord(params);
+  const turn = asRecord(record?.turn);
+  if (kind === 'turn.completed') event.status = turn?.status ?? null;
   if (kind === 'tool_server.status') {
-    event.server = params?.name ?? null;
-    event.status = params?.status ?? null;
+    event.server = record?.name ?? null;
+    event.status = record?.status ?? null;
   }
   return event;
 }
@@ -66,13 +88,17 @@ export function mapNotification(method, params) {
 // The subscription itself. Holds the dropped method names by count so a version
 // bump shows up as a list rather than as silence.
 export class EventStream {
-  constructor(onEvent) {
+  onEvent: (event: CarbonEvent) => unknown;
+  dropped: Map<string, number>;
+  events: CarbonEvent[];
+
+  constructor(onEvent?: (event: CarbonEvent) => unknown) {
     this.onEvent = onEvent ?? (() => {});
     this.dropped = new Map();
     this.events = [];
   }
 
-  accept(method, params) {
+  accept(method: string, params: unknown): CarbonEvent | null {
     const event = mapNotification(method, params);
     if (!event) {
       this.dropped.set(method, (this.dropped.get(method) ?? 0) + 1);
@@ -85,11 +111,11 @@ export class EventStream {
 
   // Every event carbon recorded for one turn, in arrival order, selected by the two
   // ids rather than by position in the stream.
-  forTurn(threadId, turnId) {
+  forTurn(threadId: unknown, turnId: unknown): CarbonEvent[] {
     return this.events.filter((e) => e.threadId === threadId && e.turnId === turnId);
   }
 
-  droppedMethods() {
+  droppedMethods(): Array<{ method: string; count: number }> {
     return [...this.dropped.entries()].sort((a, b) => a[0].localeCompare(b[0]))
       .map(([method, count]) => ({ method, count }));
   }

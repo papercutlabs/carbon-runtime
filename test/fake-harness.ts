@@ -6,7 +6,7 @@ export type OnTurn = (session: FakeSession, params: TurnParams, turn: number) =>
 // `policyFor` and the real `holdsRelease` from the harness itself, because those
 // two are the rules being tested and a second copy of a rule proves nothing.
 
-import { policyFor, holdsRelease } from '../harness/codex/index.mjs';
+import { policyFor, holdsRelease } from '../harness/codex/index.ts';
 
 export class FakeSession {
   declare threads: Map<string, string>;

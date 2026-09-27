@@ -8,6 +8,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fault } from '../../lib/faults.ts';
+type CarbonFault = { code: unknown; subject: unknown; problem: unknown; fix: unknown };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  // After the object check, this cast exposes keys while every field stays unknown.
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+}
 
 export const HERE = path.dirname(new URL(import.meta.url).pathname);
 export const PINNED_SCHEMA_DIR = path.join(HERE, 'schema');
@@ -57,7 +63,7 @@ export function allListenedNotifications() {
   return [...NOTIFICATIONS].sort();
 }
 
-export function sha256(buffer) {
+export function sha256(buffer: Buffer | string | Uint8Array): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
@@ -65,9 +71,9 @@ export function sha256(buffer) {
 // writes a directory, so the digest is taken over a manifest of every file in it:
 // one "<sha256>  <relative path>" line per file, sorted by path. One hex string
 // covers the whole bundle, and the manifest itself says which file moved.
-export function bundleManifest(dir) {
-  const lines = [];
-  const walk = (current) => {
+export function bundleManifest(dir: string): string {
+  const lines: string[] = [];
+  const walk = (current: string): void => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const full = path.join(current, entry.name);
       if (entry.isDirectory()) walk(full);
@@ -79,17 +85,31 @@ export function bundleManifest(dir) {
   return lines.join('\n') + '\n';
 }
 
-export function bundleSha256(dir) {
+export function bundleSha256(dir: string): string {
   return sha256(Buffer.from(bundleManifest(dir), 'utf8'));
 }
 
 // Reads the method names out of a generated protocol schema document. The document
 // is draft-07 with every request shape under definitions.ClientRequest.oneOf, each
 // carrying its method as a one-value enum.
-export function methodsInSchema(document) {
-  const read = (name) => (document?.definitions?.[name]?.oneOf ?? [])
-    .map((shape) => shape?.properties?.method?.enum?.[0])
-    .filter((method) => typeof method === 'string');
+export function methodsInSchema(document: unknown): {
+  clientRequests: Set<string>;
+  clientNotifications: Set<string>;
+  serverNotifications: Set<string>;
+  serverRequests: Set<string>;
+} {
+  const read = (name: string): string[] => {
+    const definitions = asRecord(asRecord(document)?.definitions);
+    const section = asRecord(definitions?.[name]);
+    const rawShapes = section?.oneOf;
+    const shapes: unknown[] = Array.isArray(rawShapes) ? rawShapes : [];
+    return shapes.map((shape) => {
+      const properties = asRecord(asRecord(shape)?.properties);
+      const method = asRecord(properties?.method);
+      const values = method?.enum;
+      return Array.isArray(values) ? values[0] : undefined;
+    }).filter((method): method is string => typeof method === 'string');
+  };
   return {
     clientRequests: new Set(read('ClientRequest')),
     clientNotifications: new Set(read('ClientNotification')),
@@ -98,21 +118,23 @@ export function methodsInSchema(document) {
   };
 }
 
-export function readPinnedSchema() {
-  return JSON.parse(fs.readFileSync(PINNED_SCHEMA_DOCUMENT, 'utf8'));
+export function readPinnedSchema(): unknown {
+  const document: unknown = JSON.parse(fs.readFileSync(PINNED_SCHEMA_DOCUMENT, 'utf8'));
+  return document;
 }
 
-export function readSchemaPin() {
-  return JSON.parse(fs.readFileSync(PINNED_SCHEMA_PIN, 'utf8'));
+export function readSchemaPin(): unknown {
+  const pin: unknown = JSON.parse(fs.readFileSync(PINNED_SCHEMA_PIN, 'utf8'));
+  return pin;
 }
 
 // Returns a fault for every name carbon uses that the schema does not carry.
 // `subject` names where the schema came from, so a fault from install and a fault
 // from the test read differently.
-export function assertMethodsExist(document, subject) {
+export function assertMethodsExist(document: unknown, subject: string): CarbonFault[] {
   const present = methodsInSchema(document);
-  const faults = [];
-  const check = (names, set, kind) => {
+  const faults: CarbonFault[] = [];
+  const check = (names: string[], set: Set<string>, kind: string): void => {
     for (const name of names) {
       if (!set.has(name)) {
         faults.push(fault('HARNESS_METHOD_ABSENT', `${subject}:${name}`,

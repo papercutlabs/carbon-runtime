@@ -22,25 +22,53 @@
 import fs from 'node:fs';
 import { fault } from '../../lib/faults.ts';
 
+type CarbonFault = { code: unknown; subject: unknown; problem: unknown; fix: unknown };
+type JsonRecord = Record<string, unknown>;
+type CarbonEvent = { kind: string; threadId?: unknown; turnId?: unknown; params?: unknown };
+function asRecord(value: unknown): JsonRecord | null {
+  // After the object check, this cast exposes keys while every field stays unknown.
+  return typeof value === 'object' && value !== null ? value as JsonRecord : null;
+}
+function isCarbonEvent(value: unknown): value is CarbonEvent {
+  const event = asRecord(value);
+  return event !== null && typeof event.kind === 'string';
+}
+
 const BARE_KEY = /^[A-Za-z0-9_-]+$/;
+type ToolFault = { code: string; subject: string; problem: string; fix: string };
+export type ToolServerStatus = { name: string; runtimeStatus?: string | null; [key: string]: unknown };
+
+function isToolServerStatus(value: unknown): value is ToolServerStatus {
+  const status = asRecord(value);
+  return status !== null && typeof status.name === 'string'
+    && (status.runtimeStatus === undefined || status.runtimeStatus === null || typeof status.runtimeStatus === 'string');
+}
 
 // The declaration is the grant. See the note above and the verification record.
 export const APPROVAL_MODE = 'approve';
 
-function tomlKey(name) {
-  return BARE_KEY.test(name) ? name : JSON.stringify(name);
+function tomlKey(name: unknown): string | undefined {
+  const key = String(name);
+  return BARE_KEY.test(key) ? key : JSON.stringify(name);
 }
 
-function tomlString(value) {
+function tomlString(value: unknown): string | undefined {
   return JSON.stringify(String(value));
 }
 
 // Returns { toml, faults }. Every fault in the declaration's tool_servers is
 // collected, so one render tells the caller everything that is wrong.
-export function renderConfigToml(declaration, { header = true } = {}) {
-  const faults = [];
-  const servers = declaration?.tool_servers ?? [];
-  const declaredSecrets = new Set((declaration?.secrets ?? []).map((s) => s.name));
+export function renderConfigToml(declaration: unknown, { header = true }: { header?: boolean } = {}): {
+  toml: string;
+  faults: CarbonFault[];
+} {
+  const declarationRecord = asRecord(declaration);
+  const faults: CarbonFault[] = [];
+  const rawServers = declarationRecord?.tool_servers ?? [];
+  const servers: unknown[] = Array.isArray(rawServers) ? rawServers : [];
+  const rawSecrets = declarationRecord?.secrets ?? [];
+  const secrets: unknown[] = Array.isArray(rawSecrets) ? rawSecrets : [];
+  const declaredSecrets = new Set(secrets.map((secret) => asRecord(secret)?.name));
   const lines = [];
 
   if (header) {
@@ -51,9 +79,10 @@ export function renderConfigToml(declaration, { header = true } = {}) {
     lines.push('');
   }
 
-  const seen = new Set();
-  for (const server of servers) {
-    const name = server?.name;
+  const seen = new Set<unknown>();
+  for (const rawServer of servers) {
+    const server = asRecord(rawServer) ?? {};
+    const name = server.name;
     if (!name) {
       faults.push(fault('TOOL_SERVER_UNNAMED', 'tool_servers[]',
         'a tool server has no name, and the name is how startup status is reported',
@@ -68,7 +97,9 @@ export function renderConfigToml(declaration, { header = true } = {}) {
     }
     seen.add(name);
 
-    for (const ref of server.secret_refs ?? []) {
+    const rawSecretRefs = server.secret_refs ?? [];
+    const secretRefs: unknown[] = Array.isArray(rawSecretRefs) ? rawSecretRefs : [];
+    for (const ref of secretRefs) {
       if (!declaredSecrets.has(ref)) {
         faults.push(fault('TOOL_SERVER_SECRET_UNDECLARED', `tool_servers.${name}.secret_refs`,
           `the server names the secret ${JSON.stringify(ref)} and the declaration does not declare it`,
@@ -77,26 +108,27 @@ export function renderConfigToml(declaration, { header = true } = {}) {
     }
 
     if (server.transport === 'stdio') {
-      if (!server.command) {
+      const command = server.command;
+      if (!command) {
         faults.push(fault('TOOL_SERVER_COMMAND_ABSENT', `tool_servers.${name}`,
           'a stdio tool server was declared with no command',
           'give the absolute path of the command that starts the server'));
         continue;
       }
-      if (!server.command.startsWith('/')) {
+      if (typeof command !== 'string' || !command.startsWith('/')) {
         faults.push(fault('TOOL_SERVER_COMMAND_RELATIVE', `tool_servers.${name}.command`,
-          `${tomlString(server.command)} is relative, and what a relative command resolves to depends on who started the harness`,
+          `${tomlString(command)} is relative, and what a relative command resolves to depends on who started the harness`,
           'give the absolute path'));
         continue;
       }
-      if ((server.secret_refs ?? []).length > 0) {
+      if (secretRefs.length > 0) {
         faults.push(fault('TOOL_SERVER_STDIO_HOLDS_SECRET', `tool_servers.${name}`,
           'a stdio server runs as the agent user, which the model\'s own shell also runs as, so a secret it holds is a secret the model can read',
           'make this server transport http on loopback, started by the runtime as the tools user'));
         continue;
       }
       lines.push(`[mcp_servers.${tomlKey(name)}]`);
-      lines.push(`command = ${tomlString(server.command)}`);
+      lines.push(`command = ${tomlString(command)}`);
       if (server.cwd) lines.push(`cwd = ${tomlString(server.cwd)}`);
       lines.push('enabled = true');
       lines.push(`default_tools_approval_mode = ${tomlString(APPROVAL_MODE)}`);
@@ -109,14 +141,15 @@ export function renderConfigToml(declaration, { header = true } = {}) {
     }
 
     if (server.transport === 'http') {
-      if (!server.url) {
+      const url = server.url;
+      if (!url) {
         faults.push(fault('TOOL_SERVER_URL_ABSENT', `tool_servers.${name}`,
           'an http tool server was declared with no url',
           'give the loopback url the runtime starts the server on'));
         continue;
       }
       lines.push(`[mcp_servers.${tomlKey(name)}]`);
-      lines.push(`url = ${tomlString(server.url)}`);
+      lines.push(`url = ${tomlString(url)}`);
       lines.push('enabled = true');
       lines.push(`default_tools_approval_mode = ${tomlString(APPROVAL_MODE)}`);
       lines.push('');
@@ -131,7 +164,11 @@ export function renderConfigToml(declaration, { header = true } = {}) {
   return { toml: lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n', faults };
 }
 
-export function writeConfigToml(declaration, destination) {
+export function writeConfigToml(declaration: unknown, destination: string): {
+  written: boolean;
+  faults: CarbonFault[];
+  toml?: string;
+} {
   const { toml, faults } = renderConfigToml(declaration);
   if (faults.length) return { written: false, faults };
   fs.writeFileSync(destination, toml, { mode: 0o600 });
@@ -140,15 +177,21 @@ export function writeConfigToml(declaration, destination) {
 
 // Reads every page of mcpServerStatus/list. The protocol pages this list, and a
 // single page read as the whole list is how a required server goes missing.
-export async function listToolServerStatus(session, { threadId } = {}) {
-  const servers = [];
-  let cursor = null;
+export async function listToolServerStatus(session: unknown, { threadId }: { threadId?: unknown } = {}): Promise<ToolServerStatus[]> {
+  const servers: ToolServerStatus[] = [];
+  const request = asRecord(session)?.request;
+  if (typeof request !== 'function') throw new TypeError('the harness session has no request function');
+  let cursor: unknown = null;
   do {
-    const params = {};
+    const params: JsonRecord = {};
     if (threadId) params.threadId = threadId;
     if (cursor) params.cursor = cursor;
-    const page = await session.request('mcpServerStatus/list', params);
-    servers.push(...(page?.data ?? []));
+    const response: unknown = await request.call(session, 'mcpServerStatus/list', params);
+    const page = asRecord(response);
+    const rawServers = page?.data ?? [];
+    if (Array.isArray(rawServers)) {
+      for (const server of rawServers) if (isToolServerStatus(server)) servers.push(server);
+    }
     cursor = page?.nextCursor ?? null;
   } while (cursor);
   return servers;
@@ -163,10 +206,19 @@ export async function listToolServerStatus(session, { threadId } = {}) {
 // runtime connection belongs to a thread. A null is therefore "not known", not
 // "down", and it gets its own fault: reading it as down would hold every release
 // on a box whose servers are all healthy.
-export function holdsRelease(declaration, statuses) {
-  const required = new Set((declaration?.tool_servers ?? []).filter((s) => s.required).map((s) => s.name));
-  const byName = new Map(statuses.map((s) => [s.name, s]));
-  const faults = [];
+export function holdsRelease(declaration: unknown, statuses: unknown[]): ToolFault[] {
+  const rawServers = asRecord(declaration)?.tool_servers ?? [];
+  const servers: unknown[] = Array.isArray(rawServers) ? rawServers : [];
+  const required = new Set(servers
+    .map((server) => asRecord(server))
+    .filter((server) => server !== null && server.required)
+    .map((server) => server?.name));
+  const byName = new Map<unknown, JsonRecord>();
+  for (const rawStatus of statuses) {
+    const status = asRecord(rawStatus);
+    if (status) byName.set(status.name, status);
+  }
+  const faults: ToolFault[] = [];
   for (const name of [...required].sort()) {
     const status = byName.get(name);
     if (!status) {
@@ -194,11 +246,13 @@ export function holdsRelease(declaration, statuses) {
 // The subscription. mcpServer/startupStatus/updated is a notification, so there is
 // nothing to subscribe to beyond listening; this names the listening so the caller
 // does not reach into the event stream by method name.
-export function onToolServerStatus(session, handler) {
-  const previous = session.stream.onEvent;
-  session.stream.onEvent = (event) => {
+export function onToolServerStatus(session: unknown, handler: (event: CarbonEvent) => unknown): () => void {
+  const stream = asRecord(asRecord(session)?.stream);
+  const previous = stream?.onEvent;
+  if (!stream || typeof previous !== 'function') throw new TypeError('the harness session has no event stream');
+  stream.onEvent = (event: unknown) => {
     previous(event);
-    if (event.kind === 'tool_server.status') handler(event);
+    if (isCarbonEvent(event) && event.kind === 'tool_server.status') handler(event);
   };
-  return () => { session.stream.onEvent = previous; };
+  return () => { stream.onEvent = previous; };
 }

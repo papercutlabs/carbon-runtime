@@ -16,26 +16,43 @@
 // failed to read is not a directory with no skills.
 
 import { fault } from '../../lib/faults.ts';
-import { HarnessFault } from './session.mjs';
+import { HarnessFault, type Session, asRecord } from './session.ts';
 
 // Returns { skills: [{name, path, cwd}], errors: [...] }. `cwds` is explicit: the
 // protocol defaults an empty list to the session's own working directory, and a
 // default that guesses is exactly what this repository does not do.
-export async function listSkills(session, { cwds }) {
+export async function listSkills(session: Session, { cwds }: { cwds: unknown }): Promise<{
+  skills: Array<{ name: unknown; path: unknown; cwd: unknown }>;
+  errors: Array<{ cwd: unknown; error: unknown }>;
+}> {
   if (!Array.isArray(cwds) || cwds.length === 0) {
     throw new HarnessFault(fault('HARNESS_SKILLS_CWDS_ABSENT', 'skills/list.cwds',
       'skills were asked for with no working directory to look in, and the protocol would silently substitute its own',
       'pass the directories explicitly; for one unit of work that is the checkout the thread was opened on'));
   }
   const response = await session.request('skills/list', { cwds });
-  const entries = response?.data ?? [];
+  return skillsFromResponse(response);
+}
+
+function skillsFromResponse(response: unknown): {
+  skills: Array<{ name: unknown; path: unknown; cwd: unknown }>;
+  errors: Array<{ cwd: unknown; error: unknown }>;
+} {
+  const entriesValue = asRecord(response)?.data ?? [];
+  const entries: unknown[] = Array.isArray(entriesValue) ? entriesValue : [];
   const skills = [];
   const errors = [];
   for (const entry of entries) {
-    for (const skill of entry?.skills ?? []) {
-      skills.push({ name: skill?.name ?? null, path: skill?.path ?? null, cwd: entry?.cwd ?? null });
+    const entryRecord = asRecord(entry);
+    const foundSkillsValue = entryRecord?.skills ?? [];
+    const foundSkills: unknown[] = Array.isArray(foundSkillsValue) ? foundSkillsValue : [];
+    for (const skill of foundSkills) {
+      const skillRecord = asRecord(skill);
+      skills.push({ name: skillRecord?.name ?? null, path: skillRecord?.path ?? null, cwd: entryRecord?.cwd ?? null });
     }
-    for (const error of entry?.errors ?? []) errors.push({ cwd: entry?.cwd ?? null, error });
+    const errorsValue = entryRecord?.errors ?? [];
+    const foundErrors: unknown[] = Array.isArray(errorsValue) ? errorsValue : [];
+    for (const error of foundErrors) errors.push({ cwd: entryRecord?.cwd ?? null, error });
   }
   return { skills, errors };
 }
