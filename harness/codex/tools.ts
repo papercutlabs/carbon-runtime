@@ -27,20 +27,42 @@ const BARE_KEY = /^[A-Za-z0-9_-]+$/;
 // The declaration is the grant. See the note above and the verification record.
 export const APPROVAL_MODE = 'approve';
 
-function tomlKey(name) {
-  return BARE_KEY.test(name) ? name : JSON.stringify(name);
+// Untrusted declaration and tool-status JSON. The indexer is not a validator.
+function fields(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  return value as Record<string, unknown>;
 }
 
-function tomlString(value) {
+function tomlKey(name: unknown) {
+  return BARE_KEY.test(name as string) ? name as string : JSON.stringify(name);
+}
+
+function tomlString(value: unknown) {
   return JSON.stringify(String(value));
 }
 
+type ToolServer = {
+  name?: unknown;
+  secret_refs?: unknown;
+  transport?: unknown;
+  command?: unknown;
+  cwd?: unknown;
+  url?: unknown;
+  required?: unknown;
+  runtimeStatus?: unknown;
+};
+
+type FaultRecord = { code: string; subject: string; problem: string; fix: string };
+
+type SessionRequest = { request: (method: string, params?: unknown) => Promise<unknown> };
+
 // Returns { toml, faults }. Every fault in the declaration's tool_servers is
 // collected, so one render tells the caller everything that is wrong.
-export function renderConfigToml(declaration, { header = true } = {}) {
-  const faults = [];
-  const servers = declaration?.tool_servers ?? [];
-  const declaredSecrets = new Set((declaration?.secrets ?? []).map((s) => s.name));
+export function renderConfigToml(declaration: unknown, { header = true }: { header?: boolean } = {}) {
+  const faults: FaultRecord[] = [];
+  const rec = fields(declaration);
+  const servers = rec?.tool_servers ?? [];
+  const declaredSecrets = new Set(((rec?.secrets ?? []) as { name?: unknown }[]).map((s) => s.name));
   const lines = [];
 
   if (header) {
@@ -52,7 +74,7 @@ export function renderConfigToml(declaration, { header = true } = {}) {
   }
 
   const seen = new Set();
-  for (const server of servers) {
+  for (const server of servers as ToolServer[]) {
     const name = server?.name;
     if (!name) {
       faults.push(fault('TOOL_SERVER_UNNAMED', 'tool_servers[]',
@@ -68,7 +90,7 @@ export function renderConfigToml(declaration, { header = true } = {}) {
     }
     seen.add(name);
 
-    for (const ref of server.secret_refs ?? []) {
+    for (const ref of (server.secret_refs ?? []) as unknown[]) {
       if (!declaredSecrets.has(ref)) {
         faults.push(fault('TOOL_SERVER_SECRET_UNDECLARED', `tool_servers.${name}.secret_refs`,
           `the server names the secret ${JSON.stringify(ref)} and the declaration does not declare it`,
@@ -83,13 +105,14 @@ export function renderConfigToml(declaration, { header = true } = {}) {
           'give the absolute path of the command that starts the server'));
         continue;
       }
-      if (!server.command.startsWith('/')) {
+      // command was truthy; startsWith is the runtime relative-path check.
+      if (!(server.command as string).startsWith('/')) {
         faults.push(fault('TOOL_SERVER_COMMAND_RELATIVE', `tool_servers.${name}.command`,
           `${tomlString(server.command)} is relative, and what a relative command resolves to depends on who started the harness`,
           'give the absolute path'));
         continue;
       }
-      if ((server.secret_refs ?? []).length > 0) {
+      if (((server.secret_refs ?? []) as unknown[]).length > 0) {
         faults.push(fault('TOOL_SERVER_STDIO_HOLDS_SECRET', `tool_servers.${name}`,
           'a stdio server runs as the agent user, which the model\'s own shell also runs as, so a secret it holds is a secret the model can read',
           'make this server transport http on loopback, started by the runtime as the tools user'));
@@ -131,7 +154,7 @@ export function renderConfigToml(declaration, { header = true } = {}) {
   return { toml: lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n', faults };
 }
 
-export function writeConfigToml(declaration, destination) {
+export function writeConfigToml(declaration: unknown, destination: fs.PathOrFileDescriptor) {
   const { toml, faults } = renderConfigToml(declaration);
   if (faults.length) return { written: false, faults };
   fs.writeFileSync(destination, toml, { mode: 0o600 });
@@ -140,18 +163,21 @@ export function writeConfigToml(declaration, destination) {
 
 // Reads every page of mcpServerStatus/list. The protocol pages this list, and a
 // single page read as the whole list is how a required server goes missing.
-export async function listToolServerStatus(session, { threadId } = {}) {
-  const servers = [];
+export async function listToolServerStatus(session: unknown, { threadId }: { threadId?: unknown } = {}) {
+  const servers: unknown[] = [];
   let cursor = null;
   do {
-    const params = {};
+    const params: Record<string, unknown> = {};
     if (threadId) params.threadId = threadId;
     if (cursor) params.cursor = cursor;
-    const page = await session.request('mcpServerStatus/list', params);
-    servers.push(...(page?.data ?? []));
-    cursor = page?.nextCursor ?? null;
+    // Live sessions expose request(); the runtime Harness Session type does not name it.
+    const page = await (session as SessionRequest).request('mcpServerStatus/list', params);
+    const rec = fields(page);
+    servers.push(...((rec?.data ?? []) as unknown[]));
+    cursor = rec?.nextCursor ?? null;
   } while (cursor);
-  return servers;
+  // Untrusted list pages; Status is the caller-read shape, not a name-was-string check.
+  return servers as { name: string; runtimeStatus?: string | null }[];
 }
 
 // A required server that is not connected holds release, named. The runtime calls
@@ -163,10 +189,10 @@ export async function listToolServerStatus(session, { threadId } = {}) {
 // runtime connection belongs to a thread. A null is therefore "not known", not
 // "down", and it gets its own fault: reading it as down would hold every release
 // on a box whose servers are all healthy.
-export function holdsRelease(declaration, statuses) {
-  const required = new Set((declaration?.tool_servers ?? []).filter((s) => s.required).map((s) => s.name));
-  const byName = new Map(statuses.map((s) => [s.name, s]));
-  const faults = [];
+export function holdsRelease(declaration: unknown, statuses: unknown) {
+  const required = new Set(((fields(declaration)?.tool_servers ?? []) as ToolServer[]).filter((s) => s.required).map((s) => s.name));
+  const byName = new Map((statuses as ToolServer[]).map((s) => [s.name, s]));
+  const faults: FaultRecord[] = [];
   for (const name of [...required].sort()) {
     const status = byName.get(name);
     if (!status) {
@@ -191,14 +217,19 @@ export function holdsRelease(declaration, statuses) {
   return faults;
 }
 
+type StatusStream = {
+  onEvent: (event: { kind?: unknown; [key: string]: unknown }) => unknown;
+};
+
 // The subscription. mcpServer/startupStatus/updated is a notification, so there is
 // nothing to subscribe to beyond listening; this names the listening so the caller
 // does not reach into the event stream by method name.
-export function onToolServerStatus(session, handler) {
-  const previous = session.stream.onEvent;
-  session.stream.onEvent = (event) => {
+export function onToolServerStatus(session: unknown, handler: (event?: { kind?: unknown; [key: string]: unknown }) => unknown) {
+  const current = session as { stream: StatusStream };
+  const previous = current.stream.onEvent;
+  current.stream.onEvent = (event) => {
     previous(event);
     if (event.kind === 'tool_server.status') handler(event);
   };
-  return () => { session.stream.onEvent = previous; };
+  return () => { current.stream.onEvent = previous; };
 }

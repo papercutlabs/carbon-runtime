@@ -11,10 +11,11 @@
 // is a thing that happens.
 
 import fs from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import type { Readable, Writable } from 'node:stream';
 import { fault } from '../../lib/faults.ts';
-import { Connection } from './protocol.mjs';
-import { EventStream } from './events.mjs';
+import { Connection } from './protocol.ts';
+import { EventStream, type EventHandler } from './events.ts';
 
 export const CLIENT_INFO = { name: 'carbon', version: 'increment-3' };
 
@@ -22,27 +23,61 @@ export const CLIENT_INFO = { name: 'carbon', version: 'increment-3' };
 // else it needs is named by the caller.
 const INHERITED = ['PATH', 'HOME', 'LANG', 'TMPDIR'];
 
+type FaultShape = { code: unknown; subject: unknown; problem: unknown; fix: unknown };
+
+// Untrusted thread/start JSON. The indexer is not a validator.
+function fields(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  return value as Record<string, unknown>;
+}
+
 export class HarnessFault extends Error {
-  constructor(f) {
-    super(f.problem);
+  fault: FaultShape;
+  constructor(f: FaultShape, _all?: unknown) {
+    super(f.problem as string);
     this.name = 'HarnessFault';
     this.fault = f;
   }
 }
 
-function childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv }) {
-  const env = {};
+function childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv }: {
+  codexHome: unknown;
+  providerKeyEnvName?: unknown;
+  providerKey?: unknown;
+  extraEnv?: unknown;
+}) {
+  const env: NodeJS.ProcessEnv = {};
   for (const name of INHERITED) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
-  env.CODEX_HOME = codexHome;
-  for (const [name, value] of Object.entries(extraEnv ?? {})) env[name] = value;
-  if (providerKeyEnvName) env[providerKeyEnvName] = providerKey;
+  env.CODEX_HOME = codexHome as string;
+  for (const [name, value] of Object.entries((extraEnv ?? {}) as Record<string, unknown>)) {
+    env[name] = value as string;
+  }
+  if (providerKeyEnvName) env[providerKeyEnvName as string] = providerKey as string;
   return env;
 }
 
 export class Session {
-  constructor({ child, connection, stream, binary, codexHome, stderr }) {
+  child: ChildProcess;
+  connection: Connection;
+  stream: EventStream;
+  binary: unknown;
+  codexHome: unknown;
+  stderr: string[];
+  threadId: unknown;
+  thread: unknown;
+  initializeResult: unknown;
+  exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+
+  constructor({ child, connection, stream, binary, codexHome, stderr }: {
+    child: ChildProcess;
+    connection: Connection;
+    stream: EventStream;
+    binary: unknown;
+    codexHome: unknown;
+    stderr: string[];
+  }) {
     this.child = child;
     this.connection = connection;
     this.stream = stream;
@@ -55,22 +90,23 @@ export class Session {
     this.exit = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
   }
 
-  request(method, params) {
+  request(method: string, params?: unknown) {
     return this.connection.request(method, params);
   }
 
   // A record of what was started, written to store/threads/<unit-id>.json by the
   // runtime before the first turn. The runtime half of increment 3 owns the write;
   // the harness owns the shape.
-  threadRecord(unitId) {
+  threadRecord(unitId: unknown) {
+    const thread = fields(this.thread);
     return {
       unit_id: unitId,
       thread_id: this.threadId,
-      model: this.thread?.model ?? null,
-      effort: this.thread?.reasoningEffort ?? null,
-      cwd: this.thread?.cwd ?? null,
-      approval_policy: this.thread?.approvalPolicy ?? null,
-      sandbox: this.thread?.sandbox ?? null,
+      model: thread?.model ?? null,
+      effort: thread?.reasoningEffort ?? null,
+      cwd: thread?.cwd ?? null,
+      approval_policy: thread?.approvalPolicy ?? null,
+      sandbox: thread?.sandbox ?? null,
       codex_home: this.codexHome,
       binary: this.binary,
       started_at: new Date().toISOString()
@@ -89,10 +125,22 @@ export class Session {
   }
 }
 
+export type ConnectOptions = {
+  binary: string;
+  codexHome: string;
+  providerKeyPath?: string | null;
+  providerKeyEnvName?: string | null;
+  extraEnv?: unknown;
+  onEvent?: EventHandler | null;
+  onStderr?: ((chunk: string) => unknown) | null;
+  onDropped?: ((line: string) => unknown) | null;
+  onWire?: ((direction: string, line: string) => unknown) | null;
+};
+
 // Spawns the app-server and completes the handshake. Does not open a thread; that
 // is `openThread` or `resumeThread`, so a caller that only wants tool status pays
 // for nothing more.
-export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, onEvent, onStderr, onDropped, onWire }) {
+export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, onEvent, onStderr, onDropped, onWire }: ConnectOptions) {
   if (!fs.existsSync(codexHome)) {
     throw new HarnessFault(fault('HARNESS_CODEX_HOME_ABSENT', codexHome,
       'the CODEX_HOME directory does not exist, and the harness never creates it',
@@ -102,9 +150,10 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
   if (providerKeyPath) {
     try {
       providerKey = fs.readFileSync(providerKeyPath, 'utf8').trim();
-    } catch (error) {
+    } catch (error: unknown) {
       throw new HarnessFault(fault('HARNESS_PROVIDER_KEY_UNREADABLE', providerKeyPath,
-        error.message,
+        // Unknown caught error at the filesystem boundary.
+        (error as { message: string }).message,
         'place the secret as a file readable by the agent user only, as the host contract requires'));
     }
     if (!providerKeyEnvName) {
@@ -119,17 +168,19 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
     env: childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv })
   });
 
-  const stderr = [];
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => {
+  const stderr: string[] = [];
+  // stdio: pipe always yields streams; Node's types include null for other stdio shapes.
+  const stderrStream = child.stderr as Readable;
+  stderrStream.setEncoding('utf8');
+  stderrStream.on('data', (chunk: string) => {
     stderr.push(chunk);
     if (onStderr) onStderr(chunk);
   });
 
   const stream = new EventStream(onEvent);
   const connection = new Connection({
-    input: child.stdout,
-    output: child.stdin,
+    input: child.stdout as Readable,
+    output: child.stdin as Writable,
     onNotification: (method, params) => stream.accept(method, params),
     onUnparsable: (line) => { if (onDropped) onDropped(line); },
     onWire
@@ -141,11 +192,21 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
   return session;
 }
 
+export type ThreadStartArgs = {
+  cwd?: unknown;
+  model?: unknown;
+  effort?: unknown;
+  sandbox?: unknown;
+  unitId?: unknown;
+};
+
 // One thread per unit of work. `sandbox` is the thread's mode; the per-turn
-// sandboxPolicy on turn/start is what actually fences a turn, and turn.mjs sends it
+// sandboxPolicy on turn/start is what actually fences a turn, and turn.ts sends it
 // every time.
-export async function openThread(session, { cwd, model, effort, sandbox, unitId }) {
-  const params = {
+export async function openThread(session: unknown, { cwd, model, effort, sandbox, unitId }: ThreadStartArgs) {
+  // Caller-supplied live session; this is not a schema check.
+  const current = session as Session;
+  const params: Record<string, unknown> = {
     cwd,
     model,
     sandbox,
@@ -153,48 +214,58 @@ export async function openThread(session, { cwd, model, effort, sandbox, unitId 
     ephemeral: false
   };
   if (effort) params.config = { model_reasoning_effort: effort };
-  const started = await session.request('thread/start', params);
-  session.thread = started;
-  session.threadId = started?.thread?.id ?? null;
+  const started = await current.request('thread/start', params);
+  current.thread = started;
+  const startedFields = fields(started);
+  current.threadId = fields(startedFields?.thread)?.id ?? null;
 
-  const faults = [];
-  if (!session.threadId) {
+  const faults: { code: string; subject: string; problem: string; fix: string }[] = [];
+  if (!current.threadId) {
     faults.push(fault('HARNESS_THREAD_ID_ABSENT', 'thread/start',
       'the reply carried no thread id, so no turn can be correlated',
       'record the reply and stop; the pinned protocol moved'));
   }
-  if (model && started?.model !== model) {
+  if (model && startedFields?.model !== model) {
     faults.push(fault('HARNESS_MODEL_NOT_CONFIRMED', 'thread/start.model',
-      `the declaration asks for ${model} and the thread reports ${JSON.stringify(started?.model)}`,
+      `the declaration asks for ${model} and the thread reports ${JSON.stringify(startedFields?.model)}`,
       'stop the agent; a rerouted model is a different agent'));
   }
-  if (effort && started?.reasoningEffort !== effort) {
+  if (effort && startedFields?.reasoningEffort !== effort) {
     faults.push(fault('HARNESS_EFFORT_NOT_CONFIRMED', 'thread/start.reasoningEffort',
-      `the declaration asks for effort ${effort} and the thread reports ${JSON.stringify(started?.reasoningEffort)}`,
+      `the declaration asks for effort ${effort} and the thread reports ${JSON.stringify(startedFields?.reasoningEffort)}`,
       'stop the agent; effort is a cost and a quality decision, not a hint'));
   }
-  if (started?.approvalPolicy !== 'never') {
+  if (startedFields?.approvalPolicy !== 'never') {
     faults.push(fault('HARNESS_APPROVAL_POLICY_NOT_NEVER', 'thread/start.approvalPolicy',
-      `the thread reports ${JSON.stringify(started?.approvalPolicy)}, and an agent with nobody at the keyboard must never be asked`,
+      `the thread reports ${JSON.stringify(startedFields?.approvalPolicy)}, and an agent with nobody at the keyboard must never be asked`,
       'stop the agent; a turn that waits for an approval never completes'));
   }
   if (faults.length) throw new HarnessFault(faults[0], faults);
 
-  if (unitId) await session.request('thread/name/set', { threadId: session.threadId, name: unitId });
-  return session.threadRecord(unitId);
+  if (unitId) await current.request('thread/name/set', { threadId: current.threadId, name: unitId });
+  return current.threadRecord(unitId);
 }
+
+export type ThreadResumeArgs = {
+  threadId?: unknown;
+  cwd?: unknown;
+  model?: unknown;
+  effort?: unknown;
+  sandbox?: unknown;
+};
 
 // Rejoins a thread the app-server already has on disk, which is what the runtime
 // does after a restart. The thread state the reply reports is returned whole,
 // because "what does the thread say it is" is the question a restart asks.
-export async function resumeThread(session, { threadId, cwd, model, effort, sandbox }) {
-  const params = { threadId };
+export async function resumeThread(session: unknown, { threadId, cwd, model, effort, sandbox }: ThreadResumeArgs) {
+  const current = session as Session;
+  const params: Record<string, unknown> = { threadId };
   if (cwd) params.cwd = cwd;
   if (model) params.model = model;
   if (sandbox) params.sandbox = sandbox;
   if (effort) params.config = { model_reasoning_effort: effort };
-  const resumed = await session.request('thread/resume', params);
-  session.thread = resumed;
-  session.threadId = resumed?.thread?.id ?? threadId;
+  const resumed = await current.request('thread/resume', params);
+  current.thread = resumed;
+  current.threadId = fields(fields(resumed)?.thread)?.id ?? threadId;
   return resumed;
 }

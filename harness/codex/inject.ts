@@ -20,18 +20,34 @@ import { fault } from '../../lib/faults.ts';
 
 export const INJECT_FAULT_CODE = 'HARNESS_MID_TURN_INJECTION_REFUSED';
 
+export type InjectRequest = {
+  thread_id: unknown;
+  turn_id: unknown;
+  message_id: unknown;
+  body_length: number | null;
+  arrived_at: unknown;
+};
+
 // Every refused request, in order, for the run that is going on. The runtime writes
 // nothing from here: the store is the record, and this list exists so a caller can
 // see in one place that it is reaching for a door that is shut.
-export function createInjectLog() {
+export function createInjectLog(): InjectRequest[] {
   return [];
 }
+
+type InjectArgs = {
+  threadId?: unknown;
+  turnId?: unknown;
+  messageId?: unknown;
+  body?: unknown;
+  arrivedAt?: unknown;
+};
 
 // Records the request and returns the refusal. It does not throw: a message
 // arriving mid-turn is normal, and the caller's answer is to hold it in the store,
 // not to fail the run.
-export function inject(log, { threadId, turnId, messageId, body, arrivedAt }) {
-  const request = {
+export function inject(log: unknown, { threadId, turnId, messageId, body, arrivedAt }: InjectArgs) {
+  const request: InjectRequest = {
     thread_id: threadId ?? null,
     turn_id: turnId ?? null,
     message_id: messageId ?? null,

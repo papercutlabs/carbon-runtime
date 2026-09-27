@@ -15,10 +15,10 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { fault } from '../../lib/faults.ts';
-import { HarnessFault } from './session.mjs';
+import { HarnessFault } from './session.ts';
 import {
   sha256, bundleManifest, bundleSha256, assertMethodsExist, readSchemaPin
-} from './methods.mjs';
+} from './methods.ts';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const VERIFY_RELEASE = path.join(HERE, '..', '..', 'tools', 'verify-release.mjs');
@@ -28,10 +28,16 @@ const VERIFY_RELEASE = path.join(HERE, '..', '..', 'tools', 'verify-release.mjs'
 export const SCHEMA_COMMAND = ['app-server', 'generate-json-schema', '--out'];
 export const SCHEMA_DOCUMENT_NAME = 'codex_app_server_protocol.schemas.json';
 
+// Untrusted pin JSON and verifier output. The indexer is not a validator.
+function fields(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  return value as Record<string, unknown>;
+}
+
 // The archives hold exactly one file, so the first ustar header is enough. The same
 // reader lives in tools/verify-release.mjs, which reads the member to hash it; this
 // one reads it to write it out.
-function singleFileFromTarGz(archive) {
+function singleFileFromTarGz(archive: Buffer) {
   const tar = zlib.gunzipSync(archive);
   const name = tar.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
   const size = parseInt(tar.subarray(124, 136).toString('utf8').replace(/[\0 ]/g, ''), 8);
@@ -39,11 +45,19 @@ function singleFileFromTarGz(archive) {
   return { name, bytes: tar.subarray(512, 512 + size) };
 }
 
+export type SchemaGeneration = {
+  command: string;
+  document_path: string;
+  document_sha256: string;
+  bundle_sha256: string;
+  bundle_files: number;
+};
+
 // Runs `codex app-server generate-json-schema --out <dir>` against the binary that
 // will actually run, and returns the bundle's two digests. `bundle_sha256` covers
 // every file the subcommand wrote, through a manifest; `document_sha256` covers the
 // one merged document carbon checks its method names against.
-export function generateProtocolSchema(binary, outDir) {
+export function generateProtocolSchema(binary: string, outDir: string): SchemaGeneration {
   fs.mkdirSync(outDir, { recursive: true });
   execFileSync(binary, [...SCHEMA_COMMAND, outDir], { stdio: ['ignore', 'pipe', 'pipe'] });
   const documentPath = path.join(outDir, SCHEMA_DOCUMENT_NAME);
@@ -66,9 +80,9 @@ export function generateProtocolSchema(binary, outDir) {
 
 // Compares a generated schema against what carbon pinned, and against the method
 // names the harness sends. Returns every fault at once.
-export function checkProtocolSchema(generated, { pin = null, documentPath = null } = {}) {
-  const faults = [];
-  const expected = pin ?? readSchemaPin();
+export function checkProtocolSchema(generated: { bundle_sha256?: unknown; document_sha256?: unknown; document_path?: unknown }, { pin = null, documentPath = null }: { pin?: unknown; documentPath?: unknown } = {}) {
+  const faults: { code: string; subject: string; problem: string; fix: string }[] = [];
+  const expected = fields(pin ?? readSchemaPin()) ?? {};
   if (expected.bundle_sha256 && expected.bundle_sha256 !== generated.bundle_sha256) {
     faults.push(fault('HARNESS_PROTOCOL_SCHEMA_MOVED', 'protocol schema bundle',
       `carbon pins ${expected.bundle_sha256} and this binary generates ${generated.bundle_sha256}`,
@@ -80,10 +94,23 @@ export function checkProtocolSchema(generated, { pin = null, documentPath = null
       'diff the document against harness/codex/schema, change harness/codex for what moved, then repin'));
   }
   const source = documentPath ?? generated.document_path;
-  const document = JSON.parse(fs.readFileSync(source, 'utf8'));
-  faults.push(...assertMethodsExist(document, path.basename(source)));
+  // Generated schema JSON is untrusted until assertMethodsExist runs.
+  const document = JSON.parse(fs.readFileSync(source as fs.PathOrFileDescriptor, 'utf8')) as unknown;
+  faults.push(...assertMethodsExist(document, path.basename(source as string)));
   return faults;
 }
+
+export type InstallArgs = {
+  version?: unknown;
+  tag?: unknown;
+  asset?: unknown;
+  artifactSha256?: unknown;
+  dest?: unknown;
+  cache?: unknown;
+  offlineAsset?: unknown;
+  offlineBundle?: unknown;
+  pin?: unknown;
+};
 
 // The whole operation. `dest` is the harness root on the box,
 // /srv/carbon/<id>/harness; the binary lands at <dest>/<version>/codex and the
@@ -91,8 +118,8 @@ export function checkProtocolSchema(generated, { pin = null, documentPath = null
 export function install({
   version, tag, asset, artifactSha256, dest, cache,
   offlineAsset = null, offlineBundle = null, pin = null
-}) {
-  const faults = [];
+}: InstallArgs) {
+  const faults: { code: string; subject: string; problem: string; fix: string }[] = [];
   for (const [name, value] of Object.entries({ version, tag, asset, artifactSha256, dest, cache })) {
     if (!value) {
       faults.push(fault('MISSING_ARGUMENT', name,
@@ -101,31 +128,41 @@ export function install({
   }
   if (faults.length) return { installed: false, faults };
 
-  fs.mkdirSync(cache, { recursive: true });
-  const verifyArgs = [VERIFY_RELEASE, '--tag', tag, '--asset', asset, '--sha256', artifactSha256, '--out', cache];
-  if (offlineAsset) verifyArgs.push('--offline-asset', offlineAsset, '--offline-bundle', offlineBundle);
+  // Missing arguments already returned; remaining values are the caller-supplied strings.
+  const cacheDir = cache as string;
+  const tagValue = tag as string;
+  const assetValue = asset as string;
+  const artifact = artifactSha256 as string;
+  const destDir = dest as string;
+  const versionDirName = version as string;
+
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const verifyArgs = [VERIFY_RELEASE, '--tag', tagValue, '--asset', assetValue, '--sha256', artifact, '--out', cacheDir];
+  if (offlineAsset) verifyArgs.push('--offline-asset', offlineAsset as string, '--offline-bundle', offlineBundle as string);
   let verdict;
   try {
-    verdict = JSON.parse(execFileSync(process.execPath, verifyArgs, { encoding: 'utf8', maxBuffer: 1 << 28 }));
-  } catch (error) {
-    const lines = String(error.stdout ?? '').split('\n').filter(Boolean);
-    const reported = lines.map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+    verdict = JSON.parse(execFileSync(process.execPath, verifyArgs, { encoding: 'utf8', maxBuffer: 1 << 28 })) as unknown;
+  } catch (error: unknown) {
+    const err = error as { stdout?: unknown; message?: unknown };
+    const lines = String(err.stdout ?? '').split('\n').filter(Boolean);
+    const reported = lines.map((line) => { try { return JSON.parse(line) as unknown; } catch { return null; } }).filter(Boolean);
     return {
       installed: false,
-      faults: reported.length ? reported : [fault('HARNESS_RELEASE_UNVERIFIED', asset,
-        String(error.message), 'read tools/verify-release.mjs --help and run it by hand against this tag')]
+      faults: reported.length ? reported : [fault('HARNESS_RELEASE_UNVERIFIED', assetValue,
+        String(err.message), 'read tools/verify-release.mjs --help and run it by hand against this tag')]
     };
   }
 
-  const assetPath = offlineAsset ?? path.join(cache, asset);
+  const assetPath = (offlineAsset ?? path.join(cacheDir, assetValue)) as string;
   const { name, bytes } = singleFileFromTarGz(fs.readFileSync(assetPath));
-  if (sha256(bytes) !== verdict.signed_blob_sha256) {
+  const verdictFields = fields(verdict) ?? {};
+  if (sha256(bytes) !== verdictFields.signed_blob_sha256) {
     return { installed: false, faults: [fault('HARNESS_BINARY_DIGEST_MISMATCH', name,
       'the binary unpacked here does not hash to what the verifier signed off on',
       'refuse the release and re-fetch')] };
   }
 
-  const versionDir = path.join(dest, version);
+  const versionDir = path.join(destDir, versionDirName);
   fs.mkdirSync(versionDir, { recursive: true });
   const binary = path.join(versionDir, 'codex');
   fs.writeFileSync(binary, bytes, { mode: 0o755 });
@@ -139,14 +176,14 @@ export function install({
     installed: true,
     faults: [],
     binary,
-    binary_sha256: verdict.signed_blob_sha256,
-    asset_sha256: verdict.asset_sha256,
+    binary_sha256: verdictFields.signed_blob_sha256,
+    asset_sha256: verdictFields.asset_sha256,
     signature: {
-      verified: verdict.verified,
-      identity_san: verdict.identity_san,
-      identity_issuer: verdict.identity_issuer,
-      rekor_log_index: verdict.rekor_log_index,
-      not_verified: verdict.not_verified
+      verified: verdictFields.verified,
+      identity_san: verdictFields.identity_san,
+      identity_issuer: verdictFields.identity_issuer,
+      rekor_log_index: verdictFields.rekor_log_index,
+      not_verified: verdictFields.not_verified
     },
     schema: generated
   };
@@ -155,7 +192,7 @@ export function install({
 // Records a schema pin from a binary already on this machine. This is how the pin
 // under harness/codex/schema/ is produced and re-produced; a box install never uses
 // it, because a box installs from a verified release and nothing else.
-export function pinFromLocalBinary(binary, outDir) {
+export function pinFromLocalBinary(binary: string, outDir: string) {
   const generated = generateProtocolSchema(binary, outDir);
   const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
   return { ...generated, codex_version: version };

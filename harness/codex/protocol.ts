@@ -10,12 +10,44 @@
 // dropped.
 
 import { fault } from '../../lib/faults.ts';
+import type { Readable, Writable } from 'node:stream';
 
 export const PARSE_LIMIT_BYTES = 64 * 1024 * 1024;
+
+// Untrusted JSON-RPC messages. The indexer is not a validator.
+function fields(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  return value as Record<string, unknown>;
+}
+
+export type Classified =
+  | { kind: 'malformed'; message: unknown }
+  | { kind: 'server-request'; id: unknown; method: string; params: unknown }
+  | { kind: 'server-notification'; method: string; params: unknown }
+  | { kind: 'error'; id: unknown; error: unknown }
+  | { kind: 'response'; id: unknown; result: unknown };
+
+type Pending = {
+  method: string;
+  resolve: (value: unknown) => void;
+  reject: (error: unknown) => void;
+};
+
+export type ConnectionOptions = {
+  input: Readable;
+  output: Writable;
+  onNotification?: ((method: string, params: unknown) => unknown) | null;
+  onServerRequest?: ((method: string, params: unknown) => unknown) | null;
+  onUnparsable?: ((line: string) => unknown) | null;
+  onWire?: ((direction: string, line: string) => unknown) | null;
+};
 
 // Splits a byte stream into complete lines. Kept separate from the connection so
 // the framing can be tested without a process.
 export class LineSplitter {
+  buffer: string;
+  limit: number;
+
   constructor(limit = PARSE_LIMIT_BYTES) {
     this.buffer = '';
     this.limit = limit;
@@ -23,40 +55,46 @@ export class LineSplitter {
 
   // Returns the complete lines in `chunk`, keeping any partial tail for the next
   // call. Empty lines are dropped: the protocol has no meaning for them.
-  push(chunk) {
+  push(chunk: string) {
     this.buffer += chunk;
     if (this.buffer.length > this.limit) {
       throw new Error(`a single protocol line exceeded ${this.limit} bytes with no newline`);
     }
     const parts = this.buffer.split('\n');
-    this.buffer = parts.pop();
+    this.buffer = parts.pop() as string;
     return parts.map((line) => line.trim()).filter((line) => line.length > 0);
   }
 }
 
-export function encode(message) {
+export function encode(message: unknown) {
   return JSON.stringify(message) + '\n';
 }
 
 // One JSON-RPC message, classified. The connection dispatches on `kind` and the
 // test asserts on it, so the classification is a function and not a branch buried
 // in the read loop.
-export function classify(message) {
+export function classify(message: unknown): Classified {
   if (typeof message !== 'object' || message === null) return { kind: 'malformed', message };
-  const hasId = 'id' in message && message.id !== null;
-  if (typeof message.method === 'string') {
+  const rec = message as Record<string, unknown>;
+  const hasId = 'id' in rec && rec.id !== null;
+  if (typeof rec.method === 'string') {
     return hasId
-      ? { kind: 'server-request', id: message.id, method: message.method, params: message.params }
-      : { kind: 'server-notification', method: message.method, params: message.params };
+      ? { kind: 'server-request', id: rec.id, method: rec.method, params: rec.params }
+      : { kind: 'server-notification', method: rec.method, params: rec.params };
   }
-  if (hasId && 'error' in message) return { kind: 'error', id: message.id, error: message.error };
-  if (hasId) return { kind: 'response', id: message.id, result: message.result };
+  if (hasId && 'error' in rec) return { kind: 'error', id: rec.id, error: rec.error };
+  if (hasId) return { kind: 'response', id: rec.id, result: rec.result };
   return { kind: 'malformed', message };
 }
 
 export class RpcError extends Error {
-  constructor(method, error) {
-    super(`${method} failed: ${error?.message ?? JSON.stringify(error)}`);
+  method: string;
+  rpcError: unknown;
+  fault: ReturnType<typeof fault>;
+
+  constructor(method: string, error: unknown) {
+    const rec = fields(error);
+    super(`${method} failed: ${rec?.message ?? JSON.stringify(error)}`);
     this.name = 'RpcError';
     this.method = method;
     this.rpcError = error;
@@ -69,7 +107,17 @@ export class RpcError extends Error {
 // A connection over any duplex pair. `output` is what we write to (the child's
 // stdin) and `input` is what we read from (the child's stdout).
 export class Connection {
-  constructor({ input, output, onNotification, onServerRequest, onUnparsable, onWire }) {
+  output: Writable;
+  onWire: (direction: string, line: string) => unknown;
+  nextId: number;
+  pending: Map<unknown, Pending>;
+  splitter: LineSplitter;
+  onNotification: (method: string, params: unknown) => unknown;
+  onServerRequest: (method: string, params: unknown) => unknown;
+  onUnparsable: (line: string) => unknown;
+  closed: unknown;
+
+  constructor({ input, output, onNotification, onServerRequest, onUnparsable, onWire }: ConnectionOptions) {
     this.output = output;
     // Every line in both directions, when a caller wants the wire itself. This is
     // how a verification record gets exact request and response text rather than a
@@ -85,15 +133,15 @@ export class Connection {
     this.closed = null;
 
     input.setEncoding('utf8');
-    input.on('data', (chunk) => this.#read(chunk));
+    input.on('data', (chunk) => this.#read(chunk as string));
     input.on('close', () => this.#fail(new Error('the app-server closed its output stream')));
   }
 
-  #read(chunk) {
+  #read(chunk: string) {
     let lines;
     try {
       lines = this.splitter.push(chunk);
-    } catch (error) {
+    } catch (error: unknown) {
       this.#fail(error);
       return;
     }
@@ -101,7 +149,8 @@ export class Connection {
       this.onWire('in', line);
       let message;
       try {
-        message = JSON.parse(line);
+        // Wire JSON is untrusted until classify runs.
+        message = JSON.parse(line) as unknown;
       } catch {
         this.onUnparsable(line);
         continue;
@@ -110,7 +159,7 @@ export class Connection {
     }
   }
 
-  #dispatch(event) {
+  #dispatch(event: Classified) {
     if (event.kind === 'response' || event.kind === 'error') {
       const waiter = this.pending.get(event.id);
       if (!waiter) return;
@@ -143,7 +192,7 @@ export class Connection {
     this.onUnparsable(JSON.stringify(event.message));
   }
 
-  #fail(error) {
+  #fail(error: unknown) {
     this.closed = error;
     for (const [id, waiter] of this.pending) {
       this.pending.delete(id);
@@ -151,17 +200,17 @@ export class Connection {
     }
   }
 
-  send(message) {
+  send(message: Record<string, unknown>) {
     const line = encode({ jsonrpc: '2.0', ...message });
     this.onWire('out', line.trimEnd());
     this.output.write(line);
   }
 
-  notify(method, params) {
+  notify(method: string, params: unknown) {
     this.send({ method, params });
   }
 
-  request(method, params) {
+  request(method: string, params?: unknown) {
     if (this.closed) return Promise.reject(this.closed);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
