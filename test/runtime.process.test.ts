@@ -338,6 +338,14 @@ test('an api key is read from the file the declaration names, and passed under t
   assert.deepEqual(key, { path: '/srv/carbon/example/secrets/key', env: 'OPENAI_API_KEY' });
 });
 
+test('on the provider proxy route the runtime passes no key and opens no key file (PA-259)', () => {
+  // The path points nowhere on purpose: providerKey must not so much as look at it.
+  assert.equal(providerKey({
+    provider: { name: 'openai', auth: 'api_key', api_key_ref: 'provider_api_key', api_key_via: 'provider-proxy' },
+    secrets: [{ name: 'provider_api_key', path: '/nonexistent/secrets/key', purpose: 'the key' }]
+  }), null);
+});
+
 test('a declaration that names neither way of authenticating is refused by name', () => {
   assert.throws(() => providerKey({ provider: { name: 'openai' } }),
     (error) => (error as RuntimeFault).faults.some((f) => f.code === 'PROVIDER_AUTH_UNKNOWN')); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.

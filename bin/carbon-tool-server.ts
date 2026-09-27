@@ -19,11 +19,12 @@
 // nothing else. A secret is a path, opened by the server at the moment it uses it;
 // no value is read, printed or logged here.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.ts';
 import { readDeclaration, placesUnder } from '../runtime/index.ts';
-import { toolsUserServer, commandFor, environmentFor, serverNameFromInstance } from '../runtime/tool-servers.ts';
+import { toolsUserServer, commandFor, environmentFor, serverNameFromInstance, stdinSecretFor } from '../runtime/tool-servers.ts';
 import type { Declaration } from '../runtime/types.ts';
 
 const HELP = `carbon-tool-server — run one tool server as the tools user, under its own unit
@@ -126,8 +127,13 @@ async function main(argv: string[]) {
     : args.server;
   const server = toolsUserServer(declaration, name);
 
-  const { command, args: argv2 } = commandFor(declaration, server, { declarationPath });
+  const harnessRoot = byAgentDir ? placesUnder(path.resolve(args['agent-dir'])).harnessRoot : null;
+  const { command, args: argv2 } = commandFor(declaration, server, { declarationPath, harnessRoot });
   const env = environmentFor(declaration, server);
+  // The provider proxy's key (PA-259). The file is opened here, as the tools user
+  // that owns it, and the descriptor becomes the child's standard input. Nothing in
+  // this process reads it: the proxy reads it once into locked memory itself.
+  const stdinPath = stdinSecretFor(declaration, server);
   // toolsUserServer already refused a server without a command path; argv entries are those strings.
   const childArgs = argv2 as string[];
 
@@ -142,11 +148,23 @@ async function main(argv: string[]) {
     cwd: server.cwd,
     command,
     args: childArgs,
-    environment: Object.keys(env).sort()
+    environment: Object.keys(env).sort(),
+    stdin: stdinPath
   }) + '\n');
 
   // cwd is the declaration's own path string when present; spawn keeps its native refusal otherwise.
-  const child = spawn(command, childArgs, { stdio: ['ignore', 'inherit', 'inherit'], env, cwd: server.cwd as string | undefined });
+  let stdinFd: number | null = null;
+  if (stdinPath) {
+    try {
+      stdinFd = fs.openSync(stdinPath, 'r');
+    } catch (error) {
+      report([fault('STDIN_SECRET_UNREADABLE', stdinPath, (error as Error).message,
+        'place the secret as the tools user, mode 0600: carbon secret place --owner tools')]);
+      return EXIT.FAULT;
+    }
+  }
+  const child = spawn(command, childArgs, { stdio: [stdinFd ?? 'ignore', 'inherit', 'inherit'], env, cwd: server.cwd as string | undefined });
+  if (stdinFd !== null) fs.closeSync(stdinFd);
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => { try { child.kill(signal); } catch { /* already gone */ } });
   }

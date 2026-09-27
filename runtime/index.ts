@@ -165,6 +165,10 @@ export const PROVIDER_AUTH = ['chatgpt', 'api_key'];
 export function providerKey(declaration: Declaration) {
   const provider = declaration.provider ?? {};
   if (provider.auth === 'chatgpt') return null;
+  // The key reaches the provider through the tools-user proxy (PA-259). The
+  // app-server is configured with a keyless provider on the proxy's loopback port,
+  // and this process never opens the key file, which the agent user cannot read.
+  if (provider.auth === 'api_key' && provider.api_key_via) return null;
   if (provider.auth !== 'api_key') {
     throw new RuntimeFault(fault('PROVIDER_AUTH_UNKNOWN', String(provider.auth),
       `a client agent authenticates by ${PROVIDER_AUTH.join(' or ')}, and this declaration says something else`,

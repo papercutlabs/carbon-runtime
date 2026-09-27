@@ -30,13 +30,19 @@ export type Server = {
   url?: string;
   command?: string;
   cwd?: string;
+  // `mcp` when absent. `provider_proxy` is the tools-user Responses proxy that
+  // holds the provider key (PA-259): it is started from the pinned harness release,
+  // fed the key on stdin, and is never an MCP server.
+  kind?: string;
+  stdin_secret?: string;
+  upstream_url?: string;
 };
 export type Declaration = {
   [key: string]: unknown;
   agent?: { id?: string; client?: unknown };
   channels?: Channel[];
   secrets?: { name: string; path: string; purpose?: string }[];
-  provider?: { name?: string; auth?: string; api_key_ref?: string };
+  provider?: { name?: string; auth?: string; api_key_ref?: string; api_key_via?: string };
   harness?: { kind?: string; version?: unknown };
   model?: string;
   effort?: string;

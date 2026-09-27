@@ -1667,3 +1667,38 @@ test('a signal that lands after the turn has ended is followed by a stop', async
   assert.equal(recorded.at(-1), 'paused');
   assert.deepEqual(recorded, ['composing', 'paused', 'paused']);
 });
+
+test('the provider proxy is not an MCP server: never listed, and while its port is silent release is held by name (PA-259)', async () => {
+  let up = false;
+  const decl = declaration({
+    provider: { name: 'openai', auth: 'api_key', api_key_ref: 'openai_key', api_key_via: 'provider-proxy' },
+    secrets: [{ name: 'openai_key', path: '/srv/carbon/test-agent/secrets/openai-key' }],
+    tool_servers: [{
+      name: 'provider-proxy', kind: 'provider_proxy', transport: 'http', runs_as: 'tools',
+      url: 'http://127.0.0.1:8765', cwd: '/srv/carbon/test-agent', read_only: true, required: true,
+      secret_refs: [], stdin_secret: 'openai_key', upstream_url: 'https://api.openai.com/v1/responses'
+    }]
+  });
+  // The app-server lists only the reply tool: the proxy is never an MCP server, and a
+  // declared server missing from the list would otherwise end the process.
+  const { loop, harness, store } = makeLoop({ decl, onTurn: (s) => answering(s) });
+  const probed: string[] = [];
+  loop.probe = async (url: string) => { probed.push(url); return up; };
+
+  const held = await loop.pass([item(1, 'first')]);
+  assert.deepEqual(held.released, []);
+  assert.deepEqual(held.holding, ['tool_servers.provider-proxy'], 'the hold names the proxy');
+  assert.equal(harness.session.turns.length, 0, 'no turn is started against a proxy that is gone');
+  assert.ok(probed.every((u) => u === 'http://127.0.0.1:8765') && probed.length > 0, 'the proxy\'s own port is what is probed');
+
+  up = true;
+  const released = await loop.pass([]);
+  assert.equal(released.released.length, 1);
+  assert.equal(harness.session.turns.length, 1);
+
+  up = false;
+  const again = await loop.pass([item(2, 'second')]);
+  assert.deepEqual(again.released, [], 'a proxy that dies between turns holds what is left');
+  assert.deepEqual(again.holding, ['tool_servers.provider-proxy']);
+  assert.ok(store.rebuild().some((r) => r.message_id === `${ACCOUNT}:c1:2` && !r.release));
+});

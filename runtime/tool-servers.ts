@@ -36,6 +36,7 @@ import type { Declaration, Server, Log } from './types.ts';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
+import path from 'node:path';
 import { fault, RuntimeFault } from './faults.ts';
 
 // The name of a secret becomes the environment variable that carries its path.
@@ -64,9 +65,50 @@ export function environmentFor(declaration: Declaration, server: Server) {
 // The argument vector, as one list, so the same thing is used to start the server,
 // to say in a log what was started, and to recognise the process in a check from
 // outside the box.
-export function commandFor(declaration: Declaration, server: Server, { declarationPath, node = process.execPath }: { declarationPath: string; node?: string }) {
+// The provider proxy (PA-259). The provider key is a tools-owned file, and the
+// process that holds it is Codex's own standalone Responses proxy from the pinned
+// harness release, run under this same tool unit and fed the key on stdin. The
+// app-server then talks to it on loopback with no key of its own. It is not an MCP
+// server: it answers POST /v1/responses and refuses everything else, so nothing
+// that renders, admits or evaluates MCP servers may treat it as one.
+export const PROVIDER_PROXY = 'provider_proxy';
+export const PROVIDER_PROXY_BINARY = 'codex-responses-api-proxy';
+
+export function isProviderProxy(server: Server | undefined | null) {
+  return server?.kind === PROVIDER_PROXY;
+}
+
+// The one secret handed to a server as its standard input, or null. Only the
+// provider proxy has one. The launcher opens this path and passes the descriptor;
+// the bytes are never read into any process of ours.
+export function stdinSecretFor(declaration: Declaration, server: Server) {
+  if (!server.stdin_secret) return null;
+  const secret = (declaration.secrets ?? []).find((s) => s.name === server.stdin_secret);
+  if (!secret) {
+    throw new RuntimeFault(fault('SECRET_REF_UNDECLARED', `${server.name}.stdin_secret`,
+      `the server names ${JSON.stringify(server.stdin_secret)} as its standard input and the declaration declares no such secret`,
+      'declare the secret with its absolute path, or correct stdin_secret'));
+  }
+  return secret.path;
+}
+
+export function commandFor(declaration: Declaration, server: Server, { declarationPath, harnessRoot = null, node = process.execPath }: { declarationPath: string; harnessRoot?: string | null; node?: string }) {
   // The declaration caller supplies the URL; URL retains its native refusal otherwise.
   const address = new URL(server.url!);
+  if (isProviderProxy(server)) {
+    if (!harnessRoot) {
+      throw new RuntimeFault(fault('PROVIDER_PROXY_NO_HARNESS_ROOT', `tool_servers.${server.name}`,
+        'the provider proxy is the standalone binary of the pinned harness release, and this run was given no harness directory to find it in',
+        'run it from an agent directory (--agent-dir), where install unpacked the harness'));
+    }
+    // Exactly two flags. Never --http-shutdown (any local caller could stop it),
+    // --server-info or --dump-dir (a file this unit would write). The proxy binds
+    // 127.0.0.1 itself; the port is the declaration's url.
+    return {
+      command: path.join(harnessRoot, String(declaration.harness?.version), PROVIDER_PROXY_BINARY),
+      args: ['--port', address.port, '--upstream-url', String(server.upstream_url)]
+    };
+  }
   return {
     command: node,
     args: [
@@ -109,6 +151,15 @@ export function toolsUserServer(declaration: Declaration, name: string) {
     throw new RuntimeFault(fault('TOOL_SERVER_NOT_HTTP', name,
       `the declaration marks this server transport ${JSON.stringify(server.transport)}, and the harness reaches a tools-user server over loopback`,
       'declare transport as http with the loopback url the unit serves it on'));
+  }
+  if (isProviderProxy(server)) {
+    let host = null;
+    try { host = new URL(String(server.url)).hostname; } catch { host = null; }
+    if (host !== '127.0.0.1' || !server.upstream_url || !server.stdin_secret) {
+      throw new RuntimeFault(fault('PROVIDER_PROXY_MALFORMED', name,
+        'a provider proxy listens on 127.0.0.1, forwards to one upstream_url and takes its key as stdin_secret, and this entry is missing one of the three',
+        'run carbon declaration check; it names the field'));
+    }
   }
   return server;
 }
@@ -186,6 +237,12 @@ export function startToolServers(declaration: Declaration, { declarationPath, sp
   const started = [];
   const faults = [];
   for (const server of serversToStart(declaration)) {
+    if (isProviderProxy(server)) {
+      faults.push(fault('PROVIDER_PROXY_NOT_TOOLS', `tool_servers.${server.name}`,
+        'the provider proxy holds the provider key, and a server this process starts runs as the agent user, which is the account the model\'s own shell runs as',
+        'declare runs_as as tools, so it runs under its own unit'));
+      continue;
+    }
     if (!server.command) {
       faults.push(fault('TOOL_SERVER_COMMAND_ABSENT', `tool_servers.${server.name}`,
         'an http tool server is started by the runtime and this one does not say what to start',
