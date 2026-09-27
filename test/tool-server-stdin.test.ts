@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { commandFor, toolsUserServer, startToolServers, stdinSecretFor, PROVIDER_PROXY_BINARY } from '../runtime/tool-servers.ts';
+import { commandFor, toolsUserServer, startToolServers, stdinSecretFor, PROVIDER_PROXY_BINARY, PROVIDER_PROXY_DIR } from '../runtime/tool-servers.ts';
 import { RuntimeFault } from '../runtime/faults.ts';
 import type { Declaration, Server } from '../runtime/types.ts';
 
@@ -44,18 +44,18 @@ function faultCodes(fn: () => unknown) {
   return [];
 }
 
-test('the proxy is started from the pinned harness release with exactly two flags', () => {
+test('the proxy is started from the installed version, never from the agent user\'s harness directory, with exactly two flags', () => {
   const server = proxyServer();
-  const { command, args } = commandFor(declarationWith(server), server, { declarationPath: '/x', harnessRoot: '/srv/carbon/test-agent/harness' });
-  assert.equal(command, `/srv/carbon/test-agent/harness/${VERSION}/${PROVIDER_PROXY_BINARY}`);
+  const { command, args } = commandFor(declarationWith(server), server, { declarationPath: '/x', currentDir: '/srv/carbon/test-agent/current' });
+  assert.equal(command, `/srv/carbon/test-agent/current/${PROVIDER_PROXY_DIR}/${PROVIDER_PROXY_BINARY}`);
   assert.deepEqual(args, ['--port', '8765', '--upstream-url', UPSTREAM],
     'never --http-shutdown, --server-info or --dump-dir, and never the declaration or the node binary');
 });
 
-test('without a harness directory the proxy is refused by name rather than guessed at', () => {
+test('without an installed version the proxy is refused by name rather than guessed at', () => {
   const server = proxyServer();
   assert.deepEqual(faultCodes(() => commandFor(declarationWith(server), server, { declarationPath: '/x' })),
-    ['PROVIDER_PROXY_NO_HARNESS_ROOT']);
+    ['PROVIDER_PROXY_NO_INSTALL']);
 });
 
 test('the tool unit refuses a proxy that is not on 127.0.0.1, or lacks its upstream or its key', () => {
@@ -82,14 +82,13 @@ test('the tool unit hands the proxy its key as stdin, from the file, and the lau
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-proxy-'));
   const work = path.join(agentDir, 'tools-work');
   fs.mkdirSync(work);
-  fs.mkdirSync(path.join(agentDir, 'current'));
   fs.mkdirSync(path.join(agentDir, 'secrets'));
   const keyPath = path.join(agentDir, 'secrets', 'openai-key');
   const key = `PA259CANARY_${Date.now().toString(16)}_stdin_only`;
   fs.writeFileSync(keyPath, key, { mode: 0o600 });
   // The stand-in records what it was given: its arguments, its environment, and
   // every byte of its standard input. It runs in the declared cwd.
-  const binDir = path.join(agentDir, 'harness', VERSION);
+  const binDir = path.join(agentDir, 'current', PROVIDER_PROXY_DIR);
   fs.mkdirSync(binDir, { recursive: true });
   const stub = path.join(binDir, PROVIDER_PROXY_BINARY);
   fs.writeFileSync(stub, '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > args.txt\nenv > env.txt\ncat > stdin.bin\n', { mode: 0o755 });
@@ -109,9 +108,9 @@ test('the tool unit hands the proxy its key as stdin, from the file, and the lau
 test('a key file the tools user cannot open ends the launch by name, and nothing is started', () => {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-proxy-'));
   fs.mkdirSync(path.join(agentDir, 'current'));
-  fs.mkdirSync(path.join(agentDir, 'harness', VERSION), { recursive: true });
+  fs.mkdirSync(path.join(agentDir, 'current', PROVIDER_PROXY_DIR), { recursive: true });
   const marker = path.join(agentDir, 'started');
-  fs.writeFileSync(path.join(agentDir, 'harness', VERSION, PROVIDER_PROXY_BINARY), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(agentDir, 'current', PROVIDER_PROXY_DIR, PROVIDER_PROXY_BINARY), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
   const server = proxyServer({ cwd: agentDir });
   fs.writeFileSync(path.join(agentDir, 'current', 'carbon.agent.json'), JSON.stringify(declarationWith(server, path.join(agentDir, 'secrets', 'absent'))));
   const ran = spawnSync(process.execPath, [LAUNCHER, '--agent-dir', agentDir, '--instance', `${AGENT}-provider-proxy`], { encoding: 'utf8', timeout: 20000 });

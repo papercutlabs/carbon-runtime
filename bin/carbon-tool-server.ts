@@ -127,8 +127,8 @@ async function main(argv: string[]) {
     : args.server;
   const server = toolsUserServer(declaration, name);
 
-  const harnessRoot = byAgentDir ? placesUnder(path.resolve(args['agent-dir'])).harnessRoot : null;
-  const { command, args: argv2 } = commandFor(declaration, server, { declarationPath, harnessRoot });
+  const currentDir = byAgentDir ? path.join(path.resolve(args['agent-dir']), 'current') : null;
+  const { command, args: argv2 } = commandFor(declaration, server, { declarationPath, currentDir });
   const env = environmentFor(declaration, server);
   // The provider proxy's key (PA-259). The file is opened here, as the tools user
   // that owns it, and the descriptor becomes the child's standard input. Nothing in

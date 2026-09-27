@@ -73,6 +73,10 @@ export function environmentFor(declaration: Declaration, server: Server) {
 // that renders, admits or evaluates MCP servers may treat it as one.
 export const PROVIDER_PROXY = 'provider_proxy';
 export const PROVIDER_PROXY_BINARY = 'codex-responses-api-proxy';
+// Where install places it: inside the installed version, which the tools user owns
+// and makes read-only, and never under harness/, which the agent user owns. A key
+// holder that ran a binary the agent user could replace would hand the key to it.
+export const PROVIDER_PROXY_DIR = 'provider-proxy';
 
 export function isProviderProxy(server: Server | undefined | null) {
   return server?.kind === PROVIDER_PROXY;
@@ -92,20 +96,20 @@ export function stdinSecretFor(declaration: Declaration, server: Server) {
   return secret.path;
 }
 
-export function commandFor(declaration: Declaration, server: Server, { declarationPath, harnessRoot = null, node = process.execPath }: { declarationPath: string; harnessRoot?: string | null; node?: string }) {
+export function commandFor(declaration: Declaration, server: Server, { declarationPath, currentDir = null, node = process.execPath }: { declarationPath: string; currentDir?: string | null; node?: string }) {
   // The declaration caller supplies the URL; URL retains its native refusal otherwise.
   const address = new URL(server.url!);
   if (isProviderProxy(server)) {
-    if (!harnessRoot) {
-      throw new RuntimeFault(fault('PROVIDER_PROXY_NO_HARNESS_ROOT', `tool_servers.${server.name}`,
-        'the provider proxy is the standalone binary of the pinned harness release, and this run was given no harness directory to find it in',
-        'run it from an agent directory (--agent-dir), where install unpacked the harness'));
+    if (!currentDir) {
+      throw new RuntimeFault(fault('PROVIDER_PROXY_NO_INSTALL', `tool_servers.${server.name}`,
+        'the provider proxy is the standalone binary install places in the installed version, and this run was given no installed version to find it in',
+        'run it from an agent directory (--agent-dir), where install placed it'));
     }
     // Exactly two flags. Never --http-shutdown (any local caller could stop it),
     // --server-info or --dump-dir (a file this unit would write). The proxy binds
     // 127.0.0.1 itself; the port is the declaration's url.
     return {
-      command: path.join(harnessRoot, String(declaration.harness?.version), PROVIDER_PROXY_BINARY),
+      command: path.join(currentDir, PROVIDER_PROXY_DIR, PROVIDER_PROXY_BINARY),
       args: ['--port', address.port, '--upstream-url', String(server.upstream_url)]
     };
   }
