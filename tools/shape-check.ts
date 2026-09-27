@@ -746,7 +746,7 @@ function adapterReach(root: string, modules: Map<string, SourceModule>, out: Fau
 function repoDirection(root: string, kind: RepoKind, modules: Map<string, SourceModule>, out: FaultRow[]): void {
   const foreign = kind === 'core'
     ? ['stream/', 'adapters/', 'runtime/', 'conformance/']
-    : ['host/', 'lib/install.ts', 'lib/doctor.ts', 'lib/runner.mjs', 'lib/declaration.ts'];
+    : ['host/', 'lib/install.ts', 'lib/doctor.ts', 'lib/runner.ts', 'lib/declaration.ts'];
   for (const module of modules.values()) {
     for (const edge of module.edges) {
       if (!edge.to) continue;
