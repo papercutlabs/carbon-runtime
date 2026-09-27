@@ -1,5 +1,5 @@
 import type { Declaration, Channel, Log, Harness, Session, ChildExit } from './types.ts';
-type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number };
+type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate };
 
 // The runtime process: the one thing a unit starts.
 //
@@ -25,7 +25,8 @@ import { loadAdapter } from './registry.ts';
 import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.ts';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.ts';
 import { serveTeachTool, TEACH_PORT } from './teach-tool.ts';
-import { ReleaseLoop } from './loop.ts';
+import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny } from './loop.ts';
+import type { SandboxDenyGate } from './loop.ts';
 import { pollIntervalFor } from './poll.ts';
 import { resolveChannel } from './channel.ts';
 
@@ -217,7 +218,9 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     declaration, declarationPath, storeDir, codexHome, checkout, work, harnessRoot,
     binary = null, replyPort = REPLY_PORT, teachPort = TEACH_PORT,
     harness, adapters = null, items = () => [],
-    passes = Infinity, log = () => {}, now = () => Date.now()
+    passes = Infinity, log = () => {}, now = () => Date.now(),
+    // On a box the agent directory is the parent of codex-home, and the file is root's.
+    sandboxDeny = { file: SANDBOX_DENY_FILE, root: path.dirname(path.resolve(codexHome)), ownerUid: 0 }
   } = options;
 
   const store = Store.open(storeDir);
@@ -321,6 +324,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // writable by the agent user and why install checks the file's presence and
     // never its contents.
     const key = providerKey(declaration);
+    // HC-14 (PA-259): no harness starts on a box whose deny file is not exactly placed.
+    checkSandboxDeny(sandboxDeny, 'before the harness started');
     session = await harness.connect({
       binary: harnessBinary(declaration, { harnessRoot, binary }),
       codexHome,
@@ -337,7 +342,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
 
     const loops = loaded.map(({ channel, adapter, interval_ms }) => {
       const loop = new ReleaseLoop({
-        declaration, channel, store, storeDir, adapter, harness, session: session!,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
+        declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
       });
       // Interval faults were refused before any loop was created.

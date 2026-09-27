@@ -10,6 +10,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 import { PROVIDER_AUTH, providerKey, run, placesUnder, placeGuidance, GUIDANCE_NAMES } from '../runtime/index.ts';
+import { sandboxDenyBody } from '../runtime/loop.ts';
 import { EXIT } from '../runtime/faults.ts';
 import { takeLock, lockFile, commandLineOf } from '../runtime/lock.ts';
 import { latch, refuseIfLatched } from '../runtime/latch.ts';
@@ -59,6 +60,11 @@ async function runOnce(options: { dir?: string; declaration?: TestDeclaration; h
   // The work directory is the thread's own and the runtime links the checkout's
   // guidance into it, so it has to exist before a run the way install makes it.
   fs.mkdirSync(path.join(dir, 'work'), { recursive: true });
+  // HC-14's deny file (PA-259), placed exactly for this run's own directory: the
+  // runtime refuses to start the harness without it, and a test is not a box.
+  const denyFile = path.join(dir, 'requirements.toml');
+  fs.writeFileSync(denyFile, sandboxDenyBody(dir));
+  fs.chmodSync(denyFile, 0o644);
   const log: Record<string, unknown>[] = [];
   const code = await run({
     declaration: decl,
@@ -74,7 +80,8 @@ async function runOnce(options: { dir?: string; declaration?: TestDeclaration; h
     adapters: { fixture },
     items: () => options.items ?? [],
     passes: 1,
-    log: (line) => log.push(line)
+    log: (line) => log.push(line),
+    sandboxDeny: { file: denyFile, root: dir, ownerUid: process.getuid ? process.getuid() : 0 }
   });
   return { code, log, dir, storeDir: path.join(dir, 'store') };
 }
