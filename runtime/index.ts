@@ -22,7 +22,7 @@ import { fault, report, RuntimeFault, EXIT } from './faults.ts';
 import { refuseIfLatched } from './latch.ts';
 import { takeLock, releaseLock } from './lock.ts';
 import { loadAdapter } from './registry.ts';
-import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.ts';
+import { startToolServers, stopToolServers, awaitToolServers, answers } from './tool-servers.ts';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.ts';
 import { serveTeachTool, TEACH_PORT } from './teach-tool.ts';
 import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny, ProviderAccountRecorder } from './loop.ts';
@@ -363,7 +363,9 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       const loop = new ReleaseLoop({
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
-        afterTurn: () => { providerAccount.request('turn'); }
+        afterTurn: () => { providerAccount.request('turn'); },
+        // The provider proxy's port probe (PA-259). Without one the loop holds release.
+        probe: answers
       });
       // Interval faults were refused before any loop was created.
       loop.intervalMs = interval_ms!;

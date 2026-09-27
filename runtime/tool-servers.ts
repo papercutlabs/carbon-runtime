@@ -75,14 +75,14 @@ export function environmentFor(declaration: Declaration, server: Server) {
 // app-server then talks to it on loopback with no key of its own. It is not an MCP
 // server: it answers POST /v1/responses and refuses everything else, so nothing
 // that renders, admits or evaluates MCP servers may treat it as one.
-export const PROVIDER_PROXY = 'provider_proxy';
+const PROVIDER_PROXY = 'provider_proxy';
 export const PROVIDER_PROXY_BINARY = 'codex-responses-api-proxy';
 // Where install places it: inside the installed version, which the tools user owns
 // and makes read-only, and never under harness/, which the agent user owns. A key
 // holder that ran a binary the agent user could replace would hand the key to it.
 export const PROVIDER_PROXY_DIR = 'provider-proxy';
 
-export function isProviderProxy(server: Server | undefined | null) {
+function isProviderProxy(server: Server | undefined | null) {
   return server?.kind === PROVIDER_PROXY;
 }
 

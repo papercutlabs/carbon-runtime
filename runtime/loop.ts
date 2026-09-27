@@ -42,7 +42,6 @@ import { StreamFault } from '../stream/store.ts';
 import { listTeachings, teachingsUnderRelease } from '../stream/teachings.ts';
 import { latch } from './latch.ts';
 import { REPLY_SERVER_NAME } from './reply-tool.ts';
-import { answers, isProviderProxy } from './tool-servers.ts';
 import { TEACH_SERVER_NAME } from './teach-tool.ts';
 import { conversationKindOf } from './channel.ts';
 // The recorder runs beside the loops rather than in one: the runtime process
@@ -548,7 +547,7 @@ export class ReleaseLoop<S = Session> {
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
     agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
-    afterTurn = () => {}, probe = answers
+    afterTurn = () => {}, probe = async () => false
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -664,8 +663,9 @@ export class ReleaseLoop<S = Session> {
   refuseUndeclaredServers(statuses: Status[]) {
     const declared = new Set([
       // The provider proxy is not an MCP server and is never rendered as one, so
-      // the app-server never lists it (PA-259).
-      ...(this.declaration.tool_servers ?? []).filter((s) => !isProviderProxy(s)).map((s) => s.name),
+      // the app-server never lists it (PA-259). It is the server api_key_via names;
+      // declaration check refuses any other.
+      ...(this.declaration.tool_servers ?? []).filter((s) => s.name !== this.declaration.provider?.api_key_via).map((s) => s.name),
       REPLY_SERVER_NAME,
       ...(this.declaration.teaching?.enabled === true ? [TEACH_SERVER_NAME] : [])
     ]);
