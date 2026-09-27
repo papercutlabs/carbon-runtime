@@ -20,7 +20,7 @@
 //
 // `root` defaults to the repository this script sits in. `--with` names a
 // checkout of the other half, which four rules need and say so when they do not
-// have it. `--json` prints the whole model, which tools/map.mjs reads. `--strict`
+// have it. `--json` prints the whole model, which tools/map.ts reads. `--strict`
 // ignores the baseline below.
 //
 // Every violation is one line of {code, subject, problem, fix}, every violation
@@ -452,7 +452,7 @@ function trackedFiles(root: string): string[] | null {
       .split('\n').map((l) => l.trim()).filter(Boolean);
   } catch {
     // Not a checkout: fall back to the tree on disk, and say nothing, because
-    // this is the path tools/map.mjs takes over an unpacked tarball.
+    // this is the path tools/map.ts takes over an unpacked tarball.
     list = null;
   }
   TRACKED.set(root, list);
@@ -1280,7 +1280,7 @@ Usage:
   --with    a checkout of the other half of Carbon. The vendored-copy rule, the
             declared-field rule and the cross-repository half of the duplication
             rule need it, and say so on their own line when they do not have it.
-  --json    print the whole model, which tools/map.mjs reads
+  --json    print the whole model, which tools/map.ts reads
   --strict  ignore tools/shape-baseline.json and fail on every violation
   --write-baseline  record today's violations as the follow-up list, by hand, once
 
