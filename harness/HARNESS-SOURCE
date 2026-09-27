@@ -1,10 +1,10 @@
 Where the copied files under this repository came from, and what may be done to them.
 
 source repository   the private half of Carbon, named in that repository's README
-source commit       a2eb5573da52ad1006bdc9500a18d972627b6148
-copied on           2026-09-27 (PA-259: account/read and account/rateLimits/read, readAccount; the
-                    copy is that commit plus the unmerged PA-259 account-read change to methods,
-                    session, events and index; replace this commit with the one it lands as)
+source commit       060194154eb6c5cbe2a8fa92057ba52bed0b8f68
+copied on           2026-09-27 (PA-259: account/read and account/rateLimits/read, readAccount;
+                    that commit is carbon-core branch pa259/account-read, not yet merged;
+                    replace it with the commit it lands as)
 
 Copied verbatim, as whole files, with no edit of any kind:
 
