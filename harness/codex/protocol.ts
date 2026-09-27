@@ -71,7 +71,8 @@ export class RpcError extends Error {
   rpcError: unknown;
   fault: ReturnType<typeof fault>;
   constructor(method: string, error: unknown) {
-    super(`${method} failed: ${error && typeof error === 'object' && 'message' in error ? error.message : JSON.stringify(error)}`);
+    // Preserve the raw optional property read and nullish fallback; the assertion only types that operation.
+    super(`${method} failed: ${(error as { message?: unknown } | null | undefined)?.message ?? JSON.stringify(error)}`);
     this.name = 'RpcError';
     this.method = method;
     this.rpcError = error;
