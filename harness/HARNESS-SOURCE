@@ -1,8 +1,8 @@
 Where the copied files under this repository came from, and what may be done to them.
 
 source repository   the private half of Carbon, named in that repository's README
-source commit       f45ff65f784908f54040e6128fc63f99c37cedd2
-copied on           2026-09-27 (PA-318: typed remaining tools and verifier path)
+source commit       21632dd6c29f9f9720193138f3f1688fd2d6a31a
+copied on           2026-09-28 (PA-259: provider proxy kind skipped by the MCP renderer; restamped to the rebased core head)
 
 Copied verbatim, as whole files, with no edit of any kind:
 
@@ -18,7 +18,7 @@ unit starts on a box, and it spawns the harness as its direct child, so the
 harness's code has to be inside the tarball that lands there. The private
 repository holds the machinery and the wisdom; what it renders goes around, and
 this code is a rendering. The private repository stays the authority: its
-test/public-copies.test.mjs compares these files with the ones here, byte for
+test/public-copies.test.ts compares these files with the ones here, byte for
 byte, whenever both checkouts are present, and fails on any drift.
 
 What is not copied. harness/codex/verifications/ and harness/README.md stay in

@@ -22,7 +22,7 @@ import { fault, report, RuntimeFault, EXIT } from './faults.ts';
 import { refuseIfLatched } from './latch.ts';
 import { takeLock, releaseLock } from './lock.ts';
 import { loadAdapter } from './registry.ts';
-import { startToolServers, stopToolServers, awaitToolServers } from './tool-servers.ts';
+import { startToolServers, stopToolServers, awaitToolServers, answers } from './tool-servers.ts';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.ts';
 import { serveTeachTool, TEACH_PORT } from './teach-tool.ts';
 import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny, ProviderAccountRecorder } from './loop.ts';
@@ -165,6 +165,10 @@ export const PROVIDER_AUTH = ['chatgpt', 'api_key'];
 export function providerKey(declaration: Declaration) {
   const provider = declaration.provider ?? {};
   if (provider.auth === 'chatgpt') return null;
+  // The key reaches the provider through the tools-user proxy (PA-259). The
+  // app-server is configured with a keyless provider on the proxy's loopback port,
+  // and this process never opens the key file, which the agent user cannot read.
+  if (provider.auth === 'api_key' && provider.api_key_via) return null;
   if (provider.auth !== 'api_key') {
     throw new RuntimeFault(fault('PROVIDER_AUTH_UNKNOWN', String(provider.auth),
       `a client agent authenticates by ${PROVIDER_AUTH.join(' or ')}, and this declaration says something else`,
@@ -359,7 +363,9 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       const loop = new ReleaseLoop({
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
-        afterTurn: () => { providerAccount.request('turn'); }
+        afterTurn: () => { providerAccount.request('turn'); },
+        // The provider proxy's port probe (PA-259). Without one the loop holds release.
+        probe: answers
       });
       // Interval faults were refused before any loop was created.
       loop.intervalMs = interval_ms!;

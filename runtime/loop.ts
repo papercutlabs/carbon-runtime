@@ -2,7 +2,7 @@ type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?:
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean> };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
@@ -537,6 +537,8 @@ export class ReleaseLoop<S = Session> {
   declare toolStatusRead: boolean;
   declare toolStatusStale: boolean;
   declare holdFaults: Fault[];
+  declare proxyFaults: Fault[];
+  declare probe: (url: string) => Promise<boolean>;
   declare items: () => unknown[];
   declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null | undefined;
   declare intervalMs: number | undefined;
@@ -545,7 +547,7 @@ export class ReleaseLoop<S = Session> {
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
     agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
-    afterTurn = () => {}
+    afterTurn = () => {}, probe = async () => false
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -579,6 +581,8 @@ export class ReleaseLoop<S = Session> {
     this.toolStatusRead = false;
     this.toolStatusStale = true;
     this.holdFaults = [];
+    this.proxyFaults = [];
+    this.probe = probe;
     this.items = () => [];
     // What happens once a turn has completed and its thread record is written:
     // asking for the provider-account read (PA-259). Asking returns at once; the
@@ -658,7 +662,10 @@ export class ReleaseLoop<S = Session> {
   // reporting it later.
   refuseUndeclaredServers(statuses: Status[]) {
     const declared = new Set([
-      ...(this.declaration.tool_servers ?? []).map((s) => s.name),
+      // The provider proxy is not an MCP server and is never rendered as one, so
+      // the app-server never lists it (PA-259). It is the server api_key_via names;
+      // declaration check refuses any other.
+      ...(this.declaration.tool_servers ?? []).filter((s) => s.name !== this.declaration.provider?.api_key_via).map((s) => s.name),
       REPLY_SERVER_NAME,
       ...(this.declaration.teaching?.enabled === true ? [TEACH_SERVER_NAME] : [])
     ]);
@@ -675,6 +682,23 @@ export class ReleaseLoop<S = Session> {
         'check that install rendered it into config.toml, and that the name matches'));
     }
     if (faults.length > 0) throw new RuntimeFault(faults);
+  }
+
+  // The provider proxy (PA-259). It is not an MCP server, so the app-server never
+  // reports its state and holdsRelease cannot see it; and an app-server whose
+  // proxy is gone does not fail its turn, it waits and reconnects without end. So
+  // the proxy's loopback port is probed at the start of every release pass and
+  // again before every turn, and while nothing answers, release is held by name.
+  async checkProviderProxy() {
+    const via = this.declaration.provider?.api_key_via;
+    if (!via) return (this.proxyFaults = []);
+    const server = (this.declaration.tool_servers ?? []).find((s) => s.name === via);
+    const up = server?.url ? await this.probe(server.url) : false;
+    this.proxyFaults = up ? [] : [fault('PROVIDER_PROXY_DOWN', `tool_servers.${via}`,
+      `the provider proxy does not answer on ${server?.url ?? 'its url'}, so a turn now would wait on a provider it cannot reach`,
+      `read the unit: systemctl status carbon-tool@${this.declaration.agent?.id}-${via}. Release is held until it answers.`)];
+    if (this.proxyFaults.length > 0) this.log({ event: 'provider_proxy.hold', faults: this.proxyFaults });
+    return this.proxyFaults;
   }
 
   // ---- poll ---------------------------------------------------------------
@@ -825,8 +849,9 @@ export class ReleaseLoop<S = Session> {
     if (this.toolStatusStale && this.threads.size > 0) {
       await this.readToolServerStatus([...this.threads.values()][0]);
     }
-    const holding = this.holdFaults.map((f) => f.subject);
-    if (this.holdFaults.length > 0) {
+    await this.checkProviderProxy();
+    const holding = [...this.holdFaults, ...this.proxyFaults].map((f) => f.subject);
+    if (this.holdFaults.length > 0 || this.proxyFaults.length > 0) {
       const waiting = this.store.rebuild()
         .filter((r) => r.direction === 'inbound' && !r.release && r.historical !== true)
         .map((r) => r.message_id);
@@ -921,7 +946,7 @@ export class ReleaseLoop<S = Session> {
         if (this.holdFaults.length > 0) break;
       }
     }
-    return { released, held, parked, holding: this.holdFaults.map((f) => f.subject) };
+    return { released, held, parked, holding: [...this.holdFaults, ...this.proxyFaults].map((f) => f.subject) };
   }
 
   // One release, wrapped in the signal that says a turn is running. The signal
@@ -936,6 +961,7 @@ export class ReleaseLoop<S = Session> {
     unitId ??= unitIdFor(this.declaration, record);
     const threadId = await this.threadFor(unitId);
     if (this.holdFaults.length > 0) return null;
+    if ((await this.checkProviderProxy()).length > 0) return null;
     const typing = startTyping({
       adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
     });

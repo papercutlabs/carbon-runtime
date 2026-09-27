@@ -24,7 +24,7 @@ import { fault } from '../../lib/faults.ts';
 import type { Session } from './session.ts';
 import type { HarnessEvent } from './events.ts';
 
-type ToolServer = { name?: string; secret_refs?: string[]; transport?: string; command?: string; cwd?: string; url?: string; required?: boolean };
+type ToolServer = { name?: string; kind?: string; secret_refs?: string[]; transport?: string; command?: string; cwd?: string; url?: string; required?: boolean };
 type Declaration = { tool_servers?: ToolServer[]; secrets?: { name: string }[] } | null | undefined;
 type ToolStatus = { name?: string; runtimeStatus?: string | null };
 
@@ -32,6 +32,13 @@ const BARE_KEY = /^[A-Za-z0-9_-]+$/;
 
 // The declaration is the grant. See the note above and the verification record.
 export const APPROVAL_MODE = 'approve';
+
+// The provider proxy (PA-259) is a tool_servers entry because it runs under the
+// same tools-user unit, but it is Codex's Responses proxy and not an MCP server:
+// it answers POST /v1/responses and refuses everything else. It is never rendered
+// as an mcp_servers entry and never counted as a server the app-server should
+// list; the runtime probes its port itself.
+const PROVIDER_PROXY = 'provider_proxy';
 
 function tomlKey(name: string) {
   return BARE_KEY.test(name) ? name : JSON.stringify(name);
@@ -73,6 +80,7 @@ export function renderConfigToml(declaration: Declaration, { header = true }: { 
       continue;
     }
     seen.add(name);
+    if (server.kind === PROVIDER_PROXY) continue;
 
     for (const ref of server.secret_refs ?? []) {
       if (!declaredSecrets.has(ref)) {
@@ -171,7 +179,7 @@ export async function listToolServerStatus(session: Session, { threadId }: { thr
 // "down", and it gets its own fault: reading it as down would hold every release
 // on a box whose servers are all healthy.
 export function holdsRelease(declaration: Declaration, statuses: ToolStatus[]) {
-  const required = new Set((declaration?.tool_servers ?? []).filter((s) => s.required).map((s) => s.name));
+  const required = new Set((declaration?.tool_servers ?? []).filter((s) => s.required && s.kind !== PROVIDER_PROXY).map((s) => s.name));
   const byName = new Map(statuses.map((s) => [s.name, s]));
   const faults = [];
   for (const name of [...required].sort()) {
