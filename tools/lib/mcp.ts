@@ -86,6 +86,7 @@ export function createServer({ manifest, handlers, context = {} }: CreateServerO
   const byName = new Map(servable.tools.map((t) => [t.name, t]));
 
   async function handle(message: unknown) {
+    // Incoming JSON-RPC is untrusted; this view permits the existing protocol field checks below.
     const req = message as RpcMessage | null | undefined;
     if (!req || req.jsonrpc !== '2.0' || typeof req.method !== 'string') {
       return error(req && req.id !== undefined ? req.id : null, -32600,
@@ -93,11 +94,13 @@ export function createServer({ manifest, handlers, context = {} }: CreateServerO
     }
     const { id, method, params } = req;
     const isNotification = id === undefined;
+    // The request shape check does not validate params; each method retains its own field reads.
     const rpcParams = params as RpcParams | null | undefined;
 
     if (method === 'initialize') {
       const asked = rpcParams && typeof rpcParams.protocolVersion === 'string' ? rpcParams.protocolVersion : null;
       return ok(id, {
+        // The string test or null fallback feeds the version lookup; null selects the advertised version.
         protocolVersion: ACCEPTED_PROTOCOLS.includes(asked as string) ? asked : ADVERTISED_PROTOCOL,
         capabilities: { tools: {} },
         serverInfo: { name: servable.name, version: servable.version }
@@ -119,6 +122,7 @@ export function createServer({ manifest, handlers, context = {} }: CreateServerO
 
     if (method === 'tools/call') {
       const name = rpcParams && rpcParams.name;
+      // A missing or malformed tool name retains Map.get's existing lookup behavior.
       const tool = byName.get(name as string);
       // An unknown tool is a bad call, so it fails at the protocol. A bad
       // argument is something the model can correct, so it comes back as content.
@@ -165,6 +169,7 @@ function describe(tool: ManifestTool) {
 function renderText(tool: ManifestTool, data: Record<string, unknown>) {
   const lines = [`${tool.name}: ${tool.returns.what}`];
   for (const field of tool.returns.fields) {
+    // Return field names come from the checked manifest; this indexes the already shaped result.
     const value = data[field.name as string];
     lines.push(`  ${field.name}: ${typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)}`);
   }
@@ -212,7 +217,9 @@ export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/m
     const origin = request.headers.origin;
     if (origin !== undefined) {
       let originHost: string | null = null;
+      // The origin string is parsed in this try block; malformed origins keep the caught null result.
       try { originHost = new URL(origin as string).hostname; } catch { originHost = null; }
+      // The parsed origin host or null is checked against the loopback set.
       if (!LOOPBACK.has(originHost as string)) return send(response, 403, { error: 'origin refused' });
     }
     if (request.method === 'GET') {

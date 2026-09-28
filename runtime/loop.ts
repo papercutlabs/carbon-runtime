@@ -67,6 +67,7 @@ export function unitIdFor(declaration: Declaration, record: { conversation_id: s
     // Each lookup preserves optional access to raw nested adapter fields.
     for (const step of path) at = (at as Record<string, unknown> | null | undefined)?.[step];
     if (typeof at === 'string' && at.length > 0) return at;
+    // A malformed adapter record may lack message_id; keep the existing fault subject in that case.
     throw new RuntimeFault(fault('UNIT_ID_ABSENT', record.message_id!,
       `unit_of_work.id_from names ${JSON.stringify(unit.id_from)} and this record's adapter_fields carry no such value`,
       'have the adapter put the client record\'s id on the record, or declare unit_of_work.kind as conversation'));
@@ -904,6 +905,8 @@ export class ReleaseLoop<S = Session> {
         if (endsTheProcess(error)) throw error;
         // endsTheProcess returned false only for RuntimeFault.
         const faults = (error as RuntimeFault<unknown, unknown>).faults;
+        // The record came from this store; retain its failure if the reread vanished.
+        // Runtime fault fields are passed to Store unchanged, including raw problem text.
         this.store.parkFailed(this.store.read(record.conversation_id, record.message_id, record.revision)!, faults as Fault[]);
         this.log({ event: 'release.parked', message_id: record.message_id, faults });
         parked.push(record.message_id);
@@ -923,6 +926,8 @@ export class ReleaseLoop<S = Session> {
         if (endsTheProcess(error)) throw error;
         // endsTheProcess returned false only for RuntimeFault.
         const faults = (error as RuntimeFault<unknown, unknown>).faults;
+        // These records came from this store; retain its failure if a reread vanished.
+        // Runtime fault fields are passed to Store unchanged, including raw problem text.
         for (const record of group.records) {
           this.store.parkFailed(this.store.read(record.conversation_id, record.message_id, record.revision)!, faults as Fault[]);
           parked.push(record.message_id);
@@ -1016,6 +1021,7 @@ export class ReleaseLoop<S = Session> {
     // open for the next start to re-issue.
     if (result.status === 'failed') {
       for (const one of records) {
+        // This release record came from the same store; retain its old write failure if it vanished.
         this.store.setDisposition(this.store.read(one.conversation_id, one.message_id, one.revision)!, 'permanent-error');
         this.store.completeRelease(one, completedAt);
       }
@@ -1281,12 +1287,14 @@ export class ReleaseLoop<S = Session> {
       if (record.delivery?.status !== 'pending') continue;
       let outcome;
       try {
+        // Deliver expects this channel adapter to implement send; the old call still fails if it does not.
         // Send results are raw; status equality below establishes only that field.
         outcome = await (this.adapter as { send(context: Context, record: MessageRecord): unknown }).send(this.context(), record) as { status?: unknown; chunk_ids?: string[] };
       } catch (error) {
         // A transport that threw did not tell us whether the message arrived.
         // That is `unknown`, and an unknown send is never retried.
         this.store.markUnknown(record.delivery!.request_id);
+        // Read the thrown value's message directly as before; no transport error shape is validated.
         this.log({ event: 'deliver.unknown', request_id: record.delivery!.request_id, // Direct message access intentionally keeps its old null-throw behavior.
           problem: (error as { message?: unknown }).message });
         sent.push({ request_id: record.delivery!.request_id, status: 'unknown' }); // The preceding filter or status check established delivery; preserve direct access to its stored fields.

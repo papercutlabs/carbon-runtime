@@ -186,6 +186,7 @@ test('a chat the declaration does not name is captured and never answered', () =
     ...stranger.record,
     conversation_id: `${c.account}:123123123`,
     delivery: { request_id: 'req-stranger', status: 'pending' }
+  // The malformed foreign-chat reply is passed unchanged; the test expects TelegramFault before attachment reads.
   } as Reply & { delivery: { request_id: string; status: string } }), (error) => (error as TelegramFault).faults[0].code === 'CHAT_NOT_DECLARED');
 });
 
@@ -258,6 +259,7 @@ test('a reply document carries its record name, PDF suffix, type and bytes', asy
       status: 200,
       json: async () => ({ ok: true, result: { message_id: nextMessageId++ } })
     };
+  // This fetch replacement implements the request and response behavior used by the attachment test.
   }) as unknown as typeof fetch;
 
   try {
@@ -299,6 +301,7 @@ test('a reply document carries its record name, PDF suffix, type and bytes', asy
       assert.match(documentCall.url, /\/sendDocument$/);
       assert.ok(documentCall.options.body instanceof FormData);
       assert.equal(documentCall.options.body.get('chat_id'), CHAT);
+      // The multipart request built by the adapter supplies the document File inspected here.
       const part = documentCall.options.body.get('document') as File;
       assert.equal(part.name, expected.digestName ? `${attachment.sha256}.pdf` : expected.name);
       assert.equal(part.type, expected.type);
@@ -332,6 +335,7 @@ test('the signal is one sendChatAction on the chat, and nothing at all for a sto
   globalThis.fetch = (async (url: string, options: RequestInit) => {
     calls.push({ url, options });
     return { status: 200, json: async () => ({ ok: true, result: true }) };
+  // This fetch replacement implements the request and response behavior used by the typing test.
   }) as unknown as typeof fetch;
 
   try {
@@ -345,6 +349,7 @@ test('the signal is one sendChatAction on the chat, and nothing at all for a sto
     await adapter.typing(c, record(CHAT), 'composing');
     assert.equal(calls.length, 1);
     assert.match(calls[0].url, /\/sendChatAction$/);
+    // The adapter sends a JSON body for typing; the test parses that captured request.
     assert.deepEqual(JSON.parse(calls[0].options.body as string), { chat_id: CHAT, action: 'typing' });
 
     // The Bot API has no stop action, so the stop is a call this channel does

@@ -160,6 +160,7 @@ test('the real harness, on a stub app-server: refreshToken is false and no token
   const readFileSync = fs.readFileSync;
   fs.openSync = ((file: fs.PathLike, ...rest: unknown[]) => { touched.push(String(file)); return (openSync as (...a: unknown[]) => number)(file, ...rest); }) as typeof fs.openSync;
   fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => { touched.push(String(file)); return (readFileSync as (...a: unknown[]) => unknown)(file, ...rest); }) as typeof fs.readFileSync;
+  // The codex harness supplies the recorder methods; this cast binds the stub session type.
   const recorder = new ProviderAccountRecorder({ storeDir: b.storeDir, codexHome: b.codexHome, harness: codex as unknown as Harness<typeof session>, timeoutMs: 5000 });
   try {
     recorder.attach(session);
@@ -173,6 +174,7 @@ test('the real harness, on a stub app-server: refreshToken is false and no token
   }
   assert.ok(!touched.includes(b.loginFile), `the login file was opened: ${touched.join(', ')}`);
 
+  // The stub emits JSON-RPC wire lines; this view reads method and params from each parsed request.
   const sent = fs.readFileSync(wireLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { method: string; params?: unknown });
   const accountReads = sent.filter((m) => m.method === 'account/read');
   assert.equal(accountReads.length, 2);
@@ -372,6 +374,7 @@ test('no error text the app-server or the harness wrote reaches the record or th
   const b = box(t, 'account-error-text');
   const { session } = await stubSession(t, b, 'fail');
   const lines: Record<string, unknown>[] = [];
+  // The codex harness supplies the recorder methods; this cast binds the stub session type.
   const recorder = new ProviderAccountRecorder({ storeDir: b.storeDir, codexHome: b.codexHome, harness: codex as unknown as Harness<typeof session>, timeoutMs: 5000, log: (line) => lines.push(line) });
   recorder.attach(session);
   recorder.request('connect');
@@ -549,6 +552,7 @@ function loopWith(t: After, afterTurn: () => void) {
   const harness = fakeHarness();
   const lines: Record<string, unknown>[] = [];
   const loop = new ReleaseLoop({
+    // resolveChannel returns the fixture channel used by this loop; the loop reads that channel shape.
     declaration: decl, channel: resolveChannel(decl, decl.channels![0]) as Channel, store, storeDir: dir,
     adapter: fixture, harness, session: harness.session, agent: 'test-agent',
     checkout: path.join(dir, 'repo'), work: dir, log: (line) => lines.push(line), afterTurn

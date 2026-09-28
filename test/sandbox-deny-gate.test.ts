@@ -86,6 +86,7 @@ test('each way the file can be wrong is refused, and the refusal ends the proces
     spoil();
     const error = refusal(() => checkSandboxDeny(gate, 'before a turn'));
     assert.ok(error instanceof RuntimeFault, name);
+    // These refusals are RuntimeFaults produced by the deny gate; the assertions inspect their emitted faults.
     assert.equal((error as RuntimeFault).faults[0].code, 'SANDBOX_DENY_NOT_PLACED', name);
     assert.match((error as RuntimeFault).faults[0].problem, said, name);
     assert.equal(endsTheProcess(error), true, `${name}: the refusal would park one record and keep the agent running`);
@@ -134,6 +135,7 @@ test('a wrong file stops a new thread before it opens: no thread, no turn, nothi
   const { gate, place, root } = denyGate(t);
   place(sandboxDenyBody(root.replace('agent', 'another-agent')));
   const { loop, harness, store } = loopWith(gate);
+  // The loop is expected to reject with the deny-gate RuntimeFault; the predicate reads its first code.
   await assert.rejects(loop.pass([item(1, 'hello')]), (error) => (error as RuntimeFault).faults?.[0]?.code === 'SANDBOX_DENY_NOT_PLACED');
   assert.equal(harness.session.opens, undefined, 'a thread was opened under a wrong deny file');
   assert.equal(harness.session.turns.length, 0);
@@ -145,6 +147,7 @@ test('a wrong file stops a resumed thread before it resumes', async (t) => {
   const { loop, harness, store } = loopWith(gate);
   store.writeThread(`${ACCOUNT}:c1`, { unit_id: `${ACCOUNT}:c1`, thread_id: 'thread-earlier', completed_turns: 1, turns: [] });
   fs.rmSync(file);
+  // The loop is expected to reject with the deny-gate RuntimeFault; the predicate reads its first code.
   await assert.rejects(loop.pass([item(1, 'hello')]), (error) => (error as RuntimeFault).faults?.[0]?.code === 'SANDBOX_DENY_NOT_PLACED');
   assert.equal(harness.session.resumed, undefined, 'a thread was resumed with no deny file');
   assert.equal(harness.session.turns.length, 0);
@@ -157,6 +160,7 @@ test('a file changed after a thread is open stops the next turn on that same thr
   await loop.pass([item(1, 'hello')]);
   assert.equal(harness.session.turns.length, 1);
   place(sandboxDenyBody(root.replace('agent', 'another-agent')));
+  // The loop is expected to reject with the deny-gate RuntimeFault; the predicate reads its first code.
   await assert.rejects(loop.pass([item(2, 'again')]), (error) => (error as RuntimeFault).faults?.[0]?.code === 'SANDBOX_DENY_NOT_PLACED');
   assert.equal(harness.session.turns.length, 1, 'a turn ran on a cached thread after the deny file changed');
   assert.notEqual(dispositionOf(store, 2), 'parked');
@@ -175,6 +179,7 @@ test('run refuses to start the harness on a wrong file, and so refuses again on 
   let connected = 0;
   const harness = { ...base, async connect() { connected += 1; return base.session; } };
   for (let restart = 0; restart < 2; restart++) {
+    // The loop is expected to reject with the deny-gate RuntimeFault; the predicate reads its first code.
     await assert.rejects(run({
       declaration: decl, declarationPath, storeDir: path.join(dir, 'store'), codexHome: path.join(dir, 'codex-home'),
       checkout: path.join(dir, 'repo'), work: path.join(dir, 'work'), harnessRoot: path.join(dir, 'harness'),

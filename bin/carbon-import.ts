@@ -205,6 +205,7 @@ function emptyCounts() {
     rows: 0,
     records_written: 0,
     records_merged_into_an_existing_capture: 0,
+    // These empty counters acquire numeric values only as the report counts parsed records.
     by_role: {} as Record<string, number>,
     by_direction: {} as Record<string, number>,
     attachments_referenced: 0,
@@ -298,6 +299,7 @@ function readCorrections(db: { prepare(sql: string): { all(): unknown[] } }, map
       for (const row of db.prepare(query.sql).all()) corrections.push(toCorrection(query, row as Parameters<typeof toCorrection>[1]));
     } catch (error) {
       troubles.push(fault('CORRECTION_QUERY_FAILED', query.kind,
+        // On a correction query error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
         ((error as { message?: string }).message ?? String(error)).split('\n')[0],
         'the records are written; fix the query in the mapping and run again'));
     }
@@ -312,6 +314,7 @@ function loadMapping(file: string) {
     return {
       mapping: null,
       faults: error instanceof StreamFault ? error.faults : [fault('MAPPING_UNREADABLE', file,
+        // On a mapping read error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
         ((error as { message?: string }).message ?? String(error)).split('\n')[0],
         'pass a JSON mapping file')]
     };
@@ -325,6 +328,7 @@ function openLedger(file: string) {
     return {
       db: null,
       faults: [fault('LEDGER_UNREADABLE', file,
+        // On a ledger open error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
         ((error as { message?: string }).message ?? String(error)).split('\n')[0],
         'pass a SQLite database this user can read')]
     };
@@ -386,6 +390,7 @@ function ledgerMain(args: string[]) {
     index: new Map<string, { conversation_id: string; message_id: string }>(),
     chats: new Map<string, string>(),
     conversations: new Set<string>(),
+    // These date bounds begin absent and later hold the parsed timestamp strings.
     earliest: null as string | null,
     latest: null as string | null
   };
@@ -393,6 +398,7 @@ function ledgerMain(args: string[]) {
     importRows(db, context, state);
   } catch (error) {
     report(error instanceof StreamFault ? error.faults : [fault('IMPORT_FAILED', parsed.named['--db']!,
+      // On an import error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
       ((error as { message?: string }).message ?? String(error)).split('\n')[0],
       'read the fault above; nothing after this row was written')]);
     db.close();
@@ -506,6 +512,7 @@ function main(argv: string[]) {
     rows = archive.messages();
   } catch (error) {
     report(error instanceof ZipFault ? error.faults : [fault('EXPORT_UNREADABLE', named['--export']!,
+      // On an export read error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
       ((error as { message?: string }).message ?? String(error)).split('\n')[0],
       'pass the zip the capture extension produced')]);
     return 1;
@@ -533,6 +540,7 @@ function main(argv: string[]) {
         bytes = archive.media(row.media_filename);
       } catch (error) {
         troubles.push(fault('MEDIA_UNREADABLE', row.media_filename,
+          // On a media read error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
           ((error as { message?: string }).message ?? String(error)).split('\n')[0],
           'the record is written without it and says so; copy the export again to recover the file'));
       }
@@ -548,6 +556,7 @@ function main(argv: string[]) {
       }
     } catch (error) {
       report(error instanceof StreamFault ? error.faults : [fault('IMPORT_FAILED', 'the export',
+        // On a batch write error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
         ((error as { message?: string }).message ?? String(error)).split('\n')[0],
         'read the fault above; nothing after this row was written')]);
       return 1;
