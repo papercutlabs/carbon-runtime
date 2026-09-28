@@ -75,6 +75,7 @@ export function mediaOf(message: unknown): Media | null {
     };
   }
   for (const kind of ['document', 'video', 'audio', 'voice', 'video_note', 'animation', 'sticker']) {
+    // Provider messages are untrusted; this view reads the selected media field without validating its contents.
     const media = (message as Fields | null | undefined)?.[kind] as Fields | null | undefined;
     if (!media || typeof media.file_id !== 'string') continue;
     return {
@@ -120,6 +121,7 @@ const EXTENSION: Record<string, string> = {
 // batch over. The release pass then gathers everything pending on the
 // conversation into one turn, including when `quiet_ms` is 0.
 export function albumOf(message: unknown) {
+  // Only the grouping id field is read here; a malformed provider message keeps the optional-read behavior.
   const id = (message as Fields | null | undefined)?.media_group_id;
   return typeof id === 'string' && id.length > 0 ? id : null;
 }
@@ -141,6 +143,7 @@ export function serviceKindOf(message: unknown) {
 // Who sent it. A channel post has no `from` at all, because a channel speaks as
 // itself; its sender is the chat.
 export function senderOf(message: unknown) {
+  // These provider sender and chat views permit optional field reads, without asserting a valid message schema.
   const from = (message as Fields | null | undefined)?.from as Fields | null | undefined;
   if (from && from.id !== undefined) {
     return {

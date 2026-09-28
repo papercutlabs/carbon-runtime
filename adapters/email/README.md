@@ -233,7 +233,7 @@ can be past them without being large.
 
 `test/fixtures/imap-recorded/` holds responses recorded from that live server,
 with the host and the account replaced by `example.test` names, and
-`test/fixtures/curl-shim/curl` replays them, so the tests reach no network.
+`test/fixtures/curl-shim/curl.ts` replays them, so the tests reach no network.
 
 ## The live smoke
 

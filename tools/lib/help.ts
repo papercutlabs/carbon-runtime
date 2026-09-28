@@ -24,6 +24,7 @@ type HelpReturns = { what?: unknown; fields?: unknown };
 type HelpField = { name?: unknown; what?: unknown };
 
 export function renderHelp(manifest: unknown, { serverUsage = [] }: { serverUsage?: string[] } = {}) {
+  // Help renders the caller-supplied manifest fields directly; validation belongs to the manifest check, not this display.
   const rec = manifest as HelpManifest;
   const lines = [];
   lines.push(`${rec.name} — an MCP tool server for one client system`);
@@ -54,6 +55,7 @@ export function renderHelp(manifest: unknown, { serverUsage = [] }: { serverUsag
       lines.push('    Arguments: none.');
     } else {
       lines.push('    Arguments (every one explicit, none defaulted):');
+      // Manifest properties remain unchecked here; help keeps the original property walk.
       for (const [name, property] of Object.entries(properties as Record<string, unknown>)) {
         const spec = (property || {}) as HelpProperty;
         const type = Array.isArray(spec.type) ? spec.type.join(' or ') : spec.type;
@@ -77,6 +79,7 @@ export function renderHelp(manifest: unknown, { serverUsage = [] }: { serverUsag
 }
 
 function exampleArguments(tool: HelpTool) {
+  // Example generation reads the same manifest arguments view; malformed fields keep their original read behavior.
   const toolArgs = tool.arguments as HelpArgs | undefined;
   const properties = (toolArgs && toolArgs.properties) || {};
   const required = (toolArgs && toolArgs.required) || Object.keys(properties as object);

@@ -144,6 +144,7 @@ type ConnectionFields = {
 // or 'registered' when the device registered and the server asked for a restart.
 async function connect(authDir: string, version: number[], makeWASocket: (options: { auth: unknown; version: number[] }) => CliSocket, phone: string | null) {
   const { state, saveCreds } = await authState(authDir);
+  // The CLI socket view names auth/version; the extra printQRInTerminal option is still passed at runtime.
   const socket = makeWASocket({ auth: state, version, printQRInTerminal: false } as { auth: typeof state; version: number[] });
   socket.ev.on('creds.update', saveCreds);
   // Pairing reads qr from connection.update; the adapter ConnectionUpdate type omits it.
@@ -162,6 +163,7 @@ async function connect(authDir: string, version: number[], makeWASocket: (option
           }, null, 2));
         } catch (error) {
           report([fault('PAIRING_CODE_REFUSED', phone,
+            // On a pairing error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
             ((error as { message?: string }).message ?? String(error)).split('\n')[0],
             'check the number is the one on the phone and try once more; do not loop')]);
           resolve(1);
@@ -269,6 +271,7 @@ async function send(authDir: string, to: string, text: string) {
           }, null, 2));
           resolve(0);
         } catch (error) {
+          // On a send error, .message access throws for null/undefined; a nullish message on other values uses String(error); split selects the first line.
           report([fault('SEND_REFUSED', to,
             ((error as { message?: string }).message ?? String(error)).split('\n')[0],
             'check the number and that this device is still linked, and run the command again')]);
@@ -277,6 +280,7 @@ async function send(authDir: string, to: string, text: string) {
         return;
       }
       if (connection === 'close' && !sending) {
+        // The provider disconnect error is untrusted; retain its optional message read.
         const disconnectMessage = (lastDisconnect?.error as { message?: string } | undefined)?.message;
         report([fault('SEND_CONNECTION_CLOSED', to,
           disconnectMessage ?? 'the connection closed before anything was sent',

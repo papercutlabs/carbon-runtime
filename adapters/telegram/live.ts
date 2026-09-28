@@ -173,6 +173,7 @@ async function work(entry: PollEntry, context: Context) {
     } catch (error) {
       entry.fault = error instanceof TelegramFault
         ? error
+        // A failed poll may throw any value; retain its optional message in the fault.
         : new TelegramFault([fault('BOT_API_POLL_FAILED', 'getUpdates',
           (error as Fields | null | undefined)?.message ?? String(error),
           'the runtime keeps polling until the channel\'s declared failure count is reached')]);
@@ -298,6 +299,7 @@ async function mediaFor(entry: PollEntry, transport: Transport, updateId: unknow
 async function fetchMedia(transport: Transport, media: Media) {
   try {
     const file = await call(transport, 'getFile', { file_id: media.file_id });
+    // getFile returns provider JSON; this read checks only the file path before downloading.
     if (typeof (file as Fields | null)?.file_path !== 'string') return null;
     // The preceding typeof check establishes this file path, not the rest of the response.
     const bytes = await download(transport, (file as Fields).file_path as string);

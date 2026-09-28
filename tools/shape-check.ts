@@ -86,7 +86,7 @@ function optionalField(value: unknown, key: string): unknown {
 
 export const RULES = {
   SHAPE_ONE_DEPENDENCY: {
-    why: 'the runtime ships as a tarball onto a box with no registry, so its only runtime dependency is the exactly pinned @whiskeysockets/baileys and its sole development dependency is pinned TypeScript; carbon-core has no runtime dependency and exactly pinned TypeScript and Node declarations for development.'
+    why: 'the runtime ships as a tarball onto a box with no registry, so its only runtime dependency is the exactly pinned @whiskeysockets/baileys and its sole development dependency is pinned TypeScript; carbon-core has no runtime dependency and exactly pinned TypeScript and Node declarations for development. Ordinary typecheck must invoke the entrypoint checker so extensionless bin starters are covered alongside TypeScript source.'
   },
   SHAPE_CLIENT_IDENTIFIER: {
     why: 'a client identifier in the core makes the universal layer client-specific, and one in the public half publishes it; both are refused by the scans that already exist.'
@@ -525,6 +525,7 @@ export const VENDORED = [
   'tools/lib/manifest.ts',
   'tools/lib/mcp.ts',
   'tools/lib/help.ts',
+  'tools/check-entrypoints.ts',
   'tools/shape-check.ts',
   'schema/carbon.message.v1.json'
 ];
@@ -606,6 +607,11 @@ function runtimePackage(pkg: unknown, out: FaultRow[]): void {
       'pin the exact version, so the tarball that goes on a box is the one that was tested'));
   }
   pinnedTypeScript(pkg, out);
+  if (optionalField(field(pkg, 'scripts'), 'typecheck') !== 'tsc --noEmit && node tools/check-entrypoints.ts') {
+    out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json scripts.typecheck',
+      'the ordinary runtime typecheck does not invoke the entrypoint checker',
+      'restore tsc --noEmit && node tools/check-entrypoints.ts'));
+  }
 }
 
 function corePackage(pkg: unknown, out: FaultRow[]): void {
@@ -626,10 +632,10 @@ function corePackage(pkg: unknown, out: FaultRow[]): void {
       'carbon-core requires exactly pinned TypeScript and Node declarations as its only development dependencies',
       'keep only typescript and @types/node in devDependencies and pin both exact versions'));
   }
-  if (optionalField(field(pkg, 'scripts'), 'typecheck') !== 'tsc --noEmit') {
+  if (optionalField(field(pkg, 'scripts'), 'typecheck') !== 'node tools/check-entrypoints.ts && tsc --noEmit') {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json scripts.typecheck',
-      'carbon-core has no typecheck command for the normal checks to run',
-      'add the tsc --noEmit typecheck script'));
+      'the ordinary core typecheck does not invoke the entrypoint checker',
+      'restore node tools/check-entrypoints.ts && tsc --noEmit'));
   }
 }
 

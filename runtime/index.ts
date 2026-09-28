@@ -247,6 +247,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // the adapter's own floor. It is a refusal rather than a correction, and it
     // happens before a socket is opened: a declaration that would earn a day's
     // rate limit must not run for a minute first.
+    // Loaded adapters are dynamic; only the optional floor property is read here,
+    // and pollIntervalFor keeps its existing behavior for a malformed floor.
     const { interval_ms, fault: named } = pollIntervalFor(channel, adapter as { POLL_INTERVAL_FLOOR_MS?: number });
     if (named) intervalFaults.push(named);
     loaded.push({ channel, adapter, interval_ms });
@@ -317,6 +319,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // a reply written in the management conversation waits where it is until the
     // runtime has asked the turn what it recorded. Every other conversation is
     // untouched by it.
+    // Core checks installed declarations for agent.id; this launch path forwards
+    // the declared value without validating it again.
     reply = await serveReplyTool({ store, agent: declaration.agent?.id!, declaration, work, port: replyPort });
     log({ event: 'reply_tool.listening', url: reply.url });
 
@@ -370,6 +374,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       // Interval faults were refused before any loop was created.
       loop.intervalMs = interval_ms!;
       if (harness.onToolServerStatus) {
+        // The harness connection assigned session before this status callback is registered.
         harness.onToolServerStatus(session!, () => { loop.toolStatusStale = true; });
       }
       return loop;

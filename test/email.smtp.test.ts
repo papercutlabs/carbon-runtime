@@ -12,7 +12,7 @@ import path from 'node:path';
 import { SMTP_SECURITY, TransportFault, sendMessage } from '../adapters/email/curl.ts';
 import { DEFAULTS } from '../adapters/email/index.ts';
 
-const SHIM = path.join(import.meta.dirname, 'fixtures', 'curl-shim', 'curl-args');
+const SHIM = path.join(import.meta.dirname, 'fixtures', 'curl-shim', 'curl-args.ts');
 
 function sentWith(overrides: { port?: number; security?: string } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-smtp-'));

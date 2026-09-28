@@ -302,6 +302,7 @@ class AccountRequestFailure extends Error {
 }
 
 function field(value: unknown, key: string): unknown {
+  // The object test permits this named read; the returned field remains untrusted.
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
 }
 function text(value: unknown) { return typeof value === 'string' ? value : null; }
