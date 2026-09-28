@@ -905,7 +905,7 @@ export class ReleaseLoop<S = Session> {
         if (endsTheProcess(error)) throw error;
         // endsTheProcess returned false only for RuntimeFault.
         const faults = (error as RuntimeFault<unknown, unknown>).faults;
-        // The record came from this store; retain its failure if the reread vanished.
+        // This assumes the earlier record still exists; a missing reread passes null to parkFailed, which throws TypeError deriving its path.
         // Runtime fault fields are passed to Store unchanged, including raw problem text.
         this.store.parkFailed(this.store.read(record.conversation_id, record.message_id, record.revision)!, faults as Fault[]);
         this.log({ event: 'release.parked', message_id: record.message_id, faults });
@@ -926,7 +926,7 @@ export class ReleaseLoop<S = Session> {
         if (endsTheProcess(error)) throw error;
         // endsTheProcess returned false only for RuntimeFault.
         const faults = (error as RuntimeFault<unknown, unknown>).faults;
-        // These records came from this store; retain its failure if a reread vanished.
+        // This assumes each earlier record still exists; a missing reread passes null to parkFailed, which throws TypeError deriving its path.
         // Runtime fault fields are passed to Store unchanged, including raw problem text.
         for (const record of group.records) {
           this.store.parkFailed(this.store.read(record.conversation_id, record.message_id, record.revision)!, faults as Fault[]);
@@ -1021,7 +1021,7 @@ export class ReleaseLoop<S = Session> {
     // open for the next start to re-issue.
     if (result.status === 'failed') {
       for (const one of records) {
-        // This release record came from the same store; retain its old write failure if it vanished.
+        // This assumes the earlier release record still exists; a missing reread passes null to setDisposition, which throws TypeError deriving its path.
         this.store.setDisposition(this.store.read(one.conversation_id, one.message_id, one.revision)!, 'permanent-error');
         this.store.completeRelease(one, completedAt);
       }
@@ -1177,7 +1177,7 @@ export class ReleaseLoop<S = Session> {
       `read the thread record's agent_message for this release; the model must call the reply tool or answer ${NO_REPLY}`);
     for (const one of records) {
       this.store.parkFailed(
-        this.store.read(one.conversation_id, one.message_id, one.revision)!, // The release record came from this store; keep the original Store failure if it disappears before the write.
+        this.store.read(one.conversation_id, one.message_id, one.revision)!, // The earlier release record must still exist; null makes parkFailed throw TypeError deriving its path.
         cause, { reason: 'no-reply' }
       );
     }
@@ -1247,7 +1247,7 @@ export class ReleaseLoop<S = Session> {
       'a reply was composed in the management conversation, nothing was recorded in that turn, and the follow-up neither recorded anything nor answered ' + NOTHING_TAUGHT,
       `read this reply: if it tells the client something will now be followed, record it with remember or raise_change and send the reply by hand; the reply text is kept exactly as the model wrote it`);
     this.store.parkFailed(
-      this.store.read(held.conversation_id, held.message_id, held.revision)!, // The release record came from this store; keep the original Store failure if it disappears before the write.
+      this.store.read(held.conversation_id, held.message_id, held.revision)!, // The earlier held record must still exist; null makes parkFailed throw TypeError deriving its path.
       cause, { reason: 'unrecorded-teaching' }
     );
     this.log({
@@ -1264,7 +1264,7 @@ export class ReleaseLoop<S = Session> {
     const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
     for (const record of records) {
       const on_disk = this.store.read(record.conversation_id, record.message_id, record.revision);
-      // This record came from the same store; a missing file keeps the original Store failure.
+      // This assumes the earlier record still exists; a missing reread passes null to annotate, which throws TypeError deriving its path.
       this.store.annotate(on_disk!, { reply_outcome: outcome });
     }
   }
@@ -1293,6 +1293,7 @@ export class ReleaseLoop<S = Session> {
       } catch (error) {
         // A transport that threw did not tell us whether the message arrived.
         // That is `unknown`, and an unknown send is never retried.
+        // The pending filter above established delivery for this record; read its stored request id directly.
         this.store.markUnknown(record.delivery!.request_id);
         // Read the thrown value's message directly as before; no transport error shape is validated.
         this.log({ event: 'deliver.unknown', request_id: record.delivery!.request_id, // Direct message access intentionally keeps its old null-throw behavior.
