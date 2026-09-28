@@ -86,7 +86,7 @@ function optionalField(value: unknown, key: string): unknown {
 
 export const RULES = {
   SHAPE_ONE_DEPENDENCY: {
-    why: 'the runtime ships as a tarball onto a box with no registry, so its only runtime dependency is the exactly pinned @whiskeysockets/baileys and its sole development dependency is pinned TypeScript; carbon-core has no runtime dependency and exactly pinned TypeScript and Node declarations for development.'
+    why: 'the runtime ships as a tarball onto a box with no registry, so its only runtime dependency is the exactly pinned @whiskeysockets/baileys and its sole development dependency is pinned TypeScript; carbon-core has no runtime dependency and exactly pinned TypeScript and Node declarations for development. Ordinary typecheck must invoke the entrypoint checker so extensionless bin starters are covered alongside TypeScript source.'
   },
   SHAPE_CLIENT_IDENTIFIER: {
     why: 'a client identifier in the core makes the universal layer client-specific, and one in the public half publishes it; both are refused by the scans that already exist.'

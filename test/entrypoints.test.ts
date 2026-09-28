@@ -261,3 +261,91 @@ test('whatsapp sendMessage contract admits undefined like the pinned Baileys dec
     'utf8');
   assert.match(baileys, /Promise<WAMessage \| undefined>/);
 });
+
+test('explicit false strict-family members are refused locally and when inherited', () => {
+  const dir = ownedCopy();
+  const config = path.join(dir, 'tsconfig.json');
+  const base = path.join(dir, 'tsconfig.base.json');
+  const members = [
+    'noImplicitAny', 'strictNullChecks', 'strictFunctionTypes', 'strictBindCallApply',
+    'strictPropertyInitialization', 'noImplicitThis', 'useUnknownInCatchVariables',
+    'strictBuiltinIteratorReturn',
+  ] as const;
+  try {
+    const original = fs.readFileSync(config, 'utf8');
+    fs.renameSync(config, base);
+    fs.writeFileSync(config, '{ // inherited all-true control\n "extends": "./tsconfig.base.json"\n}\n');
+    assert.equal(checkEntrypoints(dir).diagnostics.length, 0);
+    for (const member of members) {
+      fs.writeFileSync(config, JSON.stringify({
+        extends: './tsconfig.base.json', compilerOptions: { strict: true, [member]: false },
+      }));
+      assert.throws(() => checkEntrypoints(dir), (error: unknown) => {
+        assert.ok(error instanceof EntrypointFault);
+        assert.equal(error.faults[0].code, 'ENTRYPOINT_CONFIG');
+        assert.equal(error.faults[0].subject, `tsconfig.json compilerOptions.${member}`);
+        assert.match(error.faults[0].fix, new RegExp(member));
+        return true;
+      });
+      fs.writeFileSync(base, original.replace('"strict": true,', `"strict": true,\n "${member}": false,`));
+      fs.writeFileSync(config, JSON.stringify({
+        extends: './tsconfig.base.json', compilerOptions: { strict: true },
+      }));
+      assert.throws(() => checkEntrypoints(dir), (error: unknown) => {
+        assert.ok(error instanceof EntrypointFault);
+        assert.equal(error.faults[0].code, 'ENTRYPOINT_CONFIG');
+        assert.equal(error.faults[0].subject, `tsconfig.json compilerOptions.${member}`);
+        return true;
+      });
+      fs.writeFileSync(base, original);
+    }
+    assert.equal(checkEntrypoints(dir).diagnostics.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a linked extensionless starter is a compiler root with its exact target bytes', () => {
+  const dir = ownedCopy();
+  try {
+    const target = path.join(dir, 'pa318-target');
+    fs.writeFileSync(target, '#!/usr/bin/env node\n// @ts-check\n/** @type {number} */ const wrong = "wrong";\n');
+    fs.symlinkSync('../pa318-target', path.join(dir, 'bin/pa318-link'));
+    const bad = checkEntrypoints(dir);
+    assert.ok(bad.roots.includes(path.join(dir, 'bin/pa318-link.mjs')));
+    assert.ok(bad.diagnostics.some((item) => item.fileName.endsWith('pa318-link.mjs') && item.code === 2322));
+    fs.writeFileSync(target, '#!/usr/bin/env node\n// @ts-check\nconst good = 1;\n');
+    const good = checkEntrypoints(dir);
+    assert.ok(good.roots.includes(path.join(dir, 'bin/pa318-link.mjs')));
+    assert.equal(good.diagnostics.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('broken and non-file starter links fail explicitly', () => {
+  const dir = ownedCopy();
+  const link = path.join(dir, 'bin/pa318-link');
+  try {
+    fs.symlinkSync('../pa318-missing', link);
+    for (const kind of ['broken', 'directory']) {
+      if (kind === 'directory') {
+        fs.rmSync(link);
+        fs.mkdirSync(path.join(dir, 'pa318-directory'));
+        fs.symlinkSync('../pa318-directory', link);
+      }
+      const faults = assertPresent(dir);
+      assert.equal(faults.length, 1);
+      assert.equal(faults[0].code, 'ENTRYPOINT_MISSING');
+      assert.equal(faults[0].subject, 'bin/pa318-link');
+      assert.match(faults[0].problem, /link does not resolve to a regular file/);
+      assert.throws(() => checkEntrypoints(dir), (error: unknown) => {
+        assert.ok(error instanceof EntrypointFault);
+        assert.equal(error.faults[0].subject, 'bin/pa318-link');
+        return true;
+      });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
