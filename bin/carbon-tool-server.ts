@@ -158,6 +158,7 @@ async function main(argv: string[]) {
     try {
       stdinFd = fs.openSync(stdinPath, 'r');
     } catch (error) {
+      // The open failure is used only for its message in the existing fault text.
       report([fault('STDIN_SECRET_UNREADABLE', stdinPath, (error as Error).message,
         'place the secret as the tools user, mode 0600: carbon secret place --owner tools')]);
       return EXIT.FAULT;
