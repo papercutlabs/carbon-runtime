@@ -75,7 +75,7 @@ function allEntrypoints(root: string): string[] {
   const required = requiredEntrypoints(root);
   const bin = path.join(root, 'bin');
   const discovered = fs.existsSync(bin) ? fs.readdirSync(bin, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && !entry.name.includes('.'))
+    .filter((entry) => !entry.name.includes('.') && (entry.isFile() || entry.isSymbolicLink()))
     .map((entry) => `bin/${entry.name}`) : [];
   return [...new Set([...required, ...discovered])].sort();
 }
@@ -101,6 +101,17 @@ function assertEffectiveConfig(root: string): void {
         `enable ${name} in the effective TypeScript configuration`)]);
     }
   }
+  for (const name of [
+    'noImplicitAny', 'strictNullChecks', 'strictFunctionTypes', 'strictBindCallApply',
+    'strictPropertyInitialization', 'noImplicitThis', 'useUnknownInCatchVariables',
+    'strictBuiltinIteratorReturn',
+  ] as const) {
+    if (options[name] === false) {
+      throw new EntrypointFault([fault('ENTRYPOINT_CONFIG', `tsconfig.json compilerOptions.${name}`,
+        `effective ${name} explicitly disables part of strict checking`,
+        `remove the false ${name} override or enable ${name} in the effective TypeScript configuration`)]);
+    }
+  }
 }
 
 /** Refuse when a named starter is absent or empty. Returns faults; empty means ok. */
@@ -108,10 +119,11 @@ export function assertPresent(root: string, names: readonly string[] = allEntryp
   const faults: PresentFault[] = [];
   for (const rel of names) {
     const at = path.join(root, rel);
+    const isLink = fs.lstatSync(at, { throwIfNoEntry: false })?.isSymbolicLink() === true;
     if (!fs.existsSync(at) || !fs.statSync(at).isFile()) {
       faults.push(fault('ENTRYPOINT_MISSING', rel,
-        'this named starter is not a file in the repository',
-        'restore the extensionless bin command and its adjacent .ts body'));
+        isLink ? 'this starter link does not resolve to a regular file' : 'this named starter is not a file in the repository',
+        isLink ? 'repair or remove the invalid starter link' : 'restore the extensionless bin command and its adjacent .ts body'));
       continue;
     }
     const source = fs.readFileSync(at, 'utf8');
