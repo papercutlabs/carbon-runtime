@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// check-entrypoints — type-check the named extensionless bin starters.
+// check-entrypoints — type-check every extensionless bin starter.
 //
 // The starters are executable JavaScript with no extension. The TypeScript 7.0.2
 // sync API overlays each starter's exact source bytes as a same-directory
@@ -12,6 +12,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { API } from 'typescript/unstable/sync';
 
+export const CORE_ENTRYPOINTS = ['bin/carbon', 'bin/carbon-harness'] as const;
+
 export const ENTRYPOINTS = [
   'bin/carbon-email',
   'bin/carbon-import',
@@ -22,10 +24,12 @@ export const ENTRYPOINTS = [
   'bin/carbon-whatsapp',
 ] as const;
 
+export const RUNTIME_ENTRYPOINTS = ENTRYPOINTS;
+
 export type EntrypointName = (typeof ENTRYPOINTS)[number];
 
 export type PresentFault = {
-  code: 'ENTRYPOINT_MISSING' | 'ENTRYPOINT_EMPTY' | 'ENTRYPOINT_NO_PROJECT' | 'ENTRYPOINT_ROOT_MISSING';
+  code: 'ENTRYPOINT_MISSING' | 'ENTRYPOINT_EMPTY' | 'ENTRYPOINT_NO_PROJECT' | 'ENTRYPOINT_ROOT_MISSING' | 'ENTRYPOINT_PACKAGE' | 'ENTRYPOINT_CONFIG';
   subject: string;
   problem: string;
   fix: string;
@@ -56,8 +60,51 @@ export class EntrypointFault {
   }
 }
 
+function requiredEntrypoints(root: string): readonly string[] {
+  const pkg: unknown = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  if (pkg && typeof pkg === 'object' && !Array.isArray(pkg)) {
+    if ('name' in pkg && pkg.name === 'carbon-runtime') return RUNTIME_ENTRYPOINTS;
+    if (!('name' in pkg) && 'private' in pkg && pkg.private === true) return CORE_ENTRYPOINTS;
+  }
+  throw new EntrypointFault([fault('ENTRYPOINT_PACKAGE', 'package.json',
+    'the entrypoint checker does not recognize this package identity',
+    'use the private core or named carbon-runtime package')]);
+}
+
+function allEntrypoints(root: string): string[] {
+  const required = requiredEntrypoints(root);
+  const bin = path.join(root, 'bin');
+  const discovered = fs.existsSync(bin) ? fs.readdirSync(bin, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.name.includes('.'))
+    .map((entry) => `bin/${entry.name}`) : [];
+  return [...new Set([...required, ...discovered])].sort();
+}
+
+function assertEffectiveConfig(root: string): void {
+  // The pinned compiler parses JSONC and inherited settings without inferring
+  // allowJs from checkJs when the required setting was omitted.
+  const api = new API({ cwd: root });
+  let options: Record<string, unknown>;
+  try {
+    options = api.parseConfigFile(path.join(root, 'tsconfig.json')).options;
+  } catch (error) {
+    throw new EntrypointFault([fault('ENTRYPOINT_CONFIG', 'tsconfig.json',
+      error instanceof Error ? error.message : String(error),
+      'repair the TypeScript configuration')]);
+  } finally {
+    api.close();
+  }
+  for (const name of ['strict', 'allowJs', 'checkJs'] as const) {
+    if (options[name] !== true) {
+      throw new EntrypointFault([fault('ENTRYPOINT_CONFIG', `tsconfig.json compilerOptions.${name}`,
+        `effective ${name} must be true`,
+        `enable ${name} in the effective TypeScript configuration`)]);
+    }
+  }
+}
+
 /** Refuse when a named starter is absent or empty. Returns faults; empty means ok. */
-export function assertPresent(root: string, names: readonly string[] = ENTRYPOINTS): PresentFault[] {
+export function assertPresent(root: string, names: readonly string[] = allEntrypoints(root)): PresentFault[] {
   const faults: PresentFault[] = [];
   for (const rel of names) {
     const at = path.join(root, rel);
@@ -132,7 +179,8 @@ function layeredFs(root: string, overlay: Map<string, string>, aliasNames: strin
  * Type-check the named starters by presenting each as a same-directory virtual
  * .mjs alias with the starter's exact source bytes.
  */
-export function checkEntrypoints(root: string, names: readonly string[] = ENTRYPOINTS): CheckResult {
+export function checkEntrypoints(root: string, names: readonly string[] = allEntrypoints(root)): CheckResult {
+  assertEffectiveConfig(root);
   const present = assertPresent(root, names);
   if (present.length > 0) throw new EntrypointFault(present);
 
