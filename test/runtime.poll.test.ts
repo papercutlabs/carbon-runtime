@@ -33,7 +33,7 @@ const AGENT = 'test-agent';
 const ACCOUNT = 'account-1';
 const HERE = import.meta.dirname;
 
-process.env.CARBON_EMAIL_CURL = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
+process.env.CARBON_EMAIL_CURL = path.join(HERE, 'fixtures', 'curl-shim', 'curl.ts');
 
 const REPLY_LISTED = () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }];
 

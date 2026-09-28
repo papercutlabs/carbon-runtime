@@ -17,7 +17,7 @@ import { STATUS_CONNECT_AND_GREETING_TIMEOUT_SECONDS, listMailboxes } from '../a
 import type { EmailChannelInput, EmailRecord, ImapEmailContext, OutboundEmailRecord } from '../adapters/email/index.ts';
 
 const HERE = import.meta.dirname;
-const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
+const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl.ts');
 const RECORDED = path.join(HERE, 'fixtures', 'imap-recorded');
 const ACCOUNT = 'agent-01@example.test';
 

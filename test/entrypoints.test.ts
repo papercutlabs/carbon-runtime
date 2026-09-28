@@ -16,8 +16,9 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 function ownedCopy(mutate?: (dir: string) => void) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-entrypoints-'));
   // Minimal package shape so the sync API resolves typescript and @types/node.
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module' }));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'carbon-runtime', type: 'module' }));
   fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(dir, 'node_modules'));
+  fs.copyFileSync(path.join(ROOT, 'tsconfig.json'), path.join(dir, 'tsconfig.json'));
   fs.mkdirSync(path.join(dir, 'bin'));
   for (const rel of ENTRYPOINTS) {
     const base = path.basename(rel);
@@ -53,6 +54,70 @@ test('the repository starters typecheck as virtual .mjs compiler roots', () => {
   for (const rel of ENTRYPOINTS) {
     const want = path.join(ROOT, `bin/${path.basename(rel)}.mjs`);
     assert.ok(result.roots.includes(want), `missing root ${want}`);
+  }
+});
+
+test('a new untracked extensionless bin starter becomes a compiler root', () => {
+  const dir = ownedCopy((d) => {
+    fs.writeFileSync(path.join(d, 'bin/carbon-new'), '#!/usr/bin/env node\n/** @type {number} */ const wrong = "wrong";\n');
+  });
+  try {
+    const result = checkEntrypoints(dir);
+    assert.ok(result.roots.includes(path.join(dir, 'bin/carbon-new.mjs')));
+    assert.ok(result.diagnostics.some((item) => item.fileName.endsWith('carbon-new.mjs') && item.code === 2322));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unknown package identity is refused', () => {
+  const dir = ownedCopy((d) => {
+    fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: 'other-package', type: 'module' }));
+  });
+  try {
+    assert.throws(() => checkEntrypoints(dir), (error: unknown) => {
+      assert.ok(error instanceof EntrypointFault);
+      assert.equal(error.faults[0].code, 'ENTRYPOINT_PACKAGE');
+      return true;
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('effective inherited strict, allowJs and checkJs settings are required', () => {
+  const dir = ownedCopy();
+  try {
+    fs.renameSync(path.join(dir, 'tsconfig.json'), path.join(dir, 'tsconfig.base.json'));
+    fs.writeFileSync(path.join(dir, 'tsconfig.json'), '{ // inherited JSONC is read by the pinned compiler\n "extends": "./tsconfig.base.json"\n}\n');
+    assert.equal(checkEntrypoints(dir).diagnostics.length, 0);
+    for (const name of ['strict', 'allowJs', 'checkJs'] as const) {
+      fs.writeFileSync(path.join(dir, 'tsconfig.json'), `{ // an effective local override\n "extends": "./tsconfig.base.json", "compilerOptions": { "${name}": false }\n}\n`);
+      assert.throws(() => checkEntrypoints(dir), (error: unknown) => {
+        assert.ok(error instanceof EntrypointFault);
+        assert.equal(error.faults[0].code, 'ENTRYPOINT_CONFIG');
+        assert.match(error.faults[0].subject, new RegExp(name));
+        return true;
+      });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('omitting allowJs is refused even when checkJs is true', () => {
+  const dir = ownedCopy();
+  try {
+    const config = path.join(dir, 'tsconfig.json');
+    fs.writeFileSync(config, fs.readFileSync(config, 'utf8').replace('"allowJs": true,', ''));
+    assert.throws(() => checkEntrypoints(dir), (error: unknown) => {
+      assert.ok(error instanceof EntrypointFault);
+      assert.equal(error.faults[0].code, 'ENTRYPOINT_CONFIG');
+      assert.equal(error.faults[0].subject, 'tsconfig.json compilerOptions.allowJs');
+      return true;
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

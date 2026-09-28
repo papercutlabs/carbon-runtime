@@ -32,7 +32,7 @@ if (!dir) {
 }
 
 const args = process.argv.slice(2);
-const value = (name) => {
+const value = (name: string) => {
   const at = args.indexOf(name);
   return at === -1 ? null : args[at + 1];
 };

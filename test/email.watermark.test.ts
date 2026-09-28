@@ -16,7 +16,7 @@ import { TransportFault } from '../adapters/email/curl.ts';
 import type { EmailRecord, ImapEmailContext } from '../adapters/email/index.ts';
 
 const HERE = import.meta.dirname;
-const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl');
+const SHIM = path.join(HERE, 'fixtures', 'curl-shim', 'curl.ts');
 const RECORDED = path.join(HERE, 'fixtures', 'imap-recorded');
 const ACCOUNT = 'agent-01@example.test';
 

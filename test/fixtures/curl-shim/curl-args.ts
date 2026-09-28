@@ -3,5 +3,6 @@
 // CARBON_EMAIL_ARGS and exits 0. It is how a test reads the command the adapter
 // built without a mail server and without a credential.
 import fs from 'node:fs';
-fs.writeFileSync(process.env.CARBON_EMAIL_ARGS, JSON.stringify(process.argv.slice(2)));
+// The raw fixture intentionally keeps writeFileSync’s missing-path failure.
+fs.writeFileSync(process.env.CARBON_EMAIL_ARGS!, JSON.stringify(process.argv.slice(2)));
 process.exit(Number(process.env.CARBON_EMAIL_ARGS_EXIT ?? 0));
