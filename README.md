@@ -49,7 +49,7 @@ cases, and `bin/carbon-stream check` is what says whether it does.
 | `conformance/cases.ts` | the twenty-four cases, by number and name |
 | `bin/carbon-stream` | `check --adapter <path> --fixtures <dir>`, and `check --store <dir>` |
 | `bin/carbon-email` | `smoke`, the live check of the email adapter against a real mailbox, run by hand |
-| `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>`, which drives a second paired device in a proof and records nothing |
+| `bin/carbon-whatsapp` | `pair --auth-dir <dir> --phone <number>`, run once by a person; `send --auth-dir <dir> --to <number> --text <text>` and `read --auth-dir <dir> --chat <chat> --wait <seconds>`, which drive a second paired device in a proof and record nothing |
 | `bin/carbon-telegram` | `probe --token-file <file>`, which asks the server what bot a token is; `send --token-file <file> --chat <id> --text <text>`, which puts one message in a chat in a proof and records nothing |
 | `bin/carbon-import` | `whatsapp --agent <id> --export <zip> --store <dir>`; `ledger-sqlite --agent <id> --db <file> --mapping <file> --store <dir>`; `ledger-outbound --agent <id> --mapping <file> --store <dir> [--events <file>] [--audit <dir>] [--turns <file>]` |
 | `test/` | `node --test "test/*.test.mjs" "test/*.test.ts"` |

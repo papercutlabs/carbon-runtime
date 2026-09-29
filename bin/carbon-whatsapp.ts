@@ -1,4 +1,4 @@
-// carbon-whatsapp — pair a device once.
+// carbon-whatsapp — pair a device once, and drive a paired one in a proof.
 //
 // This channel has no API key. It has a device that a person links to an account
 // from the phone, once, and an authentication directory that is then a secret
@@ -14,6 +14,9 @@ import { fault, report } from '../stream/faults.ts';
 import { isPaired } from '../adapters/whatsapp/auth-state.ts';
 import { authState, library } from '../adapters/whatsapp/socket.ts';
 import type { ProviderSocket } from '../adapters/whatsapp/socket.ts';
+import { EXIT_TERMINAL_AUTH, terminalReason } from '../adapters/whatsapp/latch.ts';
+import { chatJid, readChat } from '../adapters/whatsapp/read.ts';
+import type { ReadSocket } from '../adapters/whatsapp/read.ts';
 
 // Pair/send use baileys operations beyond the adapter's ProviderSocket view.
 // Omit SendSocket's Promise<unknown> sendMessage so the Baileys return
@@ -29,6 +32,7 @@ const HELP = `carbon-whatsapp — pair one device with a WhatsApp account, and d
 Usage:
   carbon-whatsapp pair --auth-dir <dir> --phone <number>
   carbon-whatsapp send --auth-dir <dir> --to <number> --text <text>
+  carbon-whatsapp read --auth-dir <dir> --chat <number or jid> --wait <seconds>
 
   --auth-dir <dir>   where the device's authentication state is written. It is
                      created if it is not there, and it must be a directory only
@@ -58,6 +62,28 @@ phone: the tester device sends, the agent answers, and both halves are watched b
 the run rather than reported by somebody. It connects, sends one message, prints
 the message id and exits. It writes nothing to any store and records nothing: it
 is not an adapter, and the agent's own store is written by the agent's runtime.
+
+The read subcommand.
+
+  --auth-dir <dir>   a directory carbon-whatsapp pair already paired, as for send.
+  --chat <chat>      the chat to read: a number in the same international form,
+                     or a jid (<digits>@s.whatsapp.net, <digits>@lid, <id>@g.us).
+  --wait <seconds>   how long to stay connected collecting, from 1 to 600.
+
+It connects, stays connected for the wait, and prints one JSON line holding every
+message that arrived for that chat in that time, oldest first, each read through
+the adapter's own content rules. That includes what the server had queued for
+the device while it was away; it is not a history query. It marks nothing read,
+downloads no media and writes nothing to any store. Like send, it holds the
+connection open a few seconds after the wait and closes it properly.
+
+When the device is unlinked.
+
+If the server answers 401 or 403 on send or read, the device is gone. The command
+prints one DEVICE_UNLINKED fault carrying the server's code, leaves the
+authentication directory exactly as it was, and exits 78. On send this is only
+reported before anything was sent, so nothing went out. It is not retried here:
+re-pairing is a person's, or a calling tool's, decision.
 
 Everything it writes is written transactionally: to a temporary name in the same
 directory, flushed, renamed over the target, and the directory flushed after. A
@@ -280,6 +306,12 @@ async function send(authDir: string, to: string, text: string) {
         return;
       }
       if (connection === 'close' && !sending) {
+        const terminal = terminalReason(lastDisconnect?.error);
+        if (terminal) {
+          report([unlinked(authDir, terminal, 'nothing was sent')]);
+          resolve(EXIT_TERMINAL_AUTH);
+          return;
+        }
         // The provider disconnect error is untrusted; retain its optional message read.
         const disconnectMessage = (lastDisconnect?.error as { message?: string } | undefined)?.message;
         report([fault('SEND_CONNECTION_CLOSED', to,
@@ -291,42 +323,108 @@ async function send(authDir: string, to: string, text: string) {
   });
 }
 
+// The device is gone. One fault, the server's code on it, and the directory left
+// exactly as it was: the next step is a pairing, which this command does not do.
+function unlinked(authDir: string, terminal: { code: number; reason: unknown }, what: string) {
+  return fault('DEVICE_UNLINKED', authDir,
+    `the server answered ${terminal.code}: ${String(terminal.reason)}; ${what}`,
+    'pair the device again into an empty directory with carbon-whatsapp pair; the old directory is left as it was');
+}
+
+function parseRead(rest: string[]) {
+  const faults = [];
+  const named: Record<string, string | null> = { '--auth-dir': null, '--chat': null, '--wait': null };
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] in named) named[rest[i]] = rest[++i] ?? null;
+    else faults.push(fault('UNKNOWN_ARGUMENT', rest[i], 'not an argument of carbon-whatsapp read', 'run carbon-whatsapp --help'));
+  }
+  for (const name of Object.keys(named)) {
+    if (named[name] === null) faults.push(fault('MISSING_ARGUMENT', name, 'this argument has no default and is not guessed', `pass ${name}`));
+  }
+  if (named['--chat'] !== null && chatJid(named['--chat']) === null) {
+    faults.push(fault('CHAT_NOT_RECOGNISED', named['--chat'],
+      'a chat is a number in international form, digits only, or a jid',
+      'pass --chat 15550000000, or a jid such as 15550000000@s.whatsapp.net'));
+  }
+  const wait = named['--wait'];
+  if (wait !== null && !(/^[0-9]+$/.test(wait) && Number(wait) >= 1 && Number(wait) <= 600)) {
+    faults.push(fault('WAIT_OUT_OF_RANGE', wait, 'the wait is whole seconds from 1 to 600', 'pass --wait 30'));
+  }
+  if (named['--auth-dir'] !== null && !isPaired(named['--auth-dir'])) {
+    faults.push(fault('NOT_PAIRED', named['--auth-dir'],
+      'this directory holds no paired device, so there is nothing to read on',
+      'pair the device once with carbon-whatsapp pair'));
+  }
+  return { named, faults };
+}
+
+// One read, on a device somebody already paired. The rules are in read.ts; this
+// opens the socket and says what happened.
+async function readCommand(authDir: string, chat: string, waitSeconds: number) {
+  const { makeWASocket, fetchLatestBaileysVersion } = await library();
+  const { state, saveCreds } = await authState(authDir);
+  const { version } = await fetchLatestBaileysVersion();
+  // Read uses end() after settle; the adapter's ProviderSocket view does not name it.
+  const socket = (makeWASocket as (options: { auth: unknown; version: number[] }) => CliSocket)({ auth: state, version, printQRInTerminal: false } as { auth: typeof state; version: number[] });
+  socket.ev.on('creds.update', saveCreds);
+  const outcome = await readChat({ socket: socket as unknown as ReadSocket, jid: chatJid(chat)!, waitMs: waitSeconds * 1000, settleMs: SETTLE_MS });
+  if (outcome.ok) {
+    console.log(JSON.stringify({ read: true, chat: outcome.chat, waited_seconds: waitSeconds, messages: outcome.messages }));
+    return 0;
+  }
+  if (outcome.code === 'DEVICE_UNLINKED') {
+    report([unlinked(authDir, { code: outcome.status, reason: outcome.reason }, 'nothing was read')]);
+    return EXIT_TERMINAL_AUTH;
+  }
+  report([fault('READ_CONNECTION_CLOSED', chat, outcome.reason, 'check that this device is still linked, and run the command again')]);
+  return 1;
+}
+
+function refuse(faults: Parameters<typeof report>[0]) {
+  report(faults);
+  return 1;
+}
+
+// One subcommand, after its own arguments are checked. Every fault is reported
+// together and nothing connects when there is one.
+async function run(name: string, rest: string[]): Promise<number> {
+  switch (name) {
+    case 'pair': {
+      const { named, faults } = parse(rest);
+      if (faults.length > 0) return refuse(faults);
+      // Pair finishes as 0 or 1; 'registered' is only an internal connect signal.
+      return await pair(named['--auth-dir']!, named['--phone']!) as number;
+    }
+    case 'send': {
+      const { named, faults } = parseSend(rest);
+      if (faults.length > 0) return refuse(faults);
+      return send(named['--auth-dir']!, named['--to']!, named['--text']!);
+    }
+    case 'read': {
+      const { named, faults } = parseRead(rest);
+      if (faults.length > 0) return refuse(faults);
+      return readCommand(named['--auth-dir']!, named['--chat']!, Number(named['--wait']));
+    }
+    default:
+      return refuse([fault('UNKNOWN_SUBCOMMAND', name,
+        'the carbon-whatsapp subcommands are pair, send and read',
+        'run carbon-whatsapp --help')]);
+  }
+}
+
+const SUBCOMMANDS = new Set(['pair', 'send', 'read']);
+
 async function main(argv: string[]): Promise<number> {
   const args = argv.slice(2);
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(HELP);
     return args.length === 0 ? 1 : 0;
   }
-  if (args[0] === 'send') {
-    if (args.includes('--help') || args.includes('-h')) {
-      console.log(HELP);
-      return 0;
-    }
-    const { named, faults } = parseSend(args.slice(1));
-    if (faults.length > 0) {
-      report(faults);
-      return 1;
-    }
-    return send(named['--auth-dir']!, named['--to']!, named['--text']!);
-  }
-  if (args[0] !== 'pair') {
-    report([fault('UNKNOWN_SUBCOMMAND', args[0],
-      'the carbon-whatsapp subcommands are pair and send',
-      'run carbon-whatsapp --help')]);
-    return 1;
-  }
-  if (args.includes('--help') || args.includes('-h')) {
+  if (SUBCOMMANDS.has(args[0]) && (args.includes('--help') || args.includes('-h'))) {
     console.log(HELP);
     return 0;
   }
-
-  const { named, faults } = parse(args.slice(1));
-  if (faults.length > 0) {
-    report(faults);
-    return 1;
-  }
-  // Pair finishes as 0 or 1; 'registered' is only an internal connect signal.
-  return await pair(named['--auth-dir']!, named['--phone']!) as number;
+  return run(args[0], args.slice(1));
 }
 
 // The connection keeps the event loop alive, so the process is ended rather than

@@ -22,8 +22,9 @@ node bin/carbon-stream check --adapter adapters/whatsapp --fixtures adapters/wha
 | `auth-state.ts` | the authentication state, written transactionally |
 | `socket.ts` | the only file that loads the library, and the only one that opens a connection |
 | `live.ts` | the connection as the release loop sees it: one per account, the buffer of what arrived on it, and the socket a reply goes out on |
+| `read.ts` | one chat's messages on a paired tester device, collected for a wait and read through `content.ts`, for `carbon-whatsapp read` |
 | `fixtures/` | recorded events: what the conformance check runs, and what the tests read |
-| `../../bin/carbon-whatsapp` | `pair`, run once by a person, and `send`, which drives a second device in a proof |
+| `../../bin/carbon-whatsapp` | `pair`, run once by a person, and `send` and `read`, which drive a second device in a proof |
 
 `index.ts` imports no library and opens no connection, so every rule below is
 tested against recorded events with no network in the test.
@@ -115,6 +116,18 @@ one message on a device somebody already paired, writes nothing to any store, an
 holds the connection open for a moment before closing it properly — a device that
 connects, sends and vanishes in the same second is a device the server has been
 seen to unlink, and the first tester device was lost that way.
+
+`carbon-whatsapp read` is the other half of the proof: it connects on the same
+kind of paired directory, stays connected for `--wait` seconds, and prints every
+message that arrived for one chat in that time, read through `content.ts`, so
+one photograph is still one message and an edit is still named as an edit. It
+holds the connection open after the wait and closes it the same way `send` does.
+
+On either command, a `401` or `403` is not a disconnect. The command prints one
+`DEVICE_UNLINKED` fault with the server's code, leaves the authentication
+directory as it found it, and exits 78. `send` reports it only when the
+connection closed before anything was sent, so a caller knows nothing went out
+and may pair again and retry. Neither command re-pairs by itself.
 
 The tester's authentication directory is a credential like any other and lives
 where the person who paired it keeps it, never in this repository.
