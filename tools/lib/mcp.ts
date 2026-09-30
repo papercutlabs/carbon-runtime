@@ -62,7 +62,7 @@ type CreateServerOptions = {
 type Produced = { data?: unknown; text?: unknown };
 type Handle = (message: unknown) => Promise<unknown>;
 type StdioOptions = { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream };
-type HttpOptions = { host?: string; port?: number; path?: string };
+type HttpOptions = { host?: string; port?: number; path?: string; health?: () => unknown };
 
 // handlers is {<tool name>: async (args, context) => object | {data, text}}.
 export function createServer({ manifest, handlers, context = {} }: CreateServerOptions) {
@@ -203,7 +203,7 @@ export function serveStdio(handle: Handle, { input = process.stdin, output = pro
 // and the response comes back as JSON. There is no SSE stream and no session
 // resumption, because a client tool server has nothing to stream. The bind
 // address is loopback and a request from anywhere else never arrives.
-export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/mcp' }: HttpOptions = {}) {
+export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/mcp', health }: HttpOptions = {}) {
   if (!LOOPBACK.has(host)) {
     throw new Error(`a tool server binds loopback only, and ${host} is not loopback`);
   }
@@ -212,7 +212,6 @@ export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/m
 
   const server = http.createServer((request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url as string, `http://${host}`);
-    if (url.pathname !== path) return send(response, 404, { error: 'no such path' });
     // DNS rebinding: a browser on the box could otherwise post here.
     const origin = request.headers.origin;
     if (origin !== undefined) {
@@ -222,6 +221,10 @@ export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/m
       // The parsed origin host or null is checked against the loopback set.
       if (!LOOPBACK.has(originHost as string)) return send(response, 403, { error: 'origin refused' });
     }
+    if (url.pathname === '/health' && health && request.method === 'GET') {
+      return send(response, 200, health());
+    }
+    if (url.pathname !== path) return send(response, 404, { error: 'no such path' });
     if (request.method === 'GET') {
       return send(response, 405, { error: 'this server carries POST only; there is no event stream' });
     }

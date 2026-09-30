@@ -1,0 +1,116 @@
+{
+  "schema": "carbon.tool-server.v1",
+  "name": "carbon-records",
+  "version": "1",
+  "entry": "../records-tool.ts",
+  "transport": "http",
+  "secrets": [],
+  "tools": [
+    {
+      "name": "records_query",
+      "description": "Read the agent's own additional tables using one SQL statement. The tables and their meanings are in the installed checkout's records/README.md. information_schema is available. Pass a row cap; the result says if more rows were present. This tool cannot write.",
+      "arguments": { "type": "object", "additionalProperties": false,
+        "required": ["sql", "max_rows"], "properties": {
+          "sql": { "type": "string", "description": "one SELECT or other read-only SQL statement; no second statement" },
+          "max_rows": { "type": "integer", "description": "maximum number of rows to return, from 1 to 1000" }
+        } },
+      "returns": { "what": "the requested rows and whether the cap hid more", "fields": [
+        { "name": "rows", "what": "rows returned by the read statement" },
+        { "name": "count", "what": "rows in this result" },
+        { "name": "truncated", "what": "true if more rows existed beyond max_rows" }
+      ] }, "readOnlyHint": true, "writes": false
+    },
+    {
+      "name": "records_write",
+      "description": "Insert or update the agent's own additional tables with one SQL statement. Pass the current message id or stable timer event id as source_message_id, and the maximum rows this operation may change. The database refuses deletes, truncation, protected tables and DDL. The returned change records show what actually committed.",
+      "arguments": { "type": "object", "additionalProperties": false,
+        "required": ["sql", "source_message_id", "max_rows"], "properties": {
+          "sql": { "type": "string", "description": "one INSERT or UPDATE statement, including a WITH statement" },
+          "source_message_id": { "type": "string", "description": "the current message id or stable timer event id that caused this change" },
+          "max_rows": { "type": "integer", "description": "maximum changed rows to commit, from 1 to 1000" }
+        } },
+      "returns": { "what": "the committed change-log entries", "fields": [
+        { "name": "changes", "what": "old and new rows with cause ids" },
+        { "name": "count", "what": "number of rows changed" }
+      ] }, "readOnlyHint": false, "writes": false
+    },
+    {
+      "name": "job_open",
+      "description": "Open one run of an installed SOP. Name its SOP, the current conversation or work unit, the client references, and the current message or timer event id. The runtime verifies the unit and cause against this turn before the job is opened. Read the new job before taking an action.",
+      "arguments": { "type": "object", "additionalProperties": false,
+        "required": ["sop", "unit", "references", "source_message_id"], "properties": {
+          "sop": { "type": "string", "description": "installed SOP id from records/sops/<sop>.json" },
+          "unit": { "type": "string", "description": "conversation or work unit this job belongs to" },
+          "references": { "type": "array", "items": { "type": "string" }, "description": "client reference identifiers, or [] when none exists yet" },
+          "source_message_id": { "type": "string", "description": "current message id or stable timer event id; never blank or guessed" }
+        } },
+      "returns": { "what": "the new job's position and waits", "fields": [
+        { "name": "job", "what": "new job UUID" }, { "name": "sop", "what": "SOP id" },
+        { "name": "sop_version", "what": "installed SOP version" },
+        { "name": "positions", "what": "current positions with meaning and instructions" },
+        { "name": "waits", "what": "open waits" }, { "name": "allowed_now", "what": "legal intended steps now" }
+      ] }, "readOnlyHint": false, "writes": false
+    },
+    {
+      "name": "job_find",
+      "description": "Find jobs that name one client reference. Use this before opening a second job for the same client work. The result may contain several jobs; inspect each before acting.",
+      "arguments": { "type": "object", "additionalProperties": false,
+        "required": ["reference"], "properties": {
+          "reference": { "type": "string", "description": "one client system reference identifier" }
+        } },
+      "returns": { "what": "jobs carrying this reference", "fields": [
+        { "name": "reference", "what": "reference searched" }, { "name": "jobs", "what": "matching job records" }
+      ] }, "readOnlyHint": true, "writes": false
+    },
+    {
+      "name": "job_read",
+      "description": "Read a job's installed SOP version, current positions, instructions, waits, pending actions and legal intended steps. A pending action after a restart requires reading the client system before retrying it.",
+      "arguments": { "type": "object", "additionalProperties": false,
+        "required": ["job"], "properties": {
+          "job": { "type": "string", "description": "job UUID returned by job_open or job_find" }
+        } },
+      "returns": { "what": "the job's current work state", "fields": [
+        { "name": "job", "what": "job UUID" }, { "name": "sop", "what": "SOP id" },
+        { "name": "sop_version", "what": "SOP version" },
+        { "name": "positions", "what": "positions with means and do_here" },
+        { "name": "waits", "what": "open waits with owner and since" },
+        { "name": "pending", "what": "actions started but not observed" },
+        { "name": "allowed_now", "what": "legal intended steps now" }
+      ] }, "readOnlyHint": true, "writes": false
+    },
+    {
+      "name": "job_check",
+      "description": "Ask whether one intended SOP step is legal from this job's current positions. This answer helps you choose, but the action tool checks again under a lock before any external effect.",
+      "arguments": { "type": "object", "additionalProperties": false,
+        "required": ["job", "step"], "properties": {
+          "job": { "type": "string", "description": "job UUID" },
+          "step": { "type": "string", "description": "step id from this SOP" }
+        } },
+      "returns": { "what": "the current legality and alternatives", "fields": [
+        { "name": "job", "what": "job UUID" }, { "name": "step", "what": "step checked" },
+        { "name": "allowed", "what": "whether this step is legal now" },
+        { "name": "why", "what": "reasons when refused" },
+        { "name": "allowed_now", "what": "legal intended steps now" }
+      ] }, "readOnlyHint": true, "writes": false
+    },
+    {
+      "name": "job_record",
+      "description": "Record one SOP step. An intent must be legal and becomes pending without moving a position. A collected observation moves the position even when the SOP did not predict it, and is flagged off_model then. An agent-action observation needs a trusted action-tool receipt; your claim alone cannot advance it.",
+      "arguments": { "type": "object", "additionalProperties": false,
+        "required": ["job", "step", "kind", "source_id"], "properties": {
+          "job": { "type": "string", "description": "job UUID" },
+          "step": { "type": "string", "description": "step id from this SOP" },
+          "kind": { "type": "string", "enum": ["intent", "observation"], "description": "intent before action, or observation after collected fact" },
+          "source_id": { "type": "string", "description": "message, client check or action receipt id that caused the step" }
+        } },
+      "returns": { "what": "the recorded step or named refusal", "fields": [
+        { "name": "job", "what": "job UUID" }, { "name": "step", "what": "step recorded" },
+        { "name": "kind", "what": "intent or observation" },
+        { "name": "status", "what": "pending, recorded or already_recorded" },
+        { "name": "off_model", "what": "whether a collected fact did not follow a declared path" },
+        { "name": "positions", "what": "new positions after an observation" },
+        { "name": "pending", "what": "the pending action after an intent" }
+      ] }, "readOnlyHint": false, "writes": false
+    }
+  ]
+}

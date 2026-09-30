@@ -1,8 +1,9 @@
 type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?: unknown; seq: number };
+// shape: justified the release loop must coordinate store, harness, channels, reply, teaching and enabled records admission before each turn; a thirteenth import is the records service it now checks
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean> };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
@@ -41,9 +42,13 @@ import { fault, RuntimeFault, EXIT } from './faults.ts';
 import { StreamFault } from '../stream/store.ts';
 import { listTeachings, teachingsUnderRelease } from '../stream/teachings.ts';
 import { latch } from './latch.ts';
-import { REPLY_SERVER_NAME } from './reply-tool.ts';
+import { REPLY_SERVER_NAME, recordSentAction } from './reply-tool.ts';
 import { TEACH_SERVER_NAME } from './teach-tool.ts';
+import { RECORDS_SERVER_NAME } from './records-tool.ts';
 import { conversationKindOf } from './channel.ts';
+import { unitIdFor } from './unit.ts';
+import { beginRecordsTurn, endRecordsTurn, recordCollectedEvent } from '../tools/lib/action-check.ts';
+export { unitIdFor } from './unit.ts';
 // The recorder runs beside the loops rather than in one: the runtime process
 // makes one and every loop's after-turn hook asks it for a read. It is reached
 // through this module, which already names what follows a turn.
@@ -58,24 +63,6 @@ import {
 // The unit of work a record belongs to. One harness thread per unit, named by the
 // unit's id: a conversation, or a record in the client's own system when the
 // client's system is where the unit lives.
-export function unitIdFor(declaration: Declaration, record: { conversation_id: string; message_id?: string; adapter_fields?: Record<string, unknown> }) {
-  const unit = declaration.unit_of_work ?? {};
-  if (unit.kind === 'conversation') return record.conversation_id;
-  if (unit.kind === 'client_record') {
-    const path = String(unit.id_from ?? '').split('.').filter(Boolean);
-    let at: unknown = record.adapter_fields ?? {};
-    // Each lookup preserves optional access to raw nested adapter fields.
-    for (const step of path) at = (at as Record<string, unknown> | null | undefined)?.[step];
-    if (typeof at === 'string' && at.length > 0) return at;
-    // A malformed adapter record may lack message_id; keep the existing fault subject in that case.
-    throw new RuntimeFault(fault('UNIT_ID_ABSENT', record.message_id!,
-      `unit_of_work.id_from names ${JSON.stringify(unit.id_from)} and this record's adapter_fields carry no such value`,
-      'have the adapter put the client record\'s id on the record, or declare unit_of_work.kind as conversation'));
-  }
-  throw new RuntimeFault(fault('UNIT_OF_WORK_UNKNOWN', String(unit.kind),
-    'unit_of_work.kind is conversation or client_record',
-    'correct unit_of_work.kind in the declaration'));
-}
 
 // Whether this record may go to the model now, and why not when it may not. The
 // reasons are values rather than booleans because a person asking "why has the
@@ -544,11 +531,13 @@ export class ReleaseLoop<S = Session> {
   declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null | undefined;
   declare intervalMs: number | undefined;
   declare afterTurn: () => void;
+  declare collectedSynced: boolean;
+  declare recordsActionUrl: string | undefined;
 
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
     agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
-    afterTurn = () => {}, probe = async () => false
+    afterTurn = () => {}, probe = async () => false, recordsActionUrl
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -556,6 +545,8 @@ export class ReleaseLoop<S = Session> {
         'pass the agent\'s work directory; on a box it is <agent dir>/work'));
     }
     this.declaration = declaration;
+    this.collectedSynced = false;
+    this.recordsActionUrl = recordsActionUrl;
     // Null only where a caller builds a loop by hand; run() always passes the gate.
     this.sandboxDeny = sandboxDeny;
     this.channel = channel;
@@ -668,7 +659,8 @@ export class ReleaseLoop<S = Session> {
       // declaration check refuses any other.
       ...(this.declaration.tool_servers ?? []).filter((s) => s.name !== this.declaration.provider?.api_key_via).map((s) => s.name),
       REPLY_SERVER_NAME,
-      ...(this.declaration.teaching?.enabled === true ? [TEACH_SERVER_NAME] : [])
+      ...(this.declaration.teaching?.enabled === true ? [TEACH_SERVER_NAME] : []),
+      ...(this.declaration.records?.enabled === true ? [RECORDS_SERVER_NAME] : [])
     ]);
     const listed = new Set(statuses.map((s) => s.name));
     const faults = [];
@@ -758,6 +750,15 @@ export class ReleaseLoop<S = Session> {
   // own files say a turn was interrupted; only the store says whether the client
   // got an answer.
   recover() {
+    // A claimed send may have reached the channel just before this process
+    // died. Its pending file alone does not prove absence, so a restart must
+    // read the channel before any retry. Keep the claim for reconciliation.
+    for (const record of this.store.rebuild()) {
+      if (record.direction !== 'outbound' || record.delivery?.status !== 'pending'
+        || !record.delivery.action_claim) continue;
+      this.store.markUnknown(record.delivery.request_id);
+      this.store.annotate(record, { action_reconcile_required: true });
+    }
     const all = this.store.rebuild();
     const resend = new Set(all
       .filter((r) => r.direction === 'outbound' && r.delivery?.status === 'pending')
@@ -799,6 +800,25 @@ export class ReleaseLoop<S = Session> {
       this.log({ event: 'recover', ...summary });
     }
     return summary;
+  }
+
+  async syncCollected(captured: MessageRecord[]) {
+    if (this.declaration.records?.enabled !== true) return;
+    const candidates = this.collectedSynced ? captured : this.store.rebuild();
+    for (const record of candidates) {
+      if (record.direction !== 'inbound' || record.historical
+        || !/^[a-z][a-z0-9_-]{0,63}$/.test(record.source)) continue;
+      let unit: string;
+      try { unit = unitIdFor(this.declaration, record); }
+      catch (error) {
+        if (!(error instanceof RuntimeFault)) throw error;
+        this.log({ event: 'records.collect.skipped', message_id: record.message_id, faults: error.faults });
+        continue;
+      }
+      await recordCollectedEvent({ source_id: record.message_id, channel: record.source, unit },
+        { baseUrl: this.recordsActionUrl });
+    }
+    this.collectedSynced = true;
   }
 
   // ---- capture ------------------------------------------------------------
@@ -967,6 +987,7 @@ export class ReleaseLoop<S = Session> {
     const threadId = await this.threadFor(unitId);
     if (this.holdFaults.length > 0) return null;
     if ((await this.checkProviderProxy()).length > 0) return null;
+    await this.syncCollected(records);
     const typing = startTyping({
       adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
     });
@@ -1009,11 +1030,23 @@ export class ReleaseLoop<S = Session> {
       release_id: releaseId, thread_id: threadId, reissue
     });
 
-    const { result, completedAt } = await this.takeTurn({
-      unitId, threadId, releaseId,
-      input: turnInput(records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration }),
-      clientUserMessageId: releaseId
-    });
+    if (this.declaration.records?.enabled === true) {
+      await beginRecordsTurn({ releaseId, unit: unitId, sourceIds: messageIds },
+        { baseUrl: this.recordsActionUrl });
+    }
+    let taken: Awaited<ReturnType<typeof this.takeTurn>>;
+    try {
+      taken = await this.takeTurn({
+        unitId, threadId, releaseId,
+        input: turnInput(records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration }),
+        clientUserMessageId: releaseId
+      });
+    } finally {
+      if (this.declaration.records?.enabled === true) {
+        await endRecordsTurn(releaseId, { baseUrl: this.recordsActionUrl });
+      }
+    }
+    const { result, completedAt } = taken;
 
     // The status is recorded verbatim. `failed` is the model's own permanent
     // refusal of this input, so it closes the release, marks the record and takes
@@ -1282,6 +1315,14 @@ export class ReleaseLoop<S = Session> {
   // said the turn was answered.
   async deliver() {
     const sent = [];
+    // A crash can land after the channel confirms a send and before the job
+    // observation is recorded. Complete that receipt without sending again.
+    for (const record of this.store.rebuild()) {
+      if (record.direction !== 'outbound' || record.delivery?.status !== 'sent'
+        || !record.delivery.action_claim || record.adapter_fields?.action_recorded_at) continue;
+      await recordSentAction(this.store, record,
+        { now: () => new Date(this.now()), actionUrl: this.recordsActionUrl });
+    }
     for (const record of this.store.rebuild()) {
       if (record.direction !== 'outbound') continue;
       if (record.delivery?.status !== 'pending') continue;
@@ -1301,7 +1342,11 @@ export class ReleaseLoop<S = Session> {
         sent.push({ request_id: record.delivery!.request_id, status: 'unknown' }); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
         continue;
       }
-      if (outcome.status === 'sent') this.store.markSent(record.delivery!.request_id, outcome.chunk_ids ?? []); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
+      if (outcome.status === 'sent') {
+        const confirmed = this.store.markSent(record.delivery!.request_id, outcome.chunk_ids ?? []);
+        if (confirmed.delivery?.action_claim) await recordSentAction(this.store, confirmed,
+          { now: () => new Date(this.now()), actionUrl: this.recordsActionUrl });
+      }
       else if (outcome.status === 'unknown') this.store.markUnknown(record.delivery!.request_id); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
       else this.store.markFailed(record.delivery!.request_id); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
       this.log({ event: 'deliver', request_id: record.delivery!.request_id, status: outcome.status }); // The preceding filter or status check established delivery; preserve direct access to its stored fields.

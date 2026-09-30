@@ -25,7 +25,7 @@ import type { Session } from './session.ts';
 import type { HarnessEvent } from './events.ts';
 
 type ToolServer = { name?: string; kind?: string; secret_refs?: string[]; transport?: string; command?: string; cwd?: string; url?: string; required?: boolean };
-type Declaration = { tool_servers?: ToolServer[]; secrets?: { name: string }[] } | null | undefined;
+type Declaration = { tool_servers?: ToolServer[]; secrets?: { name: string }[]; records?: { enabled?: boolean } } | null | undefined;
 type ToolStatus = { name?: string; runtimeStatus?: string | null };
 
 const BARE_KEY = /^[A-Za-z0-9_-]+$/;
@@ -180,6 +180,7 @@ export async function listToolServerStatus(session: Session, { threadId }: { thr
 // on a box whose servers are all healthy.
 export function holdsRelease(declaration: Declaration, statuses: ToolStatus[]) {
   const required = new Set((declaration?.tool_servers ?? []).filter((s) => s.required && s.kind !== PROVIDER_PROXY).map((s) => s.name));
+  if (declaration?.records?.enabled === true) required.add('carbon-records');
   const byName = new Map(statuses.map((s) => [s.name, s]));
   const faults = [];
   for (const name of [...required].sort()) {

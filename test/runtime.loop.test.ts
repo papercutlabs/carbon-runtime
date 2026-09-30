@@ -6,6 +6,7 @@ type TestDeclaration = Declaration & { schema: string; agent: { id: string; clie
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -19,7 +20,7 @@ import {
   NOTHING_TAUGHT, saidNothingTaught, teachCheckInput
 } from '../runtime/loop.ts';
 import { EXIT, RuntimeFault, fault } from '../runtime/faults.ts';
-import { replyHandler } from '../runtime/reply-tool.ts';
+import { replyHandler, outboundRecord } from '../runtime/reply-tool.ts';
 import { serveTeachTool } from '../runtime/teach-tool.ts';
 import { listTeachings, remember } from '../stream/teachings.ts';
 import { fakeHarness } from './fake-harness.ts';
@@ -53,7 +54,9 @@ function declaration(overrides: Partial<TestDeclaration> = {}): TestDeclaration 
 // refusal being tested two tests further down.
 const REPLY_LISTED = () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }];
 
-function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED, adapter = fixture }: { decl?: TestDeclaration; onTurn?: ((store: Store) => OnTurn) | null; statuses?: () => Status[]; adapter?: object } = {}) {
+function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED, adapter = fixture,
+  recordsActionUrl }: { decl?: TestDeclaration; onTurn?: ((store: Store) => OnTurn) | null;
+  statuses?: () => Status[]; adapter?: object; recordsActionUrl?: string } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-runtime-'));
   const store = Store.open(dir);
   const harness = fakeHarness({ onTurn: onTurn ? onTurn(store) : (() => 'completed'), statuses });
@@ -67,7 +70,8 @@ function makeLoop({ decl = declaration(), onTurn = null, statuses = REPLY_LISTED
     session: harness.session,
     agent: AGENT,
     checkout: path.join(dir, 'repo'),
-    work: dir
+    work: dir,
+    recordsActionUrl
   });
   return { loop, store, dir, harness };
 }
@@ -216,6 +220,50 @@ test('recovery completes every record of a gathered release whose reply was alre
   assert.deepEqual(recovered.done, inbound.map((r) => r.message_id));
   assert.ok(store.rebuild().filter((r) => r.direction === 'inbound')
     .every((r) => r.release!.completed_at)); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
+});
+
+test('a claimed send pending at restart stays uncertain until the channel is read', async () => {
+  const { loop, store } = makeLoop();
+  loop.capture([item(1, 'send this')]);
+  const inbound = store.rebuild()[0];
+  const reply = outboundRecord(store, { agent: AGENT, conversation_id: inbound.conversation_id,
+    request_id: 'claimed-reply', text: 'Sent' });
+  reply.delivery!.action_claim = { kind: 'claimed', job: 'job-1', step: 'send', action_id: 'claim-1' };
+  store.reply(reply);
+  const recovered = loop.recover();
+  assert.deepEqual(recovered.resend, []);
+  assert.deepEqual(recovered.unknown, ['claimed-reply']);
+  const onDisk = store.rebuild().find((r) => r.direction === 'outbound')!;
+  assert.equal(onDisk.delivery!.status, 'unknown');
+  assert.equal(onDisk.adapter_fields?.action_reconcile_required, true);
+  assert.deepEqual(await loop.deliver(), []);
+});
+
+test('captured inbound facts are registered with their declared work unit before a turn', async () => {
+  const calls: Record<string, unknown>[] = [];
+  const server = http.createServer(async (request, response) => {
+    const parts: Buffer[] = [];
+    for await (const part of request) parts.push(part);
+    calls.push({ route: request.url, ...JSON.parse(Buffer.concat(parts).toString('utf8')) });
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'collected' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test listener has no port');
+    const { loop, store } = makeLoop({ decl: declaration({ records: { enabled: true } }),
+      recordsActionUrl: `http://127.0.0.1:${address.port}` });
+    loop.capture([item(1, 'a client fact')]);
+    await loop.syncCollected([]);
+    const inbound = store.rebuild()[0];
+    assert.deepEqual(calls, [{ route: '/collect', source_id: inbound.message_id,
+      channel: 'email', unit: inbound.conversation_id }]);
+    await loop.syncCollected([]);
+    assert.equal(calls.length, 1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('records from two conversations in one pass become two releases', async () => {
@@ -646,6 +694,57 @@ test('an app-server listing a tool server nobody declared still ends the process
     () => loop.pass([item(1, 'anything')]),
     (error) => (error as RuntimeFault).faults.some((f) => f.code === 'TOOL_SERVER_UNDECLARED') // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
   );
+});
+
+test('enabled records refuse an unrendered server and hold while a rendered server is down', async () => {
+  const calls: { route: string | undefined; body: Record<string, unknown> }[] = [];
+  const collector = http.createServer(async (request, response) => {
+    const parts: Buffer[] = [];
+    for await (const part of request) parts.push(part);
+    calls.push({ route: request.url, body: JSON.parse(Buffer.concat(parts).toString('utf8')) });
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'collected' }));
+  });
+  await new Promise<void>((resolve) => collector.listen(0, '127.0.0.1', resolve));
+  try {
+  const address = collector.address();
+  if (!address || typeof address === 'string') throw new Error('test listener has no port');
+  const recordsActionUrl = `http://127.0.0.1:${address.port}`;
+  let status: Status[] = REPLY_LISTED();
+  const absentInstance = makeLoop({
+    decl: declaration({ records: { enabled: true } }),
+    onTurn: (s) => answering(s),
+    statuses: () => status, recordsActionUrl
+  });
+  await assert.rejects(() => absentInstance.loop.pass([item(1, 'open a job')]),
+    (error) => (error as RuntimeFault).faults.some((f) => f.code === 'TOOL_SERVER_NOT_LISTED' && f.subject === 'carbon-records'));
+  assert.equal(absentInstance.harness.session.turns.length, 0);
+
+  status = [...REPLY_LISTED(), { name: 'carbon-records', runtimeStatus: 'disconnected' }];
+  const { loop, harness } = makeLoop({
+    decl: declaration({ records: { enabled: true } }),
+    onTurn: (s) => answering(s),
+    statuses: () => status, recordsActionUrl
+  });
+  const down = await loop.pass([item(1, 'open a job')]);
+  assert.deepEqual(down.released, []);
+  assert.equal(harness.session.turns.length, 0);
+  assert.ok(down.holding.includes('tool_servers.carbon-records'));
+
+  status = [...REPLY_LISTED(), { name: 'carbon-records', runtimeStatus: 'connected' }];
+  loop.toolStatusStale = true;
+  const ready = await loop.pass([]);
+  assert.equal(ready.released.length, 1);
+  assert.equal(harness.session.turns.length, 1);
+  const started = calls.find((call) => call.route === '/turn-start');
+  assert.ok(started);
+  assert.equal(started.body.unit, 'account-1:c1');
+  assert.deepEqual(started.body.sourceIds, [ready.released[0].message_id]);
+  assert.deepEqual(calls.filter((call) => call.route === '/turn-end').map((call) => call.body.releaseId),
+    [started.body.releaseId]);
+  } finally {
+    await new Promise<void>((resolve) => collector.close(() => resolve()));
+  }
 });
 
 // ---- a completed turn is not an answered message -------------------------

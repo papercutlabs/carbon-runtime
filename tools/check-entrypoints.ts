@@ -17,6 +17,7 @@ export const CORE_ENTRYPOINTS = ['bin/carbon', 'bin/carbon-harness'] as const;
 export const ENTRYPOINTS = [
   'bin/carbon-email',
   'bin/carbon-import',
+  'bin/carbon-records',
   'bin/carbon-runtime',
   'bin/carbon-stream',
   'bin/carbon-telegram',

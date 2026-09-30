@@ -50,6 +50,7 @@ export type Declaration = {
   tool_servers?: Server[];
   runtime?: { env?: { name: string; value: string }[] };
   teaching?: Teaching;
+  records?: { enabled?: boolean };
   unit_of_work?: { kind?: string; id_from?: unknown; idle_close_ms?: number };
   limits?: { max_turn_ms?: number };
 };

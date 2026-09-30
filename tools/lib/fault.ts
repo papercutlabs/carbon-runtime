@@ -31,7 +31,7 @@ export class ToolFault extends Error {
   }
 }
 
-export function refuse(code: string, subject: string, problem: string, fix: string) {
+export function refuse(code: string, subject: string, problem: string, fix: string): never {
   throw new ToolFault([fault(code, subject, problem, fix)]);
 }
 

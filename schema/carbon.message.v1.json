@@ -75,6 +75,16 @@
         "status": { "enum": ["pending", "pending-teach-check", "sent", "unknown", "failed"] },
         "text_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "chunk_ids": { "type": "array", "items": { "type": "string" } },
+        "action_claim": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "job", "step", "action_id"],
+          "properties": {
+            "kind": { "const": "claimed" },
+            "job": { "type": "string", "minLength": 1 },
+            "step": { "type": "string", "minLength": 1 },
+            "action_id": { "type": "string", "minLength": 1 }
+          }
+        },
         "completed_at": { "type": "string", "minLength": 1 }
       }
     },

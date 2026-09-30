@@ -26,6 +26,7 @@ import { fault, report, RuntimeFault, EXIT } from '../runtime/faults.ts';
 import { readDeclaration, placesUnder } from '../runtime/index.ts';
 import { toolsUserServer, commandFor, environmentFor, serverNameFromInstance, stdinSecretFor } from '../runtime/tool-servers.ts';
 import type { Declaration } from '../runtime/types.ts';
+import { RECORDS_SERVER_NAME, serveRecordsTool } from '../runtime/records-tool.ts';
 
 const HELP = `carbon-tool-server — run one tool server as the tools user, under its own unit
 
@@ -125,6 +126,44 @@ async function main(argv: string[]) {
   const name = byAgentDir
     ? serverNameFromInstance(args.instance, String(declaration.agent?.id ?? ''))
     : args.server;
+  if (name === RECORDS_SERVER_NAME) {
+    if (!byAgentDir) {
+      report([fault('RECORDS_AGENT_DIR_REQUIRED', name,
+        'the Carbon records server needs the installed agent directory and its tools-work receipt place',
+        'start its systemd instance with --agent-dir and --instance')]);
+      return EXIT.FAULT;
+    }
+    if (declaration.records?.enabled !== true) {
+      process.stdout.write(JSON.stringify({ event: 'records.disabled', agent_id: declaration.agent?.id }) + '\n');
+      return EXIT.OK;
+    }
+    const agentId = String(declaration.agent?.id ?? '');
+    const agentDir = path.resolve(args['agent-dir']);
+    const served = await serveRecordsTool({ database: agentId.replaceAll('-', '_'), agentId, agentDir,
+      // A source is never accepted solely because the model named it. The
+      // collector route is wired separately from this launcher.
+      verifyObservation: async () => false });
+    process.stdout.write(JSON.stringify({ event: 'records.listening', url: served.url,
+      agent_id: agentId, invocation_id: served.health().invocationId }) + '\n');
+    return new Promise<number>((resolve) => {
+      let stopping = false;
+      const stop = () => {
+        if (stopping) return;
+        stopping = true;
+        const ceiling = setTimeout(() => {
+          report([fault('RECORDS_DRAIN_TIMEOUT', agentId,
+            'the records server did not finish active calls and close its database sessions within 60 seconds',
+            'fail this backup capture; inspect the active transaction before another attempt')]);
+          process.exit(1);
+        }, 60000);
+        served.stop().then(() => { clearTimeout(ceiling); resolve(EXIT.OK); })
+          .catch((error: Error) => { clearTimeout(ceiling); report([fault('RECORDS_DRAIN_FAILED', agentId,
+            error.message, 'fail this backup capture and inspect the records server')]); resolve(EXIT.FAULT); });
+      };
+      process.once('SIGTERM', stop);
+      process.once('SIGINT', stop);
+    });
+  }
   const server = toolsUserServer(declaration, name);
 
   const currentDir = byAgentDir ? path.join(path.resolve(args['agent-dir']), 'current') : null;

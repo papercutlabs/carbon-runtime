@@ -14,7 +14,8 @@
     "carbon-whatsapp": "bin/carbon-whatsapp",
     "carbon-telegram": "bin/carbon-telegram",
     "carbon-import": "bin/carbon-import",
-    "carbon-tool-server": "bin/carbon-tool-server"
+    "carbon-tool-server": "bin/carbon-tool-server",
+    "carbon-records": "bin/carbon-records"
   },
   "scripts": {
     "test": "node tools/test-runner.ts",
@@ -28,7 +29,8 @@
     "release": "node tools/release.ts"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc14"
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "postgres": "3.4.9"
   },
   "devDependencies": {
     "typescript": "7.0.2"
