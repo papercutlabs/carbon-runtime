@@ -34,6 +34,10 @@ async function ensureCore(db: AnySql) {
     await tx.unsafe(`CREATE TABLE IF NOT EXISTS carbon.action_receipts (
       action_id uuid PRIMARY KEY, job_id uuid NOT NULL, sop text NOT NULL,
       step text NOT NULL, source_id text NOT NULL, recorded_at timestamptz NOT NULL DEFAULT now())`);
+    await tx.unsafe(`CREATE TABLE IF NOT EXISTS carbon.collected_events (
+      source_id text NOT NULL, channel text NOT NULL, unit_id text NOT NULL,
+      collected_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (source_id, channel, unit_id))`);
     await tx.unsafe(`CREATE OR REPLACE FUNCTION carbon.log_change() RETURNS trigger
       LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $function$
       DECLARE cause text;

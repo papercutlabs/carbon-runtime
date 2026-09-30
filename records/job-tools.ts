@@ -81,6 +81,18 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
   }
   return {
     async close() { await db.end({ timeout: 2 }); },
+    async action_collect(source_id: string, channel: string, unit: string) {
+      const cause = sourceId(source_id);
+      if (typeof channel !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(channel)) {
+        refuse('JOB_CHANNEL_INVALID', String(channel),
+          'collected channel must be a declared source name', 'pass the adapter or trusted client-read channel');
+      }
+      if (typeof unit !== 'string' || !unit.trim()) refuse('JOB_UNIT_INVALID', 'unit',
+        'a collected fact must name its work unit', 'pass the unit derived from the captured record');
+      const rows = await db`INSERT INTO carbon.collected_events(source_id, channel, unit_id)
+        VALUES (${cause}, ${channel}, ${unit}) ON CONFLICT DO NOTHING RETURNING source_id`;
+      return { source_id: cause, channel, unit, status: rows.length ? 'collected' : 'already_collected' };
+    },
     async action_classify(job: string | null, operation: string) {
       if (typeof operation !== 'string' || !operation.trim()) refuse('JOB_OPERATION_INVALID', 'operation',
         'the action tool must name its own operation', 'pass the operation mapped in the installed SOP');
@@ -302,7 +314,9 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
           if (!trusted || trusted.length === 0) refuse('JOB_ACTION_RECEIPT_ABSENT', step,
             'the agent supplied an action observation without a matching trusted tool receipt',
             'read the pending action and reconcile the client system through its action tool');
-        } else if (!await verifyObservation(cause, event.observed_via, id)) {
+        } else if (!(await tx`SELECT 1 FROM carbon.collected_events WHERE source_id = ${cause}
+          AND channel = ${event.observed_via} AND unit_id = ${row.unit_id}`).length
+          && !await verifyObservation(cause, event.observed_via, id)) {
           refuse('JOB_SOURCE_UNVERIFIED', cause,
             'this source is not a collected event from the SOP channel',
             'collect the client fact through its declared channel, then record that event id');

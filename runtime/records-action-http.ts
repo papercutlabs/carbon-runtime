@@ -2,6 +2,7 @@ import http from 'node:http';
 import { asFaults, fault } from '../tools/lib/fault.ts';
 
 type Actions = {
+  action_collect(source_id: string, channel: string, unit: string): Promise<unknown>;
   action_classify(job: string | null, operation: string): Promise<unknown>;
   action_begin(job: string, step: string, source_id: string, operation: string,
     owner: { pid: number; generation: string }): Promise<unknown>;
@@ -26,7 +27,7 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
       send(200, { schema: 'carbon.records-action-health.v1', status: 'ready' });
       return;
     }
-    if (request.method !== 'POST' || !['/classify', '/begin', '/bound', '/finish', '/reconcile-absent'].includes(request.url ?? '')) {
+    if (request.method !== 'POST' || !['/collect', '/classify', '/begin', '/bound', '/finish', '/reconcile-absent'].includes(request.url ?? '')) {
       send(404, { faults: [fault('RECORDS_ACTION_ROUTE', String(request.url),
         'this route does not exist', 'use an action route from a mapped tool')] });
       return;
@@ -44,7 +45,9 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
     }
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const value = request.url === '/classify'
+      const value = request.url === '/collect'
+        ? await actions.action_collect(body.source_id, body.channel, body.unit)
+        : request.url === '/classify'
         ? await actions.action_classify(body.job, body.operation)
         : request.url === '/begin'
           ? await actions.action_begin(body.job, body.step, body.source_id, body.operation, body.owner)

@@ -13,6 +13,7 @@ import { serveRecordsTool } from '../runtime/records-tool.ts';
 import { installedJob, installedSop, renderCard, renderDiagram, viewParity } from '../records/views.ts';
 import { beginMappedAction, beginBoundAction, finishMappedAction,
   processGeneration, reconcileAbsentAction } from '../tools/lib/action-check.ts';
+import { recordCollectedEvent } from '../tools/lib/action-check.ts';
 import { Store } from '../stream/store.ts';
 import { recordsReplyHandler, recordSentAction } from '../runtime/reply-tool.ts';
 import { standinClientWrite } from './support/records-client-tool.ts';
@@ -45,7 +46,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     + 'job_events_demo stores steps. The job tools write and read it.\n');
   fs.writeFileSync(path.join(repo, 'records', 'migrations', '0001-notes.sql'),
     'CREATE TABLE notes (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, body text);');
-  const sop = { sop: 'demo', version: '1', collected_channels: { agent_action: 'receipt', external_read: 'client check' },
+  const sop = { sop: 'demo', version: '1', collected_channels: {
+    agent_action: 'receipt', external_read: 'client check', telegram: 'captured Telegram event' },
     tracks: [{ id: 'work', label: 'Work', initial: 'open', positions: [
       { id: 'open', label: 'Open', means: 'Unsent', do_here: 'Send', waiting_on: 'agent', terminal: false },
       { id: 'sent', label: 'Sent', means: 'Sent', do_here: 'Wait', waiting_on: 'client', terminal: false }
@@ -54,6 +56,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       action: { tool: 'carbon-send', operation: 'send' },
       moves: [{ track: 'work', from: ['open'], to: 'sent' }] },
     { id: 'check', kind: 'observation', mover: 'client', observed_via: 'external_read',
+      moves: [{ track: 'work', from: ['open'], to: 'sent' }] },
+    { id: 'arrive', kind: 'observation', mover: 'client', observed_via: 'telegram',
       moves: [{ track: 'work', from: ['open'], to: 'sent' }] }] };
   fs.writeFileSync(path.join(repo, 'records', 'sops', 'demo.json'), JSON.stringify(sop));
   command(pg('initdb'), ['-D', data, '--no-instructions', '--auth-local=trust', '--auth-host=reject']);
@@ -167,6 +171,26 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     assert.equal(unmapped.status, 409);
     assert.equal(unmapped.body.faults[0].code, 'JOB_ACTION_UNMAPPED');
     const baseUrl = `http://127.0.0.1:${served.actionPort}`;
+    const collectedJob = await rpc('tools/call', { name: 'job_open', arguments: {
+      sop: 'demo', unit: 'telegram-unit', references: [], source_message_id: 'message-collected' } });
+    const collectedJobId = collectedJob.result.structuredContent.job;
+    const uncollected = await rpc('tools/call', { name: 'job_record', arguments: {
+      job: collectedJobId, step: 'arrive', kind: 'observation', source_id: 'telegram-event-1' } });
+    assert.equal(uncollected.result.isError, true);
+    assert.match(JSON.stringify(uncollected), /JOB_SOURCE_UNVERIFIED/);
+    assert.equal((await recordCollectedEvent({ source_id: 'telegram-event-1', channel: 'telegram',
+      unit: 'telegram-unit' }, { baseUrl })).status, 'collected');
+    const wrongUnitJob = await rpc('tools/call', { name: 'job_open', arguments: {
+      sop: 'demo', unit: 'other-unit', references: [], source_message_id: 'message-other-unit' } });
+    const wrongUnitObservation = await rpc('tools/call', { name: 'job_record', arguments: {
+      job: wrongUnitJob.result.structuredContent.job, step: 'arrive', kind: 'observation',
+      source_id: 'telegram-event-1' } });
+    assert.equal(wrongUnitObservation.result.isError, true);
+    assert.match(JSON.stringify(wrongUnitObservation), /JOB_SOURCE_UNVERIFIED/);
+    const collected = await rpc('tools/call', { name: 'job_record', arguments: {
+      job: collectedJobId, step: 'arrive', kind: 'observation', source_id: 'telegram-event-1' } });
+    assert.equal(collected.result.isError, false);
+    assert.equal((await installedJob('carbon_test', collectedJobId, socket)).job.positions.work, 'sent');
     const mapped = { about_job: actionJobId, derived_job: actionJobId,
       derived_move: 'send', operation: 'send', source_id: 'message-action-http' };
     await assert.rejects(() => beginMappedAction({ ...mapped, derived_move: null,

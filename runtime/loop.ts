@@ -3,7 +3,7 @@ type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?:
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean> };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
@@ -47,6 +47,7 @@ import { TEACH_SERVER_NAME } from './teach-tool.ts';
 import { RECORDS_SERVER_NAME } from './records-tool.ts';
 import { conversationKindOf } from './channel.ts';
 import { unitIdFor } from './unit.ts';
+import { recordCollectedEvent } from '../tools/lib/action-check.ts';
 export { unitIdFor } from './unit.ts';
 // The recorder runs beside the loops rather than in one: the runtime process
 // makes one and every loop's after-turn hook asks it for a read. It is reached
@@ -530,11 +531,13 @@ export class ReleaseLoop<S = Session> {
   declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null | undefined;
   declare intervalMs: number | undefined;
   declare afterTurn: () => void;
+  declare collectedSynced: boolean;
+  declare recordsActionUrl: string | undefined;
 
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
     agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
-    afterTurn = () => {}, probe = async () => false
+    afterTurn = () => {}, probe = async () => false, recordsActionUrl
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -542,6 +545,8 @@ export class ReleaseLoop<S = Session> {
         'pass the agent\'s work directory; on a box it is <agent dir>/work'));
     }
     this.declaration = declaration;
+    this.collectedSynced = false;
+    this.recordsActionUrl = recordsActionUrl;
     // Null only where a caller builds a loop by hand; run() always passes the gate.
     this.sandboxDeny = sandboxDeny;
     this.channel = channel;
@@ -797,6 +802,25 @@ export class ReleaseLoop<S = Session> {
     return summary;
   }
 
+  async syncCollected(captured: MessageRecord[]) {
+    if (this.declaration.records?.enabled !== true) return;
+    const candidates = this.collectedSynced ? captured : this.store.rebuild();
+    for (const record of candidates) {
+      if (record.direction !== 'inbound' || record.historical
+        || !/^[a-z][a-z0-9_-]{0,63}$/.test(record.source)) continue;
+      let unit: string;
+      try { unit = unitIdFor(this.declaration, record); }
+      catch (error) {
+        if (!(error instanceof RuntimeFault)) throw error;
+        this.log({ event: 'records.collect.skipped', message_id: record.message_id, faults: error.faults });
+        continue;
+      }
+      await recordCollectedEvent({ source_id: record.message_id, channel: record.source, unit },
+        { baseUrl: this.recordsActionUrl });
+    }
+    this.collectedSynced = true;
+  }
+
   // ---- capture ------------------------------------------------------------
 
   capture(items: unknown) {
@@ -963,6 +987,7 @@ export class ReleaseLoop<S = Session> {
     const threadId = await this.threadFor(unitId);
     if (this.holdFaults.length > 0) return null;
     if ((await this.checkProviderProxy()).length > 0) return null;
+    await this.syncCollected(records);
     const typing = startTyping({
       adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
     });
@@ -1283,7 +1308,8 @@ export class ReleaseLoop<S = Session> {
     for (const record of this.store.rebuild()) {
       if (record.direction !== 'outbound' || record.delivery?.status !== 'sent'
         || !record.delivery.action_claim || record.adapter_fields?.action_recorded_at) continue;
-      await recordSentAction(this.store, record, { now: () => new Date(this.now()) });
+      await recordSentAction(this.store, record,
+        { now: () => new Date(this.now()), actionUrl: this.recordsActionUrl });
     }
     for (const record of this.store.rebuild()) {
       if (record.direction !== 'outbound') continue;
@@ -1307,7 +1333,7 @@ export class ReleaseLoop<S = Session> {
       if (outcome.status === 'sent') {
         const confirmed = this.store.markSent(record.delivery!.request_id, outcome.chunk_ids ?? []);
         if (confirmed.delivery?.action_claim) await recordSentAction(this.store, confirmed,
-          { now: () => new Date(this.now()) });
+          { now: () => new Date(this.now()), actionUrl: this.recordsActionUrl });
       }
       else if (outcome.status === 'unknown') this.store.markUnknown(record.delivery!.request_id); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
       else this.store.markFailed(record.delivery!.request_id); // The preceding filter or status check established delivery; preserve direct access to its stored fields.

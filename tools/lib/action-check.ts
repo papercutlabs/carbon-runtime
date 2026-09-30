@@ -113,3 +113,11 @@ export async function reconcileAbsentAction(claim: Claimed, sourceId: string, {
   return post('/reconcile-absent', { job: claim.job, step: claim.step,
     action_id: claim.action_id, source_id: sourceId }, baseUrl, doFetch);
 }
+
+// The runtime or a mapped client-read tool calls this after it has captured a
+// fact. The model cannot create a collected receipt through the MCP surface.
+export async function recordCollectedEvent(input: { source_id: string; channel: string; unit: string }, {
+  baseUrl = RECORDS_ACTION_URL, doFetch = fetch
+}: { baseUrl?: string; doFetch?: typeof fetch } = {}) {
+  return post('/collect', input, baseUrl, doFetch);
+}
