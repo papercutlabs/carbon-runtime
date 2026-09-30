@@ -298,8 +298,10 @@ export async function run<S extends Session>(options: RunOptions<S>) {
   };
 
   // PA-322: a stop is a drain. On SIGTERM, which is what `systemctl stop` sends
-  // this process alone under KillMode=mixed, or on SIGINT, no new pass starts,
-  // the pass already running finishes with its turn and its delivery, the sleep
+  // this process alone under KillMode=mixed, or on SIGINT, no new pass or
+  // release starts, the release in progress finishes with its turns, and the
+  // pass delivers what it has before it ends. A conversation the pass had not
+  // yet released stays captured and is released after the restart. The sleep
   // between passes ends at once, and the run returns through the `finally` like
   // any other ending, so stop() closes what it always closes and the exit is 0.
   // Without a handler Node dies on the signal: the `finally` never runs, the turn
@@ -398,6 +400,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
         afterTurn: () => { providerAccount.request('turn'); },
+        // A drain finishes the release in progress and starts no other.
+        stopping: () => draining.signal !== null,
         // The provider proxy's port probe (PA-259). Without one the loop holds release.
         probe: answers
       });

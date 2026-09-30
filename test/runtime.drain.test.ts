@@ -16,7 +16,7 @@ import { EXIT } from '../runtime/faults.ts';
 import { lockFile } from '../runtime/lock.ts';
 import { Store } from '../stream/store.ts';
 import { fakeHarness } from './fake-harness.ts';
-import { ACCOUNT, ITEM, placed } from './fixtures/drain-runner.ts';
+import { ACCOUNT, ITEM, SECOND, answer, placed } from './fixtures/drain-runner.ts';
 
 const RUNNER = path.join(import.meta.dirname, 'fixtures', 'drain-runner.ts');
 
@@ -27,7 +27,7 @@ function tmp(name: string) {
 }
 
 // Starts the runner and reads its JSON lines as they come.
-function start(dir: string, mode: 'idle' | 'turn') {
+function start(dir: string, mode: 'idle' | 'turn' | 'two') {
   const child = spawn(process.execPath, [RUNNER, dir, mode], { stdio: ['ignore', 'pipe', 'pipe'] });
   const lines: Line[] = [];
   let stderr = '';
@@ -158,4 +158,56 @@ test('SIGTERM while a turn runs lets the turn and its delivery finish, starts no
   assert.equal(Store.open(storeDir).rebuild().filter((r) => r.direction === 'outbound').length, 1);
   assert.deepEqual({ SIGTERM: process.listenerCount('SIGTERM'), SIGINT: process.listenerCount('SIGINT') }, listeners,
     'run() left its signal handlers behind');
+});
+
+test('SIGTERM during the first of two releases in a pass finishes that release, starts no other, and the restart releases the second once', async () => {
+  const dir = tmp('drain-two');
+  const storeDir = path.join(dir, 'store');
+  const runner = start(dir, 'two');
+  const first = await runner.waitFor(fixtureLine('turn.started'));
+  assert.ok(first, `the first turn never started: ${runner.stderr()}`);
+
+  runner.child.kill('SIGTERM');
+  const signalled = await runner.waitFor(eventLine('drain.signal'), 5000);
+  if (!signalled) assert.fail(`the process did not drain on SIGTERM; it exited ${JSON.stringify(await runner.ended())}`);
+  // From here every turn may answer at once, so a second release that started
+  // would run to completion and be seen.
+  fs.writeFileSync(path.join(dir, 'go'), '');
+  const exit = await runner.ended();
+
+  assert.deepEqual({ code: exit.code, signal: exit.signal }, { code: EXIT.OK, signal: null }, runner.stderr());
+  const started = runner.lines.filter(fixtureLine('turn.started')).map((line) => line.release_id);
+  assert.deepEqual(started, [first.release_id], 'a release started after the signal');
+  assert.deepEqual(runner.lines.filter(eventLine('deliver')).map((line) => [line.request_id, line.status]),
+    [[first.release_id, 'sent']]);
+
+  const records = Store.open(storeDir).rebuild();
+  const inboundIn = (conversation: string) => records.filter((r) => r.direction === 'inbound' && r.conversation_id === `${ACCOUNT}:${conversation}`);
+  assert.equal(inboundIn('c1')[0].release?.turn_id, first.release_id);
+  assert.ok(inboundIn('c1')[0].release?.completed_at, 'the first release was left open');
+  assert.equal(inboundIn('c2').length, 1, 'the second message was not captured');
+  assert.equal(inboundIn('c2')[0].release, undefined, 'the second conversation was released');
+
+  // The restart releases the second conversation, once, and nothing else.
+  const harness = fakeHarness({
+    statuses: () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }],
+    onTurn: (_session, params) => { answer(storeDir, params.clientUserMessageId); return 'completed'; }
+  });
+  const code = await run({
+    ...placed(dir, 10),
+    replyPort: 20000 + Math.floor(Math.random() * 20000),
+    harness,
+    items: () => [ITEM, SECOND],
+    passes: 1,
+    log: () => {}
+  });
+  assert.equal(code, EXIT.OK);
+  assert.equal(harness.session.turns.length, 1, 'the restart did not take exactly one turn');
+  const after = Store.open(storeDir).rebuild();
+  const second = after.find((r) => r.direction === 'inbound' && r.conversation_id === `${ACCOUNT}:c2`);
+  assert.equal(harness.session.turns[0].clientUserMessageId, second?.release?.turn_id);
+  assert.ok(second?.release?.completed_at, 'the second release was left open');
+  const outbound = after.filter((r) => r.direction === 'outbound');
+  assert.deepEqual(outbound.map((r) => [r.conversation_id, r.delivery?.status]).sort(),
+    [[`${ACCOUNT}:c1`, 'sent'], [`${ACCOUNT}:c2`, 'sent']]);
 });

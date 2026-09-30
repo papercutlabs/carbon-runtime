@@ -7,6 +7,8 @@
 //
 //   node test/fixtures/drain-runner.ts <dir> idle   no item; the loop sleeps 60 s between passes
 //   node test/fixtures/drain-runner.ts <dir> turn   one item, whose turn waits for <dir>/go to exist
+//   node test/fixtures/drain-runner.ts <dir> two    two conversations, one item each, both eligible in
+//                                                   the first pass; every turn waits for <dir>/go
 //
 // Every line on stdout is JSON: the runtime's own log lines, and this file's
 // lines, which carry `fixture` rather than `event`, so the test can see when a
@@ -24,6 +26,17 @@ import * as fixture from '../../adapters/fixture/index.ts';
 export const AGENT = 'test-agent';
 export const ACCOUNT = 'account-1';
 export const ITEM = { conversation: 'c1', id: '1', position: '0001', at: '2026-09-10T10:01:00.000Z', sender: 'contact-1', text: 'hello' };
+export const SECOND = { conversation: 'c2', id: '2', position: '0002', at: '2026-09-10T10:02:00.000Z', sender: 'contact-2', text: 'hello too' };
+
+// The model's answer to a release, through the reply tool's own handler, in the
+// conversation the release was taken in, as a model calling the tool would.
+export function answer(storeDir: string, releaseId: string) {
+  const store = Store.open(storeDir);
+  const released = store.rebuild().find((r) => r.direction === 'inbound' && r.release?.turn_id === releaseId);
+  replyHandler({ store, agent: AGENT })({
+    conversation_id: released?.conversation_id, request_id: releaseId, text: 'the answer'
+  });
+}
 
 export function declarationFor(pollIntervalMs: number) {
   return {
@@ -70,20 +83,17 @@ export function placed(dir: string, pollIntervalMs: number) {
 
 async function main(dir: string, mode: string) {
   const say = (line: Record<string, unknown>) => process.stdout.write(JSON.stringify(line) + '\n');
-  const turn = mode === 'turn';
+  const turn = mode === 'turn' || mode === 'two';
   const where = placed(dir, turn ? 10 : 60000);
   const go = path.join(dir, 'go');
   const harness = fakeHarness({
     statuses: () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }],
-    // The model's part: wait until the test says go, then answer through the
-    // reply tool's own handler, as a model calling the tool would.
+    // The model's part: wait until the test says go, then answer.
     onTurn: async (_session, params) => {
       say({ fixture: 'turn.started', release_id: params.clientUserMessageId });
       const deadline = Date.now() + 20000;
       while (!fs.existsSync(go) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-      replyHandler({ store: Store.open(where.storeDir), agent: AGENT })({
-        conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer'
-      });
+      answer(where.storeDir, params.clientUserMessageId);
       say({ fixture: 'turn.answered', release_id: params.clientUserMessageId });
       return 'completed';
     }
@@ -94,7 +104,7 @@ async function main(dir: string, mode: string) {
     ...where,
     replyPort: 20000 + Math.floor(Math.random() * 20000),
     harness,
-    items: () => { say({ fixture: 'items' }); return turn ? [ITEM] : []; },
+    items: () => { say({ fixture: 'items' }); return mode === 'two' ? [ITEM, SECOND] : turn ? [ITEM] : []; },
     log: say
   });
   say({ fixture: 'returned', code });
