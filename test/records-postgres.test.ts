@@ -66,12 +66,31 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     command(pg('pg_ctl'), ['-D', data, '-l', path.join(tmp, 'postgres.log'), '-o', `-k ${socket} -c listen_addresses=`, 'start']);
     started = true;
     const psql = (db: string, statement: string) => command(pg('psql'), ['-X', '-v', 'ON_ERROR_STOP=1', '-h', socket, '-d', db, '-c', statement]);
+    const scalar = (db: string, statement: string) => command(pg('psql'),
+      ['-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-h', socket, '-d', db, '-c', statement]).trim();
     psql('postgres', 'CREATE ROLE carbon_owner LOGIN; CREATE ROLE carbon_read LOGIN; CREATE ROLE carbon_write LOGIN; CREATE ROLE carbon_backup LOGIN; GRANT pg_read_all_data TO carbon_backup;');
     psql('postgres', 'CREATE DATABASE carbon_test OWNER carbon_owner;');
     psql('carbon_test', 'CREATE SCHEMA carbon AUTHORIZATION carbon_owner; GRANT CONNECT ON DATABASE carbon_test TO carbon_read, carbon_write, carbon_backup;');
+    // Bootstrap creates this guard as postgres, while migration runs as carbon_owner.
+    psql('carbon_test', `CREATE FUNCTION carbon.refuse_drop() RETURNS event_trigger
+      LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$BEGIN NULL; END$$;
+      REVOKE ALL ON FUNCTION carbon.refuse_drop() FROM PUBLIC`);
+    psql('carbon_test', `CREATE FUNCTION public.owner_probe() RETURNS integer
+      LANGUAGE sql AS $$SELECT 1$$;
+      ALTER FUNCTION public.owner_probe() OWNER TO carbon_owner`);
+    assert.equal(scalar('carbon_test',
+      "SELECT has_function_privilege('carbon_read', 'public.owner_probe()', 'EXECUTE')"), 't');
     const first = await migrateRecords(repo, 'carbon_test', 'test-release', socket);
     assert.deepEqual(first.applied, ['0001-notes.sql']);
     assert.deepEqual(first.installed, [{ sop: 'demo', version: '1' }]);
+    assert.equal(scalar('carbon_test',
+      "SELECT has_function_privilege('carbon_read', 'public.owner_probe()', 'EXECUTE')"), 'f');
+    assert.equal(scalar('carbon_test',
+      "SELECT has_function_privilege('carbon_read', 'carbon.refuse_drop()', 'EXECUTE')"), 'f');
+    psql('carbon_test', `CREATE FUNCTION public.exposed() RETURNS integer LANGUAGE sql AS $$SELECT 1$$`);
+    await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release', socket),
+      /non-owned routine public.exposed\(\) grants execution/);
+    psql('carbon_test', 'DROP FUNCTION public.exposed()');
     const second = await migrateRecords(repo, 'carbon_test', 'test-release', socket);
     assert.equal(second.unchanged, true);
     const read = await readStatement('carbon_test', 'SELECT sop, sop_version FROM jobs_demo', socket);

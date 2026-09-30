@@ -17,6 +17,36 @@ const jobTables = (sop: string) => {
   return { jobs: `jobs_${suffix}`, events: `job_events_${suffix}` };
 };
 
+// Bootstrap also keeps its postgres-owned DROP guard in carbon. The migration
+// login can revoke only privileges on routines it owns; bootstrap has already
+// revoked PUBLIC execution on its guard.
+async function revokePublicOnOwnedRoutines(tx: AnySql) {
+  await tx.unsafe(`DO $carbon$
+    DECLARE routine record;
+    BEGIN
+      FOR routine IN
+        SELECT format('%I.%I(%s)', n.nspname, p.proname,
+          pg_get_function_identity_arguments(p.oid)) AS signature
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname IN ('public', 'carbon')
+          AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+      LOOP
+        EXECUTE 'REVOKE ALL ON ROUTINE ' || routine.signature || ' FROM PUBLIC';
+      END LOOP;
+    END $carbon$`);
+  const exposed = await tx.unsafe(`SELECT format('%I.%I(%s)', n.nspname, p.proname,
+      pg_get_function_identity_arguments(p.oid)) AS signature
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname IN ('public', 'carbon')
+      AND p.proowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
+      AND (has_function_privilege('carbon_read', p.oid, 'EXECUTE')
+        OR has_function_privilege('carbon_write', p.oid, 'EXECUTE')
+        OR has_function_privilege('carbon_owner', p.oid, 'EXECUTE')
+        OR has_function_privilege('carbon_backup', p.oid, 'EXECUTE'))
+    LIMIT 1`);
+  if (exposed.length) migrationRefused(`non-owned routine ${exposed[0].signature} grants execution to a Carbon login`);
+}
+
 async function ensureCore(db: AnySql) {
   await db.begin(async (tx: AnySql) => {
     await tx.unsafe(`CREATE TABLE IF NOT EXISTS carbon.migrations (
@@ -55,7 +85,7 @@ async function ensureCore(db: AnySql) {
         RETURN NEW;
       END $function$`);
     await tx.unsafe(`REVOKE ALL ON FUNCTION carbon.log_change() FROM PUBLIC`);
-    await tx.unsafe(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA carbon FROM PUBLIC`);
+    await revokePublicOnOwnedRoutines(tx);
     await tx.unsafe(`GRANT USAGE ON SCHEMA public, carbon TO carbon_read, carbon_write`);
     await tx.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA carbon TO carbon_read, carbon_write`);
     await tx.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE carbon_owner IN SCHEMA carbon
@@ -80,7 +110,7 @@ async function catalogGuard(tx: AnySql, described: Set<string>) {
       migrationRefused(`public.${table.relname} enables row-level security, so backup cannot read every row`);
     }
   }
-  await tx.unsafe(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public, carbon FROM PUBLIC`);
+  await revokePublicOnOwnedRoutines(tx);
   const callable = await tx.unsafe(`SELECT n.nspname, p.proname FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND p.prosecdef
