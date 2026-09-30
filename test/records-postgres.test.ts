@@ -242,6 +242,27 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       await assert.rejects(() => writeStatement('carbon_test',
         'COMMIT; UPDATE notes SET body = \'escaped\'', 'message-3', 1, socket), /multiple commands/);
     } finally { await db.end({ timeout: 2 }); }
+    const asRole = (role: string, sql: string) => spawnSync(pg('psql'),
+      ['-X', '-v', 'ON_ERROR_STOP=1', '-h', socket, '-U', role, '-d', 'carbon_test', '-c', sql],
+      { encoding: 'utf8', timeout: 15000 });
+    assert.equal(asRole('carbon_backup', 'SELECT count(*) FROM notes').status, 0);
+    assert.equal(asRole('carbon_backup', 'SELECT last_value FROM notes_id_seq').status, 0);
+    for (const sql of ["INSERT INTO notes(body) VALUES ('forbidden')",
+      "UPDATE notes SET body = 'forbidden'", 'DELETE FROM notes', 'TRUNCATE notes',
+      'CREATE TABLE forbidden(id int)', "SELECT setval('notes_id_seq', 9)"]) {
+      const result = asRole('carbon_backup', sql);
+      assert.notEqual(result.status, 0, `${sql} must be refused for backup`);
+      assert.match(result.stderr, /permission denied|must be owner/);
+    }
+    for (const sql of ['DELETE FROM notes', 'TRUNCATE notes',
+      'UPDATE carbon.changes SET login = \'forbidden\'']) {
+      const result = asRole('carbon_write', sql);
+      assert.notEqual(result.status, 0, `${sql} must be refused for write login`);
+      assert.match(result.stderr, /permission denied/);
+    }
+    const readMutation = asRole('carbon_read', "INSERT INTO notes(body) VALUES ('forbidden')");
+    assert.notEqual(readMutation.status, 0);
+    assert.match(readMutation.stderr, /permission denied/);
     const changed = path.join(repo, 'records', 'migrations', '0001-notes.sql');
     fs.appendFileSync(changed, '\nALTER TABLE notes ADD COLUMN later text;');
     await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-2', socket), /changed/);
