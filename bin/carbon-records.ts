@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { checkRecords } from '../records/check.ts';
 import { readStatement } from '../records/db.ts';
 import { migrateRecords } from '../records/migrate.ts';
+import { installedJob, installedSop, renderCard, renderDiagram, viewParity } from '../records/views.ts';
 
 const HELP = `carbon-records — validate and use one agent's records
 
@@ -9,6 +10,9 @@ Usage:
   carbon-records check <client repository>
   carbon-records migrate --repo <client repository> --database <agent database> --install-digest <digest>
   carbon-records read --database <agent database>  (one SQL statement on stdin)
+  carbon-records diagram <sop> --database <agent database>
+  carbon-records card <job> --database <agent database>
+  carbon-records parity <job> --database <agent database>
 
 The check runs offline and names every structural refusal. The read connects over
 the local PostgreSQL socket as carbon_read, runs one statement in a read-only
@@ -44,6 +48,22 @@ async function main(args: string[]): Promise<number> {
     && args[5] === '--install-digest' && args.length === 7) {
     console.log(JSON.stringify(await migrateRecords(args[2], args[4], args[6])));
     return 0;
+  }
+  if (args.length === 4 && args[2] === '--database') {
+    if (args[0] === 'diagram') {
+      console.log(renderDiagram(await installedSop(args[3], args[1])));
+      return 0;
+    }
+    if (args[0] === 'card' || args[0] === 'parity') {
+      const { job, sop } = await installedJob(args[3], args[1]);
+      if (args[0] === 'card') console.log(renderCard(job, sop));
+      else {
+        const result = viewParity(job, sop);
+        console.log(JSON.stringify(result));
+        return result.ok ? 0 : 1;
+      }
+      return 0;
+    }
   }
   console.error(JSON.stringify({ code: 'RECORDS_ARGUMENTS', problem: 'run carbon-records --help' }));
   return 1;

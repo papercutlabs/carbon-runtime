@@ -9,6 +9,7 @@ import { migrateRecords } from '../records/migrate.ts';
 import { readStatement, recordsDb, oneStatement, writeStatement } from '../records/db.ts';
 import { createJobTools } from '../records/job-tools.ts';
 import { serveRecordsTool } from '../runtime/records-tool.ts';
+import { installedJob, installedSop, renderCard, renderDiagram, viewParity } from '../records/views.ts';
 
 function command(program: string, args: string[]) {
   const result = spawnSync(program, args, { encoding: 'utf8', timeout: 15000 });
@@ -21,6 +22,8 @@ const PG17_BIN = fs.existsSync('/opt/homebrew/opt/postgresql@17/bin/pg_config')
 const pg = (name: string) => path.join(PG17_BIN, name);
 
 test('real PostgreSQL applies each migration once, protects generated tables and refuses two statements', async () => {
+  const help = command(process.execPath, [path.resolve(import.meta.dirname, '../bin/carbon-records'), '--help']);
+  for (const verb of ['diagram', 'card', 'parity']) assert.match(help, new RegExp(`carbon-records ${verb}`));
   const version = command(pg('pg_config'), ['--version']);
   assert.match(version, /^PostgreSQL 17\./, 'the integration test requires PostgreSQL 17');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-pg17-'));
@@ -76,6 +79,11 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       await assert.rejects(() => jobs.job_open('demo', 'thread-1', [], ''), /JOB_OPEN_CAUSE_INVALID/);
       const opened = await jobs.job_open('demo', 'thread-1', ['reference-1'], 'message-1');
       assert.equal(opened.sop_version, '1');
+      const installed = await installedSop('carbon_test', 'demo', socket);
+      const viewed = await installedJob('carbon_test', opened.job, socket);
+      assert.match(renderDiagram(installed), /\| work \| open \| Open \| Unsent \|/);
+      assert.match(renderCard(viewed.job, viewed.sop), /work: waiting on agent since/);
+      assert.deepEqual(viewParity(viewed.job, viewed.sop), { ok: true, faults: [], positions_checked: 1 });
       assert.equal((await jobs.job_find('reference-1')).jobs[0].job_id, opened.job);
       assert.deepEqual(await readStatement('carbon_test', 'SELECT positions FROM jobs_demo', socket),
         [{ positions: { work: 'open' } }]);
@@ -151,6 +159,12 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const rls = psql('carbon_test', "SELECT relrowsecurity FROM pg_class WHERE relname = 'notes'");
     assert.match(rls, /\bf\b/);
     fs.rmSync(hiddenRls);
+    const hiddenDisable = path.join(repo, 'records', 'migrations', '0002-disable-change-trigger.sql');
+    fs.writeFileSync(hiddenDisable,
+      "DO $$BEGIN EXECUTE 'ALTER TABLE notes DISABLE TRIGGER carbon_changes_notes'; END$$;");
+    await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-3b', socket), /no enabled Carbon change trigger/);
+    assert.match(psql('carbon_test', "SELECT tgenabled FROM pg_trigger WHERE tgname = 'carbon_changes_notes'"), /\bO\b/);
+    fs.rmSync(hiddenDisable);
     fs.writeFileSync(path.join(repo, 'records', 'migrations', '0000-too-late.sql'), 'SELECT 1;');
     await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-4', socket), /precedes an applied migration/);
   } finally {

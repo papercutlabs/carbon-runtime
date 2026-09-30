@@ -95,6 +95,19 @@ async function attachChanges(tx: AnySql, table: string) {
   }
 }
 
+async function requireChangeTriggers(tx: AnySql) {
+  const tables = await tx.unsafe(`SELECT c.relname, t.tgname, t.tgenabled
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_trigger t ON t.tgrelid = c.oid AND t.tgname = 'carbon_changes_' || c.relname
+      AND NOT t.tgisinternal
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`);
+  for (const table of tables) {
+    if (table.tgname !== `carbon_changes_${table.relname}` || !['O', 'A'].includes(table.tgenabled)) {
+      migrationRefused(`public.${table.relname} has no enabled Carbon change trigger`);
+    }
+  }
+}
+
 function forwardOnly(previous: Sop, next: Sop): { track: string; from: string; to: string }[] {
   const renames: { track: string; from: string; to: string }[] = [];
   const nextTracks = new Map(next.tracks.map((track) => [track.id, track]));
@@ -171,6 +184,7 @@ async function installSops(db: AnySql, checked: CheckedRecords, digest: string) 
       }
     }
     await catalogGuard(tx, new Set(checked.tables));
+    await requireChangeTriggers(tx);
   });
   return installed;
 }
@@ -208,6 +222,7 @@ export async function migrateRecords(repo: string, database: string, installDige
           }
         }
         await tx.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO carbon_write`);
+        await requireChangeTriggers(tx);
         await tx`INSERT INTO carbon.migrations(name, sha256, install_digest)
           VALUES (${migration.name}, ${migration.sha256}, ${installDigest})`;
       });
