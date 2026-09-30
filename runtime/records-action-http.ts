@@ -2,9 +2,12 @@ import http from 'node:http';
 import { asFaults, fault } from '../tools/lib/fault.ts';
 
 type Actions = {
-  action_begin(job: string, step: string, source_id: string, operation: string): Promise<unknown>;
-  action_bound(unit: string, operation: string, about_job: string, about_move: string, source_id: string): Promise<unknown>;
+  action_begin(job: string, step: string, source_id: string, operation: string,
+    owner: { pid: number; generation: string }): Promise<unknown>;
+  action_bound(unit: string, operation: string, about_job: string, about_move: string,
+    source_id: string, owner: { pid: number; generation: string }): Promise<unknown>;
   action_finish(job: string, step: string, source_id: string, action_id: string): Promise<unknown>;
+  action_reconcile_absent(job: string, step: string, source_id: string, action_id: string): Promise<unknown>;
 };
 const MAX_BODY = 16384;
 
@@ -22,9 +25,9 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
       send(200, { schema: 'carbon.records-action-health.v1', status: 'ready' });
       return;
     }
-    if (request.method !== 'POST' || !['/begin', '/bound', '/finish'].includes(request.url ?? '')) {
+    if (request.method !== 'POST' || !['/begin', '/bound', '/finish', '/reconcile-absent'].includes(request.url ?? '')) {
       send(404, { faults: [fault('RECORDS_ACTION_ROUTE', String(request.url),
-        'this route does not exist', 'use /begin, /bound or /finish from a mapped tool')] });
+        'this route does not exist', 'use an action route from a mapped tool')] });
       return;
     }
     const chunks: Buffer[] = [];
@@ -41,10 +44,13 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       const value = request.url === '/begin'
-        ? await actions.action_begin(body.job, body.step, body.source_id, body.operation)
+        ? await actions.action_begin(body.job, body.step, body.source_id, body.operation, body.owner)
         : request.url === '/bound'
-          ? await actions.action_bound(body.unit, body.operation, body.about_job, body.about_move, body.source_id)
-          : await actions.action_finish(body.job, body.step, body.source_id, body.action_id);
+          ? await actions.action_bound(body.unit, body.operation, body.about_job, body.about_move,
+            body.source_id, body.owner)
+          : request.url === '/finish'
+            ? await actions.action_finish(body.job, body.step, body.source_id, body.action_id)
+            : await actions.action_reconcile_absent(body.job, body.step, body.source_id, body.action_id);
       send(200, value);
     } catch (error) {
       send(409, { faults: asFaults(error) });

@@ -1,11 +1,14 @@
 import crypto from 'node:crypto';
 import { refuse } from '../tools/lib/fault.ts';
+import { processGeneration } from '../tools/lib/action-check.ts';
 import { recordsDb, oneStatement } from './db.ts';
 import { allowedIntents, applyObservation, initialPositions, legality, positionViews, stepOf,
   type Positions, type Sop } from './sop-definition.ts';
 
 type VerifyObservation = (sourceId: string, channel: string, jobId: string) => Promise<boolean>;
-type Pending = Record<string, { step: string; action_id: string; source_id: string; state: 'reserved' | 'claimed'; since: string }>;
+type Owner = { pid: number; generation: string };
+type Pending = Record<string, { step: string; action_id: string; source_id: string;
+  state: 'reserved' | 'claimed'; since: string; owner?: Owner }>;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SOURCE_ID = /^[^\s\x00-\x1f\x7f][^\x00-\x1f\x7f]{0,510}[^\s\x00-\x1f\x7f]$|^[^\s\x00-\x1f\x7f]$/;
 const identifier = (name: string) => {
@@ -127,9 +130,15 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
       return { job: id, step, allowed: verdict.legal, why: verdict.why,
         allowed_now: allowedIntents(sop, row.positions) };
     },
-    async action_begin(job: string, step: string, source_id: string, operation: string) {
+    async action_begin(job: string, step: string, source_id: string, operation: string, owner: Owner) {
       const id = jobId(job);
       const cause = sourceId(source_id);
+      if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid < 1
+        || typeof owner.generation !== 'string' || processGeneration(owner.pid) !== owner.generation) {
+        refuse('JOB_ACTION_OWNER_INVALID', String(owner?.pid),
+          'the claiming tool process generation does not match the live process',
+          'start the mapped tool from its supported service and retry before the external effect');
+      }
       if (typeof operation !== 'string' || !operation.trim()) refuse('JOB_OPERATION_INVALID', 'operation',
         'the action tool must name its own operation', 'pass the operation mapped in the installed SOP');
       return db.begin(async (tx) => {
@@ -149,7 +158,7 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
           'a prior action is pending; its external effect must be read before another claim',
           'read the client record and reconcile the pending action');
         const action = { step, action_id: crypto.randomUUID(), source_id: cause,
-          state: 'claimed' as const, since: new Date().toISOString() };
+          state: 'claimed' as const, since: new Date().toISOString(), owner };
         pending[track] = action;
         await tx`SELECT set_config('carbon.source_message_id', ${cause}, true)`;
         await tx.unsafe(`UPDATE public.${identifier(jobs)} SET pending = $1::jsonb WHERE job_id = $2`,
@@ -159,7 +168,8 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
         return { job: id, step, operation, action_id: action.action_id, status: 'claimed' };
       });
     },
-    async action_bound(unit: string, operation: string, about_job: string, about_move: string, source_id: string) {
+    async action_bound(unit: string, operation: string, about_job: string, about_move: string,
+      source_id: string, owner: Owner) {
       const cause = sourceId(source_id);
       if (typeof unit !== 'string' || !unit.trim()) refuse('JOB_UNIT_INVALID', 'unit',
         'a bound action needs the conversation unit it acts on', 'pass the captured conversation id');
@@ -190,8 +200,36 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
       if (chosen.length !== 1) refuse('JOB_ACTION_CONTEXT_MISMATCH', operation,
         `this operation maps to ${candidates.map((one) => `${one.job}:${one.step}`).join(', ')}; about_move other cannot bypass it`,
         'pass the job and move mapped by the installed SOP for this conversation');
-      const claim = await this.action_begin(about_job, about_move, cause, operation);
+      const claim = await this.action_begin(about_job, about_move, cause, operation, owner);
       return { kind: 'claimed' as const, ...claim };
+    },
+    async action_reconcile_absent(job: string, step: string, source_id: string, action_id: string) {
+      const id = jobId(job);
+      const cause = sourceId(source_id);
+      if (!JOB_ID.test(action_id)) refuse('JOB_ACTION_ID_INVALID', String(action_id),
+        'action_id must be the claim returned by the records service', 'pass the original action claim');
+      return db.begin(async (tx) => {
+        const row = await readJob(tx, id, true);
+        const pending = { ...(row.pending as Pending) };
+        const found = Object.entries(pending).find(([, item]) => item.action_id === action_id);
+        if (!found || found[1].step !== step) refuse('JOB_ACTION_CLAIM_ABSENT', step,
+          'this job has no matching pending action to reconcile', 'read the job and its pending action');
+        const [track, action] = found;
+        if (!action.owner || !Number.isSafeInteger(action.owner.pid)
+          || typeof action.owner.generation !== 'string') refuse('JOB_ACTION_OWNER_UNKNOWN', step,
+          'the original writer generation is absent', 'leave the claim pending for an operator decision');
+        if (processGeneration(action.owner.pid) === action.owner.generation) refuse('JOB_ACTION_OWNER_ACTIVE', step,
+          'the original writer process generation can still make its external effect',
+          'stop that exact writer through its supported service, read the client record again, then reconcile');
+        delete pending[track];
+        const { jobs, events } = tables(row.sop);
+        await tx`SELECT set_config('carbon.source_message_id', ${cause}, true)`;
+        await tx.unsafe(`UPDATE public.${identifier(jobs)} SET pending = $1::jsonb WHERE job_id = $2`,
+          [tx.json(pending), id], oneStatement);
+        await tx.unsafe(`INSERT INTO public.${identifier(events)} (job_id, event, kind, source_id)
+          VALUES ($1,$2,'reconciled_absent',$3)`, [id, step, cause], oneStatement);
+        return { job: id, step, action_id, status: 'reconciled_absent' };
+      });
     },
     async action_finish(job: string, step: string, source_id: string, action_id: string) {
       const id = jobId(job);
