@@ -70,6 +70,13 @@ export async function beginMappedAction(input: ActionInput, {
         'the supplied job or move contradicts the operation this tool performs',
         'pass the job bound to the target and about_move other for an operation with no SOP move')]);
     }
+    const classified = await post('/classify', { job: input.derived_job,
+      operation: input.operation }, baseUrl, doFetch);
+    if (classified.kind !== 'other') {
+      throw new ToolFault([fault('JOB_ACTION_CONTEXT_MISMATCH', input.operation,
+        `the installed SOP maps this operation to ${JSON.stringify(classified.steps)}; about_move other cannot bypass it`,
+        'use the mapped SOP move in this client tool before the external effect')]);
+    }
     return { kind: 'other' };
   }
   if (!input.derived_job || input.about_job !== input.derived_job || input.about_move !== input.derived_move) {

@@ -169,6 +169,10 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const baseUrl = `http://127.0.0.1:${served.actionPort}`;
     const mapped = { about_job: actionJobId, derived_job: actionJobId,
       derived_move: 'send', operation: 'send', source_id: 'message-action-http' };
+    await assert.rejects(() => beginMappedAction({ ...mapped, derived_move: null,
+      about_move: 'other' }, { baseUrl }), /JOB_ACTION_CONTEXT_MISMATCH/);
+    assert.deepEqual(await beginMappedAction({ ...mapped, derived_move: null,
+      operation: 'unmapped', about_move: 'other' }, { baseUrl }), { kind: 'other' });
     await assert.rejects(() => beginMappedAction({ ...mapped, about_move: 'other' }, { baseUrl }),
       /JOB_ACTION_CONTEXT_MISMATCH/);
     const claim = await beginMappedAction({ ...mapped, about_move: 'send' }, { baseUrl });

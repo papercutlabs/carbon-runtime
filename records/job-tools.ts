@@ -81,6 +81,16 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
   }
   return {
     async close() { await db.end({ timeout: 2 }); },
+    async action_classify(job: string | null, operation: string) {
+      if (typeof operation !== 'string' || !operation.trim()) refuse('JOB_OPERATION_INVALID', 'operation',
+        'the action tool must name its own operation', 'pass the operation mapped in the installed SOP');
+      if (job === null) return { kind: 'other' as const };
+      const row = await readJob(db, jobId(job));
+      const sop = await definitionFor(db, row);
+      const steps = sop.events.filter((event) => event.kind === 'intent'
+        && !event.retired && mappedAction(event, operation)).map((event) => event.id);
+      return steps.length ? { kind: 'mapped' as const, steps } : { kind: 'other' as const };
+    },
     async job_open(sop: string, unit: string, references: string[], source_message_id: string) {
       const cause = sourceId(source_message_id, 'source_message_id');
       if (typeof unit !== 'string' || !unit.trim()) refuse('JOB_UNIT_INVALID', 'unit',
