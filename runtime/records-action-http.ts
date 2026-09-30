@@ -3,7 +3,7 @@ import { asFaults, fault } from '../tools/lib/fault.ts';
 import type { TurnContext } from '../records/job-tools.ts';
 
 type Actions = {
-  action_turn_start(context: TurnContext): unknown;
+  action_turn_start(context: TurnContext, signal?: AbortSignal): unknown;
   action_turn_end(releaseId: string): unknown;
   action_collect(source_id: string, channel: string, unit: string): Promise<unknown>;
   action_classify(job: string | null, operation: string): Promise<unknown>;
@@ -23,6 +23,10 @@ const MAX_BODY = 16384;
 // sandbox, then the records service performs the owner-role transaction.
 export async function serveActionHttp(actions: Actions, port = 8733) {
   const server = http.createServer(async (request, response) => {
+    const disconnected = new AbortController();
+    response.once('close', () => {
+      if (!response.writableEnded) disconnected.abort();
+    });
     const send = (status: number, data: unknown) => {
       response.writeHead(status, { 'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store' });
@@ -52,7 +56,7 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       const routes: Record<string, () => unknown> = {
-        '/turn-start': () => actions.action_turn_start(body),
+        '/turn-start': () => actions.action_turn_start(body, disconnected.signal),
         '/turn-end': () => actions.action_turn_end(body.releaseId),
         '/collect': () => actions.action_collect(body.source_id, body.channel, body.unit),
         '/classify': () => actions.action_classify(body.job, body.operation),

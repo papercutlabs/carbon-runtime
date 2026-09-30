@@ -3,9 +3,10 @@ import path from 'node:path';
 import { createServer } from '../tools/lib/mcp.ts';
 import { readManifest } from '../tools/lib/manifest.ts';
 import { renderHelp } from '../tools/lib/help.ts';
-import { refuse } from '../tools/lib/fault.ts';
+import { fault, refuse, ToolFault } from '../tools/lib/fault.ts';
 import { readStatement, recordsDb, writeStatement } from '../records/db.ts';
 import { createJobTools, type TurnContext } from '../records/job-tools.ts';
+import { processGeneration } from '../tools/lib/action-check.ts';
 import { serveActionHttp } from './records-action-http.ts';
 
 export const RECORDS_SERVER_NAME = 'carbon-records';
@@ -32,10 +33,104 @@ function statement(value: unknown): string {
   return value as string;
 }
 
+function liveTurnOwner(owner: TurnContext['owner'] | undefined): boolean {
+  return !!owner && Number.isSafeInteger(owner.pid) && owner.pid > 0
+    && typeof owner.generation === 'string'
+    && processGeneration(owner.pid) === owner.generation;
+}
+
+function validateTurnContext(context: TurnContext, others: TurnContext[]) {
+  if (typeof context.releaseId !== 'string' || !context.releaseId.trim()
+    || typeof context.unit !== 'string' || !context.unit.trim()
+    || !Array.isArray(context.sourceIds) || context.sourceIds.length === 0
+    || context.sourceIds.some((id) => typeof id !== 'string' || !id.trim())) {
+    refuse('JOB_TURN_CONTEXT_INVALID', String(context.releaseId),
+      'the runtime supplied an incomplete work unit or cause', 'supply the captured turn context');
+  }
+  if (others.some((turn) => turn.releaseId === context.releaseId)) refuse('JOB_TURN_ACTIVE',
+    context.releaseId, 'this release already has an active or waiting records context',
+    'finish that release before starting it again');
+  if (others.some((turn) => context.sourceIds.some((id) => turn.sourceIds.includes(id)))) {
+    refuse('JOB_TURN_CONTEXT_DUPLICATE', context.releaseId,
+      'one event id cannot belong to two active turns',
+      'finish the first release before starting a second for that event');
+  }
+  if (!liveTurnOwner(context.owner)) {
+    refuse('JOB_TURN_OWNER_INVALID', context.releaseId,
+      'the runtime process generation does not match a live process',
+      'start the turn from its supported runtime unit');
+  }
+}
+
+function turnContexts() {
+  let active: TurnContext | null = null;
+  let accepting = true;
+  let ownerInspectionFailed = false;
+  type Answer = { status: 'active'; release_id: string };
+  const waiting: { context: TurnContext; resolve: (answer: Answer) => void;
+    reject: (error: unknown) => void; detach?: () => void }[] = [];
+  const advance = () => {
+    const next = waiting.shift();
+    active = next?.context ?? null;
+    if (next) { next.detach?.(); next.resolve({ status: 'active', release_id: next.context.releaseId }); }
+  };
+  const monitor = setInterval(() => {
+    if (!active) return;
+    try {
+      const generation = processGeneration(active.owner.pid);
+      ownerInspectionFailed = false;
+      if (generation !== active.owner.generation) advance();
+    } catch { ownerInspectionFailed = true; }
+  }, 1000);
+  monitor.unref();
+  return {
+    current: () => active,
+    inspectionFailed: () => ownerInspectionFailed,
+    start(context: TurnContext, signal?: AbortSignal): Promise<Answer> | Answer {
+      if (!accepting) refuse('JOB_TURN_STOPPING', context.releaseId,
+        'the records service is draining', 'retry the turn after the records service restarts');
+      validateTurnContext(context, active
+        ? [active, ...waiting.map((turn) => turn.context)]
+        : waiting.map((turn) => turn.context));
+      if (active) return new Promise<Answer>((resolve, reject) => {
+        const next = { context, resolve, reject, detach: undefined as (() => void) | undefined };
+        const cancelled = () => {
+          const index = waiting.indexOf(next);
+          if (index >= 0) waiting.splice(index, 1);
+          reject(new ToolFault([fault('JOB_TURN_CANCELLED', context.releaseId,
+            'the waiting runtime turn disconnected', 'start a new turn after the active one ends')]));
+        };
+        if (signal?.aborted) { cancelled(); return; }
+        signal?.addEventListener('abort', cancelled, { once: true });
+        next.detach = () => signal?.removeEventListener('abort', cancelled);
+        waiting.push(next);
+      });
+      active = context;
+      return { status: 'active', release_id: context.releaseId };
+    },
+    end(releaseId: string) {
+      if (!active || active.releaseId !== releaseId) refuse('JOB_TURN_CONTEXT_MISMATCH', releaseId,
+        'the active records turn has a different release id',
+        'end the release that started this records context');
+      advance();
+      return { status: 'ended', release_id: releaseId };
+    },
+    drain() {
+      accepting = false;
+      clearInterval(monitor);
+      for (const next of waiting.splice(0)) {
+        next.detach?.();
+        next.reject(new ToolFault([fault('JOB_TURN_STOPPING', next.context.releaseId,
+          'the records service is draining',
+          'retry the turn after the records service restarts')]));
+      }
+    }
+  };
+}
+
 function createRecordsServer(database: string, verifyObservation: VerifyObservation, socketDir?: string) {
-  const activeTurns = new Map<string, TurnContext>();
-  const jobs = createJobTools(database, verifyObservation, socketDir,
-    (cause) => [...activeTurns.values()].find((turn) => turn.sourceIds.includes(cause)) ?? null);
+  const turn = turnContexts();
+  const jobs = createJobTools(database, verifyObservation, socketDir, turn.current);
   const server = createServer({
     manifest: MANIFEST,
     handlers: {
@@ -58,30 +153,7 @@ function createRecordsServer(database: string, verifyObservation: VerifyObservat
         args.kind as 'intent' | 'observation', args.source_id as string)
     }
   });
-  return { server, jobs, turn: {
-    start(context: TurnContext) {
-      if (activeTurns.has(context.releaseId)) refuse('JOB_TURN_ACTIVE', context.releaseId,
-        'this release already holds a records turn context', 'finish that release before starting it again');
-      if (typeof context.releaseId !== 'string' || !context.releaseId.trim()
-        || typeof context.unit !== 'string' || !context.unit.trim()
-        || !Array.isArray(context.sourceIds) || context.sourceIds.length === 0
-        || context.sourceIds.some((id) => typeof id !== 'string' || !id.trim())) {
-        refuse('JOB_TURN_CONTEXT_INVALID', String(context.releaseId),
-          'the runtime supplied an incomplete work unit or cause', 'supply the captured turn context');
-      }
-      if ([...activeTurns.values()].some((turn) =>
-        context.sourceIds.some((id) => turn.sourceIds.includes(id)))) refuse('JOB_TURN_CONTEXT_DUPLICATE',
-          context.releaseId, 'one event id cannot belong to two active turns',
-          'finish the first release before starting a second for that event');
-      activeTurns.set(context.releaseId, context);
-      return { status: 'active', release_id: context.releaseId };
-    },
-    end(releaseId: string) {
-      if (!activeTurns.delete(releaseId)) refuse('JOB_TURN_CONTEXT_MISMATCH', releaseId,
-        'no active records turn has this release id', 'end the release that started this records context');
-      return { status: 'ended', release_id: releaseId };
-    }
-  } };
+  return { server, jobs, turn };
 }
 
 function drainReceipt(file: string, invocationId: string | null, agentId: string) {
@@ -111,10 +183,10 @@ export async function serveRecordsTool({ database, agentId, agentDir, verifyObse
   const invocationId = process.env.INVOCATION_ID ?? null;
   const { server: http, url } = await server.serveHttp({ host, port,
     health: () => ({ schema: 'carbon.records-health.v1', status, agent_id: agentId,
-      invocation_id: invocationId }) });
+      invocation_id: invocationId, turn_owner_inspection_failed: turn.inspectionFailed() }) });
   let actionHttp: Awaited<ReturnType<typeof serveActionHttp>>;
   try { actionHttp = await serveActionHttp({ ...jobs,
-    action_turn_start: (context) => turn.start(context),
+    action_turn_start: (context, signal) => turn.start(context, signal),
     action_turn_end: (releaseId) => turn.end(releaseId)
   }, actionPort); }
   catch (error) { await new Promise<void>((resolve) => http.close(() => resolve())); await jobs.close(); throw error; }
@@ -122,6 +194,7 @@ export async function serveRecordsTool({ database, agentId, agentDir, verifyObse
   function stop() {
     if (stopPromise) return stopPromise;
     status = 'draining';
+    turn.drain();
     stopPromise = (async () => {
       await Promise.all([
         new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve())),
@@ -133,7 +206,9 @@ export async function serveRecordsTool({ database, agentId, agentDir, verifyObse
     })();
     return stopPromise;
   }
-  return { url, actionPort: actionHttp.port, stop, health: () => ({ status, agentId, invocationId }), http };
+  return { url, actionPort: actionHttp.port, stop, health: () => ({
+    status, agentId, invocationId, turnOwnerInspectionFailed: turn.inspectionFailed()
+  }), http };
 }
 
 if (process.argv[1] === import.meta.filename) {

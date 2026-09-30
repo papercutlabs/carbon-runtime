@@ -726,6 +726,10 @@ test('enabled records refuse an unrendered server and hold while a rendered serv
     onTurn: (s) => answering(s),
     statuses: () => status, recordsActionUrl
   });
+  const admissionWaits: number[] = [];
+  loop.log = (line) => {
+    if (line.event === 'records.turn.admission') admissionWaits.push(line.waited_ms as number);
+  };
   const down = await loop.pass([item(1, 'open a job')]);
   assert.deepEqual(down.released, []);
   assert.equal(harness.session.turns.length, 0);
@@ -736,6 +740,8 @@ test('enabled records refuse an unrendered server and hold while a rendered serv
   const ready = await loop.pass([]);
   assert.equal(ready.released.length, 1);
   assert.equal(harness.session.turns.length, 1);
+  assert.equal(admissionWaits.length, 1);
+  assert.ok(Number.isFinite(admissionWaits[0]) && admissionWaits[0] >= 0);
   const started = calls.find((call) => call.route === '/turn-start');
   assert.ok(started);
   assert.equal(started.body.unit, 'account-1:c1');

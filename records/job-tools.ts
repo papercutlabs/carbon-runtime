@@ -7,7 +7,8 @@ import { allowedIntents, applyObservation, initialPositions, legality, positionV
 
 type VerifyObservation = (sourceId: string, channel: string, jobId: string) => Promise<boolean>;
 type Owner = { pid: number; generation: string };
-export type TurnContext = { releaseId: string; unit: string; sourceIds: string[] };
+export type TurnContext = { releaseId: string; unit: string; sourceIds: string[];
+  owner: { pid: number; generation: string } };
 type Pending = Record<string, { step: string; action_id: string; source_id: string;
   state: 'reserved' | 'claimed'; since: string; owner?: Owner }>;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

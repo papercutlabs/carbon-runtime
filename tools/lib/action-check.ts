@@ -61,7 +61,7 @@ async function post(route: string, body: unknown, baseUrl: string, doFetch: type
 export async function beginRecordsTurn(input: { releaseId: string; unit: string; sourceIds: string[] }, {
   baseUrl = RECORDS_ACTION_URL, doFetch = fetch
 }: { baseUrl?: string; doFetch?: typeof fetch } = {}) {
-  return post('/turn-start', input, baseUrl, doFetch);
+  return post('/turn-start', { ...input, owner: owner() }, baseUrl, doFetch);
 }
 
 export async function endRecordsTurn(releaseId: string, {

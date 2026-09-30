@@ -1031,8 +1031,11 @@ export class ReleaseLoop<S = Session> {
     });
 
     if (this.declaration.records?.enabled === true) {
+      const admissionStarted = performance.now();
       await beginRecordsTurn({ releaseId, unit: unitId, sourceIds: messageIds },
         { baseUrl: this.recordsActionUrl });
+      this.log({ event: 'records.turn.admission', release_id: releaseId,
+        waited_ms: Math.round(performance.now() - admissionStarted) });
     }
     let taken: Awaited<ReturnType<typeof this.takeTurn>>;
     try {
