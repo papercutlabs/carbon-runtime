@@ -648,6 +648,35 @@ test('an app-server listing a tool server nobody declared still ends the process
   );
 });
 
+test('enabled records refuse an unrendered server and hold while a rendered server is down', async () => {
+  let status: Status[] = REPLY_LISTED();
+  const absentInstance = makeLoop({
+    decl: declaration({ records: { enabled: true } }),
+    onTurn: (s) => answering(s),
+    statuses: () => status
+  });
+  await assert.rejects(() => absentInstance.loop.pass([item(1, 'open a job')]),
+    (error) => (error as RuntimeFault).faults.some((f) => f.code === 'TOOL_SERVER_NOT_LISTED' && f.subject === 'carbon-records'));
+  assert.equal(absentInstance.harness.session.turns.length, 0);
+
+  status = [...REPLY_LISTED(), { name: 'carbon-records', runtimeStatus: 'disconnected' }];
+  const { loop, harness } = makeLoop({
+    decl: declaration({ records: { enabled: true } }),
+    onTurn: (s) => answering(s),
+    statuses: () => status
+  });
+  const down = await loop.pass([item(1, 'open a job')]);
+  assert.deepEqual(down.released, []);
+  assert.equal(harness.session.turns.length, 0);
+  assert.ok(down.holding.includes('tool_servers.carbon-records'));
+
+  status = [...REPLY_LISTED(), { name: 'carbon-records', runtimeStatus: 'connected' }];
+  loop.toolStatusStale = true;
+  const ready = await loop.pass([]);
+  assert.equal(ready.released.length, 1);
+  assert.equal(harness.session.turns.length, 1);
+});
+
 // ---- a completed turn is not an answered message -------------------------
 
 // The first real message on a box was answered well and delivered nothing: the

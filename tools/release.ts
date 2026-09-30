@@ -14,13 +14,13 @@
 //
 // The tarball carries `node_modules`, installed here rather than on the box. A
 // box has no git, no registry credential and, under the host contract, no reason
-// to reach a package registry at all; a runtime whose one dependency is missing
+// to reach a package registry at all; a runtime whose dependency is missing
 // is a WhatsApp channel that cannot start, which is exactly what an install of
 // the first tarball produced.
 //
 // One tarball serves every architecture, and that is a fact about this
-// dependency rather than a decision we are free to make. The only dependency is
-// the WhatsApp library; the only piece of its tree that varies by architecture
+// dependencies rather than a decision we are free to make. The only piece of
+// the WhatsApp library's tree that varies by architecture
 // is `sharp`, which it names as a peer and which our adapters never call, since
 // we send text and build no image thumbnails. Installed with `--os=linux` and no
 // `--libc`, npm resolves `sharp` to its WebAssembly build, which carries no
@@ -49,7 +49,7 @@ const SHIPPED = [
   // import. `tools/lib` ships and the rest of `tools/` does not: the MCP
   // scaffold is code the reply tool runs, and the identifier scan and the
   // release builder are not.
-  'runtime', 'harness', 'lib', 'tools/lib'
+  'runtime', 'harness', 'lib', 'records', 'tools/lib'
 ];
 
 function main(argv: string[]): number {
@@ -68,8 +68,8 @@ tests, the workflow, the rest of tools/, and anything git leaves behind. The
 tarball is built from what git has, so a dirty checkout is refused: a release
 names a commit.
 
-One tarball runs on every architecture. The one dependency is the WhatsApp
-library; the only part of its tree that varies by architecture is a package our
+One tarball runs on every architecture. The WhatsApp library's only
+architecture-dependent peer is a package our
 adapters never call, and without --libc npm resolves it to its WebAssembly
 build, which carries no native binary.`);
     return 0;

@@ -4,14 +4,14 @@ on: [push, pull_request]
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      # The one runtime dependency is the WhatsApp library, pinned exactly.
+      # The runtime libraries are pinned exactly.
       # TypeScript is installed for checking only. Installing from the lockfile
       # proves both pins resolve, and --ignore-scripts keeps package hooks out.
       - name: install pinned runtime and check dependencies
@@ -26,11 +26,11 @@ jobs:
             const pkg = require("./package.json");
             const declared = pkg.dependencies ?? {};
             const names = Object.keys(declared);
-            if (names.length !== 1 || names[0] !== "@whiskeysockets/baileys") {
-              throw new Error("this repository has exactly one runtime dependency and it is the WhatsApp library");
+            if (JSON.stringify(names.sort()) !== JSON.stringify(["@whiskeysockets/baileys", "postgres"].sort())) {
+              throw new Error("this release names the WhatsApp library and PostgreSQL client");
             }
-            if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(declared[names[0]])) {
-              throw new Error("the dependency is pinned to an exact version, with no range");
+            for (const name of names) if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(declared[name])) {
+              throw new Error(`${name} is not pinned to an exact version`);
             }
             const dev = pkg.devDependencies ?? {};
             if (Object.keys(dev).length !== 1 || Object.keys(dev)[0] !== "typescript"
@@ -45,6 +45,17 @@ jobs:
             const tests = require("node:fs").readdirSync("test").filter((name) => name.endsWith(".test.mjs") || name.endsWith(".test.ts"));
             if (tests.length === 0) throw new Error("the node --test glob found no test modules");
           '
+
+      - name: install pinned PostgreSQL 17 for records integration tests
+        run: |
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o "$RUNNER_TEMP/pgdg.asc"
+          echo "0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76  $RUNNER_TEMP/pgdg.asc" | sha256sum -c -
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          sudo install -m 0644 "$RUNNER_TEMP/pgdg.asc" /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          printf 'Types: deb\nURIs: https://apt.postgresql.org/pub/repos/apt\nSuites: noble-pgdg\nComponents: main\nSigned-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc\n' | sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends postgresql-17=17.11-1.pgdg24.04+2 postgresql-client-17=17.11-1.pgdg24.04+2
+          /usr/lib/postgresql/17/bin/pg_config --version | grep -q '^PostgreSQL 17.11$'
 
       - name: node --test
         run: npm test
@@ -113,4 +124,6 @@ jobs:
           node -e 'import("@whiskeysockets/baileys").then((m) => {
             if (typeof m.makeWASocket !== "function") throw new Error("the tarball carries a WhatsApp library that does not load");
           })'
+          node -e 'import("postgres").then((m) => { if (typeof m.default !== "function") throw new Error("the PostgreSQL client does not load") })'
           node bin/carbon-runtime --help > /dev/null
+          node bin/carbon-records --help > /dev/null

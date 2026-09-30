@@ -43,6 +43,7 @@ import { listTeachings, teachingsUnderRelease } from '../stream/teachings.ts';
 import { latch } from './latch.ts';
 import { REPLY_SERVER_NAME } from './reply-tool.ts';
 import { TEACH_SERVER_NAME } from './teach-tool.ts';
+import { RECORDS_SERVER_NAME } from './records-tool.ts';
 import { conversationKindOf } from './channel.ts';
 // The recorder runs beside the loops rather than in one: the runtime process
 // makes one and every loop's after-turn hook asks it for a read. It is reached
@@ -668,7 +669,8 @@ export class ReleaseLoop<S = Session> {
       // declaration check refuses any other.
       ...(this.declaration.tool_servers ?? []).filter((s) => s.name !== this.declaration.provider?.api_key_via).map((s) => s.name),
       REPLY_SERVER_NAME,
-      ...(this.declaration.teaching?.enabled === true ? [TEACH_SERVER_NAME] : [])
+      ...(this.declaration.teaching?.enabled === true ? [TEACH_SERVER_NAME] : []),
+      ...(this.declaration.records?.enabled === true ? [RECORDS_SERVER_NAME] : [])
     ]);
     const listed = new Set(statuses.map((s) => s.name));
     const faults = [];

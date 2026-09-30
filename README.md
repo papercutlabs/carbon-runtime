@@ -312,14 +312,13 @@ workflow, no tools. It publishes nothing.
 
 ## The runtime dependency
 
-Node 22, ES modules, and exactly one runtime dependency:
-`@whiskeysockets/baileys`, pinned in `package.json` and
-`package-lock.json`, because WhatsApp has no other way in that this programme
-will use. TypeScript is the sole development dependency. The checks use it to
+Node 22, ES modules, and two runtime dependencies: `@whiskeysockets/baileys`
+for WhatsApp and `postgres` for the agent's on-box PostgreSQL records. Both are
+pinned in `package.json` and `package-lock.json`. TypeScript is the sole development dependency. The checks use it to
 typecheck; the release tarball does not carry it. The Telegram adapter is the
 counter-example that shows what the runtime rule is for: its channel is JSON
 over HTTPS with no handshake and no session, `fetch` is in Node, and a client
-library would be a second runtime dependency in exchange for nothing, so it has
-none. The workflow checks that Baileys remains the sole runtime dependency and
+library would be another runtime dependency in exchange for nothing, so it has
+none. The workflow checks that the two named runtime libraries remain exactly pinned and
 that TypeScript remains the sole exactly pinned development dependency.
 Why that version, and what it does not fix, is in `adapters/whatsapp/README.md`.

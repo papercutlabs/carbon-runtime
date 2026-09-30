@@ -14,7 +14,8 @@
     "carbon-whatsapp": "bin/carbon-whatsapp",
     "carbon-telegram": "bin/carbon-telegram",
     "carbon-import": "bin/carbon-import",
-    "carbon-tool-server": "bin/carbon-tool-server"
+    "carbon-tool-server": "bin/carbon-tool-server",
+    "carbon-records": "bin/carbon-records"
   },
   "scripts": {
     "test": "node tools/test-runner.ts",
