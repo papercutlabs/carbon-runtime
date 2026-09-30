@@ -16,6 +16,7 @@ transaction, and prints one JSON row per line. The Unix account must be mapped t
 carbon_read by the host contract. It reads no credential file.`;
 
 async function main(args: string[]): Promise<number> {
+  // shape: justified this one CLI dispatch keeps check, read and migrate on the same installed entrypoint; each branch delegates its records operation
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     console.log(HELP);
     return args.length === 0 ? 1 : 0;
@@ -46,7 +47,7 @@ async function main(args: string[]): Promise<number> {
   }
   console.error(JSON.stringify({ code: 'RECORDS_ARGUMENTS', problem: 'run carbon-records --help' }));
   return 1;
-}
+} // shape: justified one CLI entry dispatches its three named records operations and delegates each to its own module
 
 main(process.argv.slice(2)).then((code) => { process.exitCode = code; }).catch((error) => {
   console.error(JSON.stringify({ code: 'RECORDS_FAILED', problem: error?.message ?? String(error) }));

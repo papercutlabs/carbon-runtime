@@ -1,4 +1,5 @@
 type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?: unknown; seq: number };
+// shape: justified the release loop must coordinate store, harness, channels, reply, teaching and enabled records admission before each turn; a thirteenth import is the records service it now checks
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';

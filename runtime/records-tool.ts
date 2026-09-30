@@ -8,9 +8,9 @@ import { readStatement, recordsDb, writeStatement } from '../records/db.ts';
 import { createJobTools } from '../records/job-tools.ts';
 
 export const RECORDS_SERVER_NAME = 'carbon-records';
-export const RECORDS_PORT = 8732;
+const RECORDS_PORT = 8732;
 const MANIFEST_DIR = path.join(import.meta.dirname, 'records-tool');
-export const MANIFEST = readManifest(MANIFEST_DIR);
+const MANIFEST = readManifest(MANIFEST_DIR);
 type VerifyObservation = (sourceId: string, channel: string, jobId: string) => Promise<boolean>;
 type ServerOptions = {
   database: string; agentId: string; agentDir: string;
@@ -30,7 +30,7 @@ function statement(value: unknown): string {
   return value as string;
 }
 
-export function createRecordsServer(database: string, verifyObservation: VerifyObservation, socketDir?: string) {
+function createRecordsServer(database: string, verifyObservation: VerifyObservation, socketDir?: string) {
   const jobs = createJobTools(database, verifyObservation, socketDir);
   const server = createServer({
     manifest: MANIFEST,
@@ -72,7 +72,8 @@ function drainReceipt(file: string, invocationId: string | null, agentId: string
 
 export async function serveRecordsTool({ database, agentId, agentDir, verifyObservation,
   host = '127.0.0.1', port = RECORDS_PORT, socketDir }: ServerOptions) {
-  if (database !== agentId.replaceAll('-', '_')) throw new Error('records database does not match agent id');
+  if (database !== agentId.replaceAll('-', '_')) refuse('RECORDS_DATABASE_MISMATCH', database,
+    'records database does not match agent id', 'start this tool with the installed agent database');
   const probe = recordsDb(database, 'carbon_owner', 1, socketDir);
   try { await probe`SELECT 1 FROM carbon.sop_definitions LIMIT 1`; }
   finally { await probe.end({ timeout: 2 }); }

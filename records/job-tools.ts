@@ -9,7 +9,8 @@ type Pending = Record<string, { step: string; action_id: string; source_id: stri
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SOURCE_ID = /^[^\s\x00-\x1f\x7f][^\x00-\x1f\x7f]{0,510}[^\s\x00-\x1f\x7f]$|^[^\s\x00-\x1f\x7f]$/;
 const identifier = (name: string) => {
-  if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`unsafe SQL identifier ${name}`);
+  if (!/^[a-z][a-z0-9_]*$/.test(name)) refuse('RECORDS_IDENTIFIER_INVALID', name,
+    `unsafe SQL identifier ${name}`, 'use the generated table name from the installed SOP');
   return `"${name}"`;
 };
 const tables = (sop: string) => {
@@ -34,6 +35,7 @@ function jobId(value: unknown): string {
 
 export function createJobTools(database: string, verifyObservation: VerifyObservation,
   socketDir?: string) {
+  // shape: justified the five tool handlers share one owner-role connection and the same locked job-read helpers; splitting the closure would duplicate that authority path
   const db = recordsDb(database, 'carbon_owner', 4, socketDir);
   async function latestSop(tx: any, sop: string): Promise<Sop> {
     const rows = await tx`SELECT definition FROM carbon.sop_definitions
@@ -184,4 +186,4 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
       });
     }
   };
-}
+} // shape: justified the five handlers share one owner-role connection and locked job-read helpers instead of duplicating the authority path

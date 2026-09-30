@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { refuse } from '../tools/lib/fault.ts';
 import { validateSop, type Sop } from './sop-definition.ts';
 
 export type Migration = { number: number; name: string; file: string; sha256: string; sql: string };
@@ -8,11 +9,14 @@ export type SopFile = { sop: string; file: string; sha256: string; definition: S
 export type CheckedRecords = { migrations: Migration[]; sops: SopFile[]; tables: string[] };
 export type CheckResult = { faults: string[]; records: CheckedRecords | null };
 const SOP_NAME = /^[a-z][a-z0-9_-]*$/;
+const invalidSql = (message: string): never => refuse('RECORDS_SQL_INVALID', 'migration SQL', message,
+  'correct the SQL in records/migrations/ and run carbon records check again');
 
 // Erase comments and quoted bodies while retaining the punctuation that divides
 // top-level statements. On-box catalog checks and the DROP event trigger also
 // inspect what a DO body actually did before its transaction can commit.
-export function sqlSkeleton(source: string): string {
+function sqlSkeleton(source: string): string {
+  // shape: justified the lexical walk must track comment and quote delimiters in one pass so punctuation is retained only outside them
   let output = '';
   let i = 0;
   while (i < source.length) {
@@ -29,7 +33,7 @@ export function sqlSkeleton(source: string): string {
         else if (source.slice(i, i + 2) === '*/') { depth--; output += '  '; i += 2; }
         else { output += source[i] === '\n' ? '\n' : ' '; i++; }
       }
-      if (depth !== 0) throw new Error('unterminated SQL block comment');
+      if (depth !== 0) invalidSql('unterminated SQL block comment');
       continue;
     }
     if (ch === "'" || ch === '"') {
@@ -42,10 +46,10 @@ export function sqlSkeleton(source: string): string {
         }
         output += source[i] === '\n' ? '\n' : ' '; i++;
       }
-      if (!closed) throw new Error('unterminated SQL quote');
+      if (!closed) invalidSql('unterminated SQL quote');
       if (quote === '"') {
         const identifier = source.slice(start + 1, i - 1);
-        if (!/^[a-z][a-z0-9_]*$/.test(identifier)) throw new Error('quoted SQL identifier must be a simple lower-case name');
+        if (!/^[a-z][a-z0-9_]*$/.test(identifier)) invalidSql('quoted SQL identifier must be a simple lower-case name');
         output = output.slice(0, -(i - start)) + identifier;
       }
       continue;
@@ -54,7 +58,7 @@ export function sqlSkeleton(source: string): string {
       const tag = source.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
       if (tag) {
         const close = source.indexOf(tag, i + tag.length);
-        if (close < 0) throw new Error('unterminated SQL dollar quote');
+        if (close < 0) invalidSql('unterminated SQL dollar quote');
         const body = source.slice(i, close + tag.length);
         output += body.replace(/[^\n]/g, ' ');
         i = close + tag.length;
@@ -64,7 +68,7 @@ export function sqlSkeleton(source: string): string {
     output += ch; i++;
   }
   return output;
-}
+} // shape: justified the lexical walk tracks comment and quote delimiters in one pass and retains punctuation only outside them
 
 function regularNames(dir: string, faults: string[]): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -75,6 +79,7 @@ function regularNames(dir: string, faults: string[]): string[] {
 }
 
 export function checkRecords(repo: string): CheckResult {
+  // shape: justified the validator accumulates independent file, SQL, SOP and README faults in one stable pass before the install may touch a database
   const faults: string[] = [];
   const root = path.join(repo, 'records');
   const readmePath = path.join(root, 'README.md');
@@ -152,4 +157,4 @@ export function checkRecords(repo: string): CheckResult {
   return { faults, records: faults.length === 0
     ? { migrations: migrations.sort((a, b) => a.number - b.number), sops, tables: [...tables].sort() }
     : null };
-}
+} // shape: justified one validator accumulates file, SQL, SOP and README faults in stable order before install touches a database

@@ -1,10 +1,15 @@
 import { checkRecords, type CheckedRecords } from './check.ts';
 import { recordsDb } from './db.ts';
 import type { Sop } from './sop-definition.ts';
+import { refuse } from '../tools/lib/fault.ts';
 
 type AnySql = any;
+function migrationRefused(problem: string): never {
+  return refuse('RECORDS_MIGRATION_REFUSED', 'records', problem,
+    'correct the forward-only records files and install a new version');
+}
 const identifier = (name: string) => {
-  if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`unsafe SQL identifier ${name}`);
+  if (!/^[a-z][a-z0-9_]*$/.test(name)) migrationRefused(`unsafe SQL identifier ${name}`);
   return `"${name}"`;
 };
 const jobTables = (sop: string) => {
@@ -66,9 +71,9 @@ async function catalogGuard(tx: AnySql, described: Set<string>) {
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`);
   for (const table of tables) {
-    if (!described.has(table.relname)) throw new Error(`public.${table.relname} is not described in records/README.md`);
+    if (!described.has(table.relname)) migrationRefused(`public.${table.relname} is not described in records/README.md`);
     if (table.relrowsecurity || table.relforcerowsecurity) {
-      throw new Error(`public.${table.relname} enables row-level security, so backup cannot read every row`);
+      migrationRefused(`public.${table.relname} enables row-level security, so backup cannot read every row`);
     }
   }
   await tx.unsafe(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public, carbon FROM PUBLIC`);
@@ -76,7 +81,7 @@ async function catalogGuard(tx: AnySql, described: Set<string>) {
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname IN ('public', 'carbon') AND p.prosecdef
       AND has_function_privilege('carbon_backup', p.oid, 'EXECUTE')`);
-  if (callable.length) throw new Error(`backup login can call owner-rights function ${callable[0].nspname}.${callable[0].proname}`);
+  if (callable.length) migrationRefused(`backup login can call owner-rights function ${callable[0].nspname}.${callable[0].proname}`);
 }
 
 async function attachChanges(tx: AnySql, table: string) {
@@ -95,19 +100,19 @@ function forwardOnly(previous: Sop, next: Sop): { track: string; from: string; t
   const nextTracks = new Map(next.tracks.map((track) => [track.id, track]));
   for (const oldTrack of previous.tracks) {
     const track = nextTracks.get(oldTrack.id);
-    if (!track) throw new Error(`SOP ${next.sop}: track ${oldTrack.id} cannot be removed`);
+    if (!track) migrationRefused(`SOP ${next.sop}: track ${oldTrack.id} cannot be removed`);
     for (const oldPosition of oldTrack.positions) {
       if (track.positions.some((position) => position.id === oldPosition.id)) continue;
       const renamed = track.positions.filter((position) => position.renamed_from === oldPosition.id);
-      if (renamed.length !== 1) throw new Error(`SOP ${next.sop}: position ${oldTrack.id}.${oldPosition.id} needs one renamed_from`);
+      if (renamed.length !== 1) migrationRefused(`SOP ${next.sop}: position ${oldTrack.id}.${oldPosition.id} needs one renamed_from`);
       renames.push({ track: oldTrack.id, from: oldPosition.id, to: renamed[0].id });
     }
   }
   const nextSteps = new Map(next.events.map((step) => [step.id, step]));
   for (const oldStep of previous.events) {
     const step = nextSteps.get(oldStep.id);
-    if (!step) throw new Error(`SOP ${next.sop}: step ${oldStep.id} cannot be removed; mark it retired`);
-    if (oldStep.retired && !step.retired) throw new Error(`SOP ${next.sop}: retired step ${oldStep.id} cannot reopen`);
+    if (!step) migrationRefused(`SOP ${next.sop}: step ${oldStep.id} cannot be removed; mark it retired`);
+    if (oldStep.retired && !step.retired) migrationRefused(`SOP ${next.sop}: retired step ${oldStep.id} cannot reopen`);
   }
   return renames;
 }
@@ -122,9 +127,9 @@ async function installSops(db: AnySql, checked: CheckedRecords, digest: string) 
       const old = await tx`SELECT version, sha256, definition FROM carbon.sop_definitions
         WHERE sop = ${sop} ORDER BY installed_at DESC, version DESC LIMIT 1`;
       const same = await tx`SELECT sha256 FROM carbon.sop_definitions WHERE sop = ${sop} AND version = ${definition.version}`;
-      if (same.length && same[0].sha256 !== sha256) throw new Error(`SOP ${sop}@${definition.version} changed after install`);
+      if (same.length && same[0].sha256 !== sha256) migrationRefused(`SOP ${sop}@${definition.version} changed after install`);
       if (!same.length && old.length && old[0].version === definition.version) {
-        throw new Error(`SOP ${sop} version ${definition.version} changed without a new version`);
+        migrationRefused(`SOP ${sop} version ${definition.version} changed without a new version`);
       }
       let renames: ReturnType<typeof forwardOnly> = [];
       if (!same.length && old.length) renames = forwardOnly(old[0].definition as Sop, definition);
@@ -172,7 +177,7 @@ async function installSops(db: AnySql, checked: CheckedRecords, digest: string) 
 
 export async function migrateRecords(repo: string, database: string, installDigest: string, socketDir?: string) {
   const checked = checkRecords(repo);
-  if (checked.faults.length || !checked.records) throw new Error(checked.faults.join('; '));
+  if (checked.faults.length || !checked.records) migrationRefused(checked.faults.join('; '));
   const db = recordsDb(database, 'carbon_owner', 1, socketDir);
   const applied: string[] = [];
   try {
@@ -182,10 +187,10 @@ export async function migrateRecords(repo: string, database: string, installDige
     const highest = Math.max(-1, ...previous.map((row) => Number(String(row.name).slice(0, 4))));
     for (const migration of checked.records.migrations) {
       if (prior.has(migration.name)) {
-        if (prior.get(migration.name) !== migration.sha256) throw new Error(`applied migration ${migration.name} changed`);
+        if (prior.get(migration.name) !== migration.sha256) migrationRefused(`applied migration ${migration.name} changed`);
         continue;
       }
-      if (migration.number < highest) throw new Error(`new migration ${migration.name} precedes an applied migration`);
+      if (migration.number < highest) migrationRefused(`new migration ${migration.name} precedes an applied migration`);
       await db.begin(async (tx: AnySql) => {
         await tx`SELECT set_config('carbon.source_message_id', ${`install:${installDigest}`}, true)`;
         await tx.unsafe(migration.sql, [], { simple: true });

@@ -1,5 +1,6 @@
 // A SOP defines one kind of work. A job is one run of a version of that SOP.
 // The structural checks here are shared by offline validation and installation.
+import { refuse } from '../tools/lib/fault.ts';
 export type Position = {
   id: string; label: string; means: string; do_here: string; waiting_on: string;
   terminal?: boolean; deadline?: unknown; on_deadline?: string; renamed_from?: string;
@@ -21,6 +22,7 @@ const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export function validateSop(value: unknown, fileSop: string): string[] {
+  // shape: justified every independent structural fault is collected in file order so one check returns the complete correction list; splitting the pass would need shared partial state
   const faults: string[] = [];
   if (!object(value)) return ['the SOP file must hold one JSON object'];
   if (value.sop !== fileSop) faults.push(`sop must match filename ${fileSop}`);
@@ -104,7 +106,7 @@ export function validateSop(value: unknown, fileSop: string): string[] {
     }
   }
   return faults;
-}
+} // shape: justified independent structural faults accumulate in file order so one check returns the complete correction list
 
 export type Positions = Record<string, string>;
 
@@ -114,7 +116,8 @@ export function initialPositions(sop: Sop): Positions {
 
 export function stepOf(sop: Sop, id: string): Step {
   const step = sop.events.find((candidate) => candidate.id === id);
-  if (!step || step.retired) throw new Error(`SOP ${sop.sop} has no active step ${id}`);
+  if (!step || step.retired) refuse('SOP_STEP_INVALID', id,
+    `SOP ${sop.sop} has no active step ${id}`, 'use a live step from the installed SOP');
   return step;
 }
 
@@ -155,7 +158,8 @@ export function applyObservation(step: Step, positions: Positions) {
 export function positionViews(sop: Sop, positions: Positions, since: Record<string, string> = {}) {
   return sop.tracks.map((track) => {
     const position = track.positions.find((candidate) => candidate.id === positions[track.id]);
-    if (!position) throw new Error(`job has unknown ${track.id} position ${positions[track.id]}`);
+    if (!position) refuse('SOP_POSITION_INVALID', track.id,
+      `job has unknown ${track.id} position ${positions[track.id]}`, 'repair the job position against its installed SOP');
     return { track: track.id, position: position.id, label: position.label, means: position.means,
       do_here: position.do_here, waiting_on: position.waiting_on,
       since: since[track.id] ?? null, deadline: position.deadline ?? null,
