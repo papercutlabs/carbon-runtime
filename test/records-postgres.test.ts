@@ -214,7 +214,23 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     await recordSentAction(replyStore, sentReply, { actionUrl: baseUrl });
     assert.equal((await installedJob('carbon_test', replyJobId, socket)).job.positions.work, 'sent');
     assert.ok(replyStore.rebuild().find((r) => r.direction === 'outbound')?.adapter_fields?.action_recorded_at);
-    await served.stop();
+    const slow = rpc('tools/call', { name: 'records_query',
+      arguments: { sql: 'SELECT pg_sleep(1)', max_rows: 1 } });
+    let active = false;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const activity = command(pg('psql'), ['-X', '-At', '-h', socket, '-d', 'carbon_test',
+        '-c', "SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'SELECT pg_sleep(1)%' AND state = 'active'"]);
+      if (Number(activity.trim()) > 0) { active = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(active, true, 'the records server must be inside its read transaction');
+    let stopped = false;
+    const stopping = served.stop().then(() => { stopped = true; });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(stopped, false, 'supported stop waits for an active call');
+    assert.equal(fs.existsSync(path.join(agentDir, 'tools-work', 'carbon-records-drain.json')), false);
+    await slow;
+    await stopping;
     const receipt = JSON.parse(fs.readFileSync(path.join(agentDir, 'tools-work', 'carbon-records-drain.json'), 'utf8'));
     assert.equal(receipt.database_sessions_closed, true);
     assert.equal(receipt.active_requests, 0);
