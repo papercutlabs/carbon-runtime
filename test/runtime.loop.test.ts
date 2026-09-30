@@ -19,7 +19,7 @@ import {
   NOTHING_TAUGHT, saidNothingTaught, teachCheckInput
 } from '../runtime/loop.ts';
 import { EXIT, RuntimeFault, fault } from '../runtime/faults.ts';
-import { replyHandler } from '../runtime/reply-tool.ts';
+import { replyHandler, outboundRecord } from '../runtime/reply-tool.ts';
 import { serveTeachTool } from '../runtime/teach-tool.ts';
 import { listTeachings, remember } from '../stream/teachings.ts';
 import { fakeHarness } from './fake-harness.ts';
@@ -216,6 +216,23 @@ test('recovery completes every record of a gathered release whose reply was alre
   assert.deepEqual(recovered.done, inbound.map((r) => r.message_id));
   assert.ok(store.rebuild().filter((r) => r.direction === 'inbound')
     .every((r) => r.release!.completed_at)); // This case wrote a release before inspecting it; direct access must still fail if it is absent.
+});
+
+test('a claimed send pending at restart stays uncertain until the channel is read', async () => {
+  const { loop, store } = makeLoop();
+  loop.capture([item(1, 'send this')]);
+  const inbound = store.rebuild()[0];
+  const reply = outboundRecord(store, { agent: AGENT, conversation_id: inbound.conversation_id,
+    request_id: 'claimed-reply', text: 'Sent' });
+  reply.delivery!.action_claim = { kind: 'claimed', job: 'job-1', step: 'send', action_id: 'claim-1' };
+  store.reply(reply);
+  const recovered = loop.recover();
+  assert.deepEqual(recovered.resend, []);
+  assert.deepEqual(recovered.unknown, ['claimed-reply']);
+  const onDisk = store.rebuild().find((r) => r.direction === 'outbound')!;
+  assert.equal(onDisk.delivery!.status, 'unknown');
+  assert.equal(onDisk.adapter_fields?.action_reconcile_required, true);
+  assert.deepEqual(await loop.deliver(), []);
 });
 
 test('records from two conversations in one pass become two releases', async () => {

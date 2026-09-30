@@ -745,6 +745,15 @@ export class ReleaseLoop<S = Session> {
   // own files say a turn was interrupted; only the store says whether the client
   // got an answer.
   recover() {
+    // A claimed send may have reached the channel just before this process
+    // died. Its pending file alone does not prove absence, so a restart must
+    // read the channel before any retry. Keep the claim for reconciliation.
+    for (const record of this.store.rebuild()) {
+      if (record.direction !== 'outbound' || record.delivery?.status !== 'pending'
+        || !record.delivery.action_claim) continue;
+      this.store.markUnknown(record.delivery.request_id);
+      this.store.annotate(record, { action_reconcile_required: true });
+    }
     const all = this.store.rebuild();
     const resend = new Set(all
       .filter((r) => r.direction === 'outbound' && r.delivery?.status === 'pending')
