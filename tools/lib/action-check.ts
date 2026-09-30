@@ -1,6 +1,6 @@
 import { fault, ToolFault } from './fault.ts';
 
-export const RECORDS_ACTION_URL = 'http://127.0.0.1:8733';
+const RECORDS_ACTION_URL = 'http://127.0.0.1:8733';
 type ActionInput = { about_job: string; about_move: string; derived_job: string | null;
   derived_move: string | null; operation: string; source_id: string };
 type Claimed = { kind: 'claimed'; job: string; step: string; action_id: string };
