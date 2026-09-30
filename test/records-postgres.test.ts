@@ -84,14 +84,15 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       "WITH input(body) AS (VALUES ('second'), ('third')) INSERT INTO notes(body) SELECT body FROM input",
       'message-2', 1, socket), /over max_rows/);
     assert.equal((await readStatement('carbon_test', 'SELECT count(*)::int AS n FROM notes', socket))[0].n, 1);
-    let directContext: { releaseId: string; unit: string; sourceIds: string[] } | null = null;
+    const activeOwner = { pid: process.pid, generation: processGeneration(process.pid)! };
+    let directContext: { releaseId: string; unit: string; sourceIds: string[];
+      owner: typeof activeOwner } | null = null;
     const jobs = createJobTools('carbon_test', async (source, channel) =>
       source === 'client-check-1' && channel === 'external_read', socket, () => directContext);
     const openDirect = (sopId: string, unit: string, references: string[], cause: string) => {
-      directContext = { releaseId: `direct-${unit}`, unit, sourceIds: [cause] };
+      directContext = { releaseId: `direct-${unit}`, unit, sourceIds: [cause], owner: activeOwner };
       return jobs.job_open(sopId, unit, references, cause);
     };
-    const activeOwner = { pid: process.pid, generation: processGeneration(process.pid)! };
     try {
       await assert.rejects(() => openDirect('demo', 'thread-1', [], ''), /JOB_OPEN_CAUSE_INVALID/);
       const opened = await openDirect('demo', 'thread-1', ['reference-1'], 'message-1');
@@ -165,7 +166,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       const releaseId = `test-${args.source_message_id}`;
       const start = await fetch(`http://127.0.0.1:${served.actionPort}/turn-start`, { method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ releaseId, unit: contextUnit, sourceIds: [contextCause] }) });
+        body: JSON.stringify({ releaseId, unit: contextUnit, sourceIds: [contextCause],
+          owner: activeOwner }) });
       assert.equal(start.status, 200);
       try { return await rpc('tools/call', { name: 'job_open', arguments: args }); }
       finally {
@@ -190,27 +192,68 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       source_message_id: 'message-false' }, 'real-thread', 'message-current');
     assert.equal(falseCause.result.isError, true);
     assert.equal(falseCause.result.structuredContent.faults[0].code, 'JOB_OPEN_CAUSE_MISMATCH');
-    const concurrentTurns = [
-      { releaseId: 'test-concurrent-a', unit: 'concurrent-a', sourceIds: ['message-concurrent-a'] },
-      { releaseId: 'test-concurrent-b', unit: 'concurrent-b', sourceIds: ['message-concurrent-b'] }
-    ];
-    for (const context of concurrentTurns) {
-      const started = await fetch(`http://127.0.0.1:${served.actionPort}/turn-start`, { method: 'POST',
-        headers: { 'content-type': 'application/json' }, body: JSON.stringify(context) });
-      assert.equal(started.status, 200);
-    }
+    const firstTurn = { releaseId: 'test-concurrent-a', unit: 'concurrent-a',
+      sourceIds: ['message-concurrent-a'], owner: activeOwner };
+    const secondTurn = { releaseId: 'test-concurrent-b', unit: 'concurrent-b',
+      sourceIds: ['message-concurrent-b'], owner: activeOwner };
+    const turnUrl = `http://127.0.0.1:${served.actionPort}`;
+    const turnCall = (route: string, body: unknown) => fetch(`${turnUrl}${route}`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await turnCall('/turn-start', firstTurn)).status, 200);
+    const secondStarted = turnCall('/turn-start', secondTurn);
+    const cancelledTurn = { releaseId: 'test-concurrent-cancelled', unit: 'cancelled',
+      sourceIds: ['message-cancelled'], owner: activeOwner };
+    const cancellation = new AbortController();
+    const thirdStarted = fetch(`${turnUrl}/turn-start`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(cancelledTurn),
+      signal: cancellation.signal });
+    const waited = await Promise.race([secondStarted.then(() => 'started'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('waiting'), 50))]);
+    assert.equal(waited, 'waiting', 'a second channel turn waits for the first turn context');
+    const wrongTurn = await rpc('tools/call', { name: 'job_open', arguments: {
+      sop: 'demo', unit: secondTurn.unit, references: [], source_message_id: secondTurn.sourceIds[0] } });
+    assert.equal(wrongTurn.result.structuredContent.faults[0].code, 'JOB_OPEN_CAUSE_MISMATCH');
+    cancellation.abort();
+    await assert.rejects(thirdStarted, /AbortError/);
+    assert.equal((await turnCall('/turn-end', { releaseId: firstTurn.releaseId })).status, 200);
+    assert.equal((await secondStarted).status, 200);
+    const correctTurn = await rpc('tools/call', { name: 'job_open', arguments: {
+      sop: 'demo', unit: secondTurn.unit, references: [], source_message_id: secondTurn.sourceIds[0] } });
+    assert.equal(correctTurn.result.isError, false);
+    assert.equal((await turnCall('/turn-end', { releaseId: secondTurn.releaseId })).status, 200);
+    const afterCancellation = await Promise.race([
+      turnCall('/turn-start', { releaseId: 'test-after-cancelled', unit: 'after-cancelled',
+        sourceIds: ['message-after-cancelled'], owner: activeOwner }),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1000))
+    ]);
+    assert.notEqual(afterCancellation, 'timeout', 'a cancelled waiter cannot take the next turn');
+    assert.equal((afterCancellation as Response).status, 200);
+    assert.equal((await turnCall('/turn-end', { releaseId: 'test-after-cancelled' })).status, 200);
+    const turnOwner = spawn(process.execPath,
+      ['-e', "process.stdin.resume(); process.stdin.on('end', () => process.exit(0))"],
+      { stdio: ['pipe', 'ignore', 'ignore'] });
+    await once(turnOwner, 'spawn');
     try {
-      for (const context of concurrentTurns) {
-        const opened = await rpc('tools/call', { name: 'job_open', arguments: {
-          sop: 'demo', unit: context.unit, references: [], source_message_id: context.sourceIds[0] } });
-        assert.equal(opened.result.isError, false);
-      }
+      const generation = processGeneration(turnOwner.pid!);
+      assert.ok(generation);
+      assert.equal((await turnCall('/turn-start', { releaseId: 'test-crashed-turn',
+        unit: 'crashed', sourceIds: ['message-crashed'], owner: {
+          pid: turnOwner.pid, generation } })).status, 200);
+      const afterCrash = turnCall('/turn-start', { releaseId: 'test-after-crash',
+        unit: 'after-crash', sourceIds: ['message-after-crash'], owner: activeOwner });
+      const beforeExit = await Promise.race([afterCrash.then(() => 'started'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('waiting'), 50))]);
+      assert.equal(beforeExit, 'waiting');
+      const exited = once(turnOwner, 'exit');
+      turnOwner.stdin.end();
+      await exited;
+      const resumed = await Promise.race([afterCrash,
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 3000))]);
+      assert.notEqual(resumed, 'timeout', 'a dead runtime generation releases its turn context');
+      assert.equal((resumed as Response).status, 200);
+      assert.equal((await turnCall('/turn-end', { releaseId: 'test-after-crash' })).status, 200);
     } finally {
-      for (const context of concurrentTurns) {
-        const ended = await fetch(`http://127.0.0.1:${served.actionPort}/turn-end`, { method: 'POST',
-          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ releaseId: context.releaseId }) });
-        assert.equal(ended.status, 200);
-      }
+      if (turnOwner.exitCode === null) turnOwner.stdin.end();
     }
     const actionCall = async (route: string, body: unknown) => {
       const result = await fetch(`http://127.0.0.1:${served.actionPort}${route}`, { method: 'POST',
@@ -381,6 +424,12 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     await recordSentAction(replyStore, sentReply, { actionUrl: baseUrl });
     assert.equal((await installedJob('carbon_test', replyJobId, socket)).job.positions.work, 'sent');
     assert.ok(replyStore.rebuild().find((r) => r.direction === 'outbound')?.adapter_fields?.action_recorded_at);
+    assert.equal((await turnCall('/turn-start', { releaseId: 'test-stop-active',
+      unit: 'stop-active', sourceIds: ['message-stop-active'], owner: activeOwner })).status, 200);
+    const stoppedWaiter = turnCall('/turn-start', { releaseId: 'test-stop-waiting',
+      unit: 'stop-waiting', sourceIds: ['message-stop-waiting'], owner: activeOwner });
+    assert.equal(await Promise.race([stoppedWaiter.then(() => 'started'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('waiting'), 50))]), 'waiting');
     const slow = rpc('tools/call', { name: 'records_query',
       arguments: { sql: 'SELECT pg_sleep(1)', max_rows: 1 } });
     let active = false;
@@ -393,6 +442,9 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     assert.equal(active, true, 'the records server must be inside its read transaction');
     let stopped = false;
     const stopping = served.stop().then(() => { stopped = true; });
+    const refusedWaiter = await stoppedWaiter;
+    assert.equal(refusedWaiter.status, 409);
+    assert.equal((await refusedWaiter.json() as any).faults[0].code, 'JOB_TURN_STOPPING');
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(stopped, false, 'supported stop waits for an active call');
     assert.equal(fs.existsSync(path.join(agentDir, 'tools-work', 'carbon-records-drain.json')), false);
