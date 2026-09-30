@@ -26,6 +26,9 @@ async function ensureCore(db: AnySql) {
       transaction_id bigint NOT NULL, at timestamptz NOT NULL DEFAULT clock_timestamp(),
       table_name text NOT NULL, operation text NOT NULL, old_row jsonb, new_row jsonb,
       source_message_id text NOT NULL, login text NOT NULL)`);
+    await tx.unsafe(`CREATE TABLE IF NOT EXISTS carbon.action_receipts (
+      action_id uuid PRIMARY KEY, job_id uuid NOT NULL, sop text NOT NULL,
+      step text NOT NULL, source_id text NOT NULL, recorded_at timestamptz NOT NULL DEFAULT now())`);
     await tx.unsafe(`CREATE OR REPLACE FUNCTION carbon.log_change() RETURNS trigger
       LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $function$
       DECLARE cause text;
@@ -152,7 +155,7 @@ async function installSops(db: AnySql, checked: CheckedRecords, digest: string) 
             if (pending[rename.track] === rename.from) pending[rename.track] = rename.to;
             if (since[rename.from] !== undefined) { since[rename.to] = since[rename.from]; delete since[rename.from]; }
             await tx.unsafe(`UPDATE public.${identifier(jobs)} SET positions = $1, pending = $2, since = $3 WHERE job_id = $4`,
-              [JSON.stringify(positions), JSON.stringify(pending), JSON.stringify(since), row.job_id], { simple: false });
+              [tx.json(positions), tx.json(pending), tx.json(since), row.job_id], { simple: false });
           }
         }
         await tx.unsafe(`UPDATE public.${identifier(jobs)} SET sop_version = $1 WHERE sop = $2`,

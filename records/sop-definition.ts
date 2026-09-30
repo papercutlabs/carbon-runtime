@@ -105,3 +105,60 @@ export function validateSop(value: unknown, fileSop: string): string[] {
   }
   return faults;
 }
+
+export type Positions = Record<string, string>;
+
+export function initialPositions(sop: Sop): Positions {
+  return Object.fromEntries(sop.tracks.map((track) => [track.id, track.initial]));
+}
+
+export function stepOf(sop: Sop, id: string): Step {
+  const step = sop.events.find((candidate) => candidate.id === id);
+  if (!step || step.retired) throw new Error(`SOP ${sop.sop} has no active step ${id}`);
+  return step;
+}
+
+export function legality(step: Step, positions: Positions) {
+  const why: string[] = [];
+  for (const [track, expected] of step.requires ?? []) {
+    if (positions[track] !== expected) why.push(`${track} must be ${expected}; it is ${positions[track]}`);
+  }
+  const primary = step.moves[0]?.track;
+  if (primary) {
+    const from = step.moves.filter((move) => move.track === primary).flatMap((move) => move.from);
+    if (!from.includes(positions[primary])) why.push(`${primary} is ${positions[primary]}, not ${from.join(' or ')}`);
+  }
+  return { legal: why.length === 0, why };
+}
+
+export function allowedIntents(sop: Sop, positions: Positions): string[] {
+  return sop.events.filter((step) => step.kind === 'intent' && !step.retired
+    && legality(step, positions).legal).map((step) => step.id);
+}
+
+export function applyObservation(step: Step, positions: Positions) {
+  const next = { ...positions };
+  const moved = new Set<string>();
+  let offModel = (step.requires ?? []).some(([track, position]) => positions[track] !== position);
+  for (const move of step.moves) {
+    if (moved.has(move.track)) continue;
+    if (move.from.includes(positions[move.track])) { next[move.track] = move.to; moved.add(move.track); }
+  }
+  const primary = step.moves[0]?.track;
+  if (primary && !moved.has(primary)) {
+    offModel = true;
+    next[primary] = step.moves.filter((move) => move.track === primary).at(-1)!.to;
+  }
+  return { positions: next, offModel };
+}
+
+export function positionViews(sop: Sop, positions: Positions, since: Record<string, string> = {}) {
+  return sop.tracks.map((track) => {
+    const position = track.positions.find((candidate) => candidate.id === positions[track.id]);
+    if (!position) throw new Error(`job has unknown ${track.id} position ${positions[track.id]}`);
+    return { track: track.id, position: position.id, label: position.label, means: position.means,
+      do_here: position.do_here, waiting_on: position.waiting_on,
+      since: since[track.id] ?? null, deadline: position.deadline ?? null,
+      on_deadline: position.on_deadline ?? null, terminal: position.terminal === true };
+  });
+}
