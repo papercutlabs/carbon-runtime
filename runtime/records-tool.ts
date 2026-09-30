@@ -6,15 +6,17 @@ import { renderHelp } from '../tools/lib/help.ts';
 import { refuse } from '../tools/lib/fault.ts';
 import { readStatement, recordsDb, writeStatement } from '../records/db.ts';
 import { createJobTools } from '../records/job-tools.ts';
+import { serveActionHttp } from './records-action-http.ts';
 
 export const RECORDS_SERVER_NAME = 'carbon-records';
 const RECORDS_PORT = 8732;
+const ACTION_PORT = 8733;
 const MANIFEST_DIR = path.join(import.meta.dirname, 'records-tool');
 const MANIFEST = readManifest(MANIFEST_DIR);
 type VerifyObservation = (sourceId: string, channel: string, jobId: string) => Promise<boolean>;
 type ServerOptions = {
   database: string; agentId: string; agentDir: string;
-  verifyObservation: VerifyObservation; host?: string; port?: number; socketDir?: string;
+  verifyObservation: VerifyObservation; host?: string; port?: number; actionPort?: number; socketDir?: string;
 };
 
 function cap(value: unknown): number {
@@ -71,7 +73,7 @@ function drainReceipt(file: string, invocationId: string | null, agentId: string
 }
 
 export async function serveRecordsTool({ database, agentId, agentDir, verifyObservation,
-  host = '127.0.0.1', port = RECORDS_PORT, socketDir }: ServerOptions) {
+  host = '127.0.0.1', port = RECORDS_PORT, actionPort = ACTION_PORT, socketDir }: ServerOptions) {
   if (database !== agentId.replaceAll('-', '_')) refuse('RECORDS_DATABASE_MISMATCH', database,
     'records database does not match agent id', 'start this tool with the installed agent database');
   const probe = recordsDb(database, 'carbon_owner', 1, socketDir);
@@ -85,19 +87,25 @@ export async function serveRecordsTool({ database, agentId, agentDir, verifyObse
   const { server: http, url } = await server.serveHttp({ host, port,
     health: () => ({ schema: 'carbon.records-health.v1', status, agent_id: agentId,
       invocation_id: invocationId }) });
+  let actionHttp: Awaited<ReturnType<typeof serveActionHttp>>;
+  try { actionHttp = await serveActionHttp(jobs, actionPort); }
+  catch (error) { await new Promise<void>((resolve) => http.close(() => resolve())); await jobs.close(); throw error; }
   let stopPromise: Promise<void> | null = null;
   function stop() {
     if (stopPromise) return stopPromise;
     status = 'draining';
     stopPromise = (async () => {
-      await new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve()));
+      await Promise.all([
+        new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve())),
+        actionHttp.close()
+      ]);
       await jobs.close();
       status = 'stopped';
       drainReceipt(receiptFile, invocationId, agentId);
     })();
     return stopPromise;
   }
-  return { url, stop, health: () => ({ status, agentId, invocationId }), http };
+  return { url, actionPort: actionHttp.port, stop, health: () => ({ status, agentId, invocationId }), http };
 }
 
 if (process.argv[1] === import.meta.filename) {

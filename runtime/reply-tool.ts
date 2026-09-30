@@ -1,6 +1,7 @@
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Declaration } from './types.ts';
-type ReplyArgs = { conversation_id: string; request_id: string; text: string; attachments?: unknown[] | null };
+type ReplyArgs = { conversation_id: string; request_id: string; text: string; attachments?: unknown[] | null;
+  about_job?: string; about_move?: string };
 type ReplyOptions = { store: Store; agent: string; declaration?: Declaration | null; work?: string | null };
 // The `reply` tool: the one door out of a turn.
 //
@@ -31,6 +32,7 @@ import { createServer } from '../tools/lib/mcp.ts';
 import { StreamFault } from '../stream/store.ts';
 import { fault } from '../stream/faults.ts';
 import { managementConversationOf } from './channel.ts';
+import { beginBoundAction, finishMappedAction } from '../tools/lib/action-check.ts';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
 // The reply tool listens here unless a caller names another port. It is a
@@ -64,7 +66,9 @@ export const MANIFEST = {
           attachments: {
             type: 'array',
             description: 'absolute paths of files this turn created under the work directory, for example ["/srv/carbon/mtu-agent/work/bor.pdf"]; omit or pass [] when there is no file'
-          }
+          },
+          about_job: { type: 'string', description: 'job id for a mapped SOP action; use an empty string for an ordinary reply' },
+          about_move: { type: 'string', description: 'SOP move for a mapped action; use other only when no installed SOP maps this send' }
         }
       },
       returns: {
@@ -232,11 +236,11 @@ export function teachCheckConversation(declaration: Declaration | null | undefin
 // The declaration is what says whether this reply is held. Without one — which is
 // every caller that is not the runtime — nothing is held and the reply is written
 // as it always was.
-export function replyHandler({ store, agent, declaration = null, work = null, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
+function replyWriter({ store, agent, declaration = null, work = null, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
   const heldIn = teachCheckConversation(declaration);
   // createServer calls this with parseArguments leftovers (Record<string, unknown>)
   // and unknown context. Named fields are the original reads, not a new check.
-  return (args: Record<string, unknown>) => {
+  return (args: Record<string, unknown>, actionClaim?: { kind: 'claimed'; job: string; step: string; action_id: string }) => {
     const record = outboundRecord(store, {
       agent,
       conversation_id: args.conversation_id as string,
@@ -246,6 +250,7 @@ export function replyHandler({ store, agent, declaration = null, work = null, no
       work,
       now: now()
     });
+    if (actionClaim) record.delivery!.action_claim = actionClaim;
     const held = heldIn !== null && args.conversation_id === heldIn;
     const written = store.reply(record, { status: held ? 'pending-teach-check' : 'pending' });
     if (written.fenced === 'sent') {
@@ -263,10 +268,60 @@ export function replyHandler({ store, agent, declaration = null, work = null, no
   };
 }
 
+export function replyHandler(options: ReplyOptions & { now?: () => Date }) {
+  const write = replyWriter(options);
+  return (args: Record<string, unknown>) => write(args);
+}
+
+export function recordsReplyHandler({ store, agent, declaration = null, work = null,
+  now = () => new Date(), actionUrl }: ReplyOptions & { now?: () => Date; actionUrl?: string }) {
+  const write = replyWriter({ store, agent, declaration, work, now });
+  return async (args: Record<string, unknown>) => {
+    // Validate ownership and attachments before reserving a job action. This
+    // preflight does not write attachment blobs if the action is refused.
+    const conversation = args.conversation_id as string;
+    if (!store.recordsIn(conversation).some((record) => record.direction === 'inbound')) {
+      throw new StreamFault([fault('CONVERSATION_NOT_OWNED', conversation,
+        'this agent has captured nothing on this conversation, so it does not answer on it',
+        'reply on a conversation this agent owns')]);
+    }
+    readAttachments(args.attachments as ReplyArgs['attachments'], work);
+    const existing = store.readRequest(args.request_id as string);
+    if (existing && existing.status !== 'failed') return write(args);
+    if (typeof args.about_job !== 'string' || typeof args.about_move !== 'string') {
+      throw new StreamFault([fault('JOB_ACTION_CONTEXT_REQUIRED', String(args.request_id),
+        'records-enabled replies must say which job and move this send is about',
+        'pass about_job and about_move, using an empty job and other for an ordinary reply')]);
+    }
+    const claim = await beginBoundAction({ unit: args.conversation_id as string,
+      operation: 'carbon-send', about_job: args.about_job, about_move: args.about_move,
+      source_id: args.request_id as string }, { baseUrl: actionUrl });
+    return write(args, claim.kind === 'claimed' ? claim : undefined);
+  };
+}
+
+export async function recordSentAction(store: Store, record: MessageRecord,
+  { actionUrl, now = () => new Date() }: { actionUrl?: string; now?: () => Date } = {}) {
+  const claim = record.delivery?.action_claim as { job?: unknown; step?: unknown; action_id?: unknown } | undefined;
+  if (!claim || typeof claim.job !== 'string' || typeof claim.step !== 'string'
+    || typeof claim.action_id !== 'string') {
+    throw new StreamFault([fault('JOB_ACTION_CLAIM_INVALID', record.message_id,
+      'the sent reply has no usable job action claim', 'repair the outbound record before reconciling its SOP move')]);
+  }
+  const proof = crypto.createHash('sha256').update(JSON.stringify({
+    message_id: record.message_id, chunk_ids: record.delivery?.chunk_ids ?? []
+  })).digest('hex');
+  await finishMappedAction({ kind: 'claimed', job: claim.job, step: claim.step, action_id: claim.action_id },
+    `carbon-send:${proof}`, { baseUrl: actionUrl });
+  store.annotate(record, { action_recorded_at: now().toISOString() });
+}
+
 export function createReplyServer({ store, agent, declaration = null, work = null }: ReplyOptions) {
   return createServer({
     manifest: MANIFEST,
-    handlers: { reply: replyHandler({ store, agent, declaration, work }) }
+    handlers: { reply: declaration?.records?.enabled === true
+      ? recordsReplyHandler({ store, agent, declaration, work })
+      : replyHandler({ store, agent, declaration, work }) }
   });
 }
 

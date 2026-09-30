@@ -71,6 +71,11 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
       waits: views.filter((view) => view.waiting_on !== 'none' && !view.terminal),
       pending: job.pending, allowed_now: allowedIntents(sop, positions) };
   }
+  function mappedAction(event: ReturnType<typeof stepOf>, operation: string) {
+    const action = event.action as string | { tool?: string; operation?: string } | null | undefined;
+    return typeof action === 'string' ? action === operation
+      : action?.tool === operation || action?.operation === operation;
+  }
   return {
     async close() { await db.end({ timeout: 2 }); },
     async job_open(sop: string, unit: string, references: string[], source_message_id: string) {
@@ -121,6 +126,90 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
       const verdict = event.kind === 'intent' ? legality(event, row.positions) : { legal: true, why: [] };
       return { job: id, step, allowed: verdict.legal, why: verdict.why,
         allowed_now: allowedIntents(sop, row.positions) };
+    },
+    async action_begin(job: string, step: string, source_id: string, operation: string) {
+      const id = jobId(job);
+      const cause = sourceId(source_id);
+      if (typeof operation !== 'string' || !operation.trim()) refuse('JOB_OPERATION_INVALID', 'operation',
+        'the action tool must name its own operation', 'pass the operation mapped in the installed SOP');
+      return db.begin(async (tx) => {
+        const row = await readJob(tx, id, true);
+        const sop = await definitionFor(tx, row);
+        const event = stepOf(sop, step);
+        if (event.kind !== 'intent' || !mappedAction(event, operation)) refuse('JOB_ACTION_UNMAPPED', operation,
+          `the installed SOP does not map ${operation} to intent ${step}`, 'use the mapped operation and step');
+        const verdict = legality(event, row.positions);
+        if (!verdict.legal) refuse('JOB_MOVE_REFUSED', step,
+          `the SOP refuses this move: ${verdict.why.join('; ')}; allowed now: ${allowedIntents(sop, row.positions).join(', ') || 'none'}`,
+          'read the job and choose a legal mapped action');
+        const { jobs, events } = tables(row.sop);
+        const track = event.moves[0]?.track ?? step;
+        const pending = { ...(row.pending as Pending) };
+        if (pending[track]) refuse('JOB_ACTION_PENDING', step,
+          'a prior action is pending; its external effect must be read before another claim',
+          'read the client record and reconcile the pending action');
+        const action = { step, action_id: crypto.randomUUID(), source_id: cause,
+          state: 'claimed' as const, since: new Date().toISOString() };
+        pending[track] = action;
+        await tx`SELECT set_config('carbon.source_message_id', ${cause}, true)`;
+        await tx.unsafe(`UPDATE public.${identifier(jobs)} SET pending = $1::jsonb WHERE job_id = $2`,
+          [tx.json(pending), id], oneStatement);
+        await tx.unsafe(`INSERT INTO public.${identifier(events)} (job_id, event, kind, source_id)
+          VALUES ($1,$2,'intent',$3)`, [id, step, cause], oneStatement);
+        return { job: id, step, operation, action_id: action.action_id, status: 'claimed' };
+      });
+    },
+    async action_bound(unit: string, operation: string, about_job: string, about_move: string, source_id: string) {
+      const cause = sourceId(source_id);
+      if (typeof unit !== 'string' || !unit.trim()) refuse('JOB_UNIT_INVALID', 'unit',
+        'a bound action needs the conversation unit it acts on', 'pass the captured conversation id');
+      const all = await db`SELECT DISTINCT sop FROM carbon.sop_definitions ORDER BY sop`;
+      const candidates: { job: string; step: string }[] = [];
+      const boundJobs = new Set<string>();
+      for (const candidate of all) {
+        const { jobs } = tables(candidate.sop);
+        const rows = await db.unsafe(`SELECT job_id, sop, sop_version FROM public.${identifier(jobs)} WHERE unit_id = $1`,
+          [unit], oneStatement);
+        for (const row of rows) {
+          boundJobs.add(row.job_id);
+          const sop = await definitionFor(db, row);
+          for (const event of sop.events) if (event.kind === 'intent' && !event.retired && mappedAction(event, operation)) {
+            candidates.push({ job: row.job_id, step: event.id });
+          }
+        }
+      }
+      if (candidates.length === 0) {
+        if (about_move !== 'other') refuse('JOB_ACTION_CONTEXT_MISMATCH', operation,
+          'this operation has no mapped SOP move for the conversation', 'pass about_move other for an ordinary reply');
+        if (about_job && !boundJobs.has(about_job)) refuse('JOB_ACTION_CONTEXT_MISMATCH', operation,
+          'the supplied job does not belong to this conversation',
+          'pass a job bound to this conversation or an empty job for an ordinary reply');
+        return { kind: 'other' as const };
+      }
+      const chosen = candidates.filter((one) => one.job === about_job && one.step === about_move);
+      if (chosen.length !== 1) refuse('JOB_ACTION_CONTEXT_MISMATCH', operation,
+        `this operation maps to ${candidates.map((one) => `${one.job}:${one.step}`).join(', ')}; about_move other cannot bypass it`,
+        'pass the job and move mapped by the installed SOP for this conversation');
+      const claim = await this.action_begin(about_job, about_move, cause, operation);
+      return { kind: 'claimed' as const, ...claim };
+    },
+    async action_finish(job: string, step: string, source_id: string, action_id: string) {
+      const id = jobId(job);
+      const cause = sourceId(source_id);
+      if (!JOB_ID.test(action_id)) refuse('JOB_ACTION_ID_INVALID', String(action_id),
+        'action_id must be the claim returned by the records service', 'pass the original action claim');
+      await db.begin(async (tx) => {
+        const row = await readJob(tx, id, true);
+        const pending = Object.values(row.pending as Pending).find((item) => item.action_id === action_id);
+        const prior = await tx`SELECT 1 FROM carbon.action_receipts
+          WHERE action_id = ${action_id} AND job_id = ${id} AND step = ${step} AND source_id = ${cause}`;
+        if (!pending && prior.length > 0) return;
+        if (!pending || pending.step !== step || pending.state !== 'claimed') refuse('JOB_ACTION_CLAIM_ABSENT', step,
+          'this job has no matching claimed action', 'read the job and reconcile its pending action');
+        await tx`INSERT INTO carbon.action_receipts(action_id, job_id, sop, step, source_id)
+          VALUES (${action_id}, ${id}, ${row.sop}, ${step}, ${cause}) ON CONFLICT (action_id) DO NOTHING`;
+      });
+      return this.job_record(id, step, 'observation', cause);
     },
     async job_record(job: string, step: string, kind: 'intent' | 'observation', source_id: string) {
       const id = jobId(job);

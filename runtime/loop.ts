@@ -42,7 +42,7 @@ import { fault, RuntimeFault, EXIT } from './faults.ts';
 import { StreamFault } from '../stream/store.ts';
 import { listTeachings, teachingsUnderRelease } from '../stream/teachings.ts';
 import { latch } from './latch.ts';
-import { REPLY_SERVER_NAME } from './reply-tool.ts';
+import { REPLY_SERVER_NAME, recordSentAction } from './reply-tool.ts';
 import { TEACH_SERVER_NAME } from './teach-tool.ts';
 import { RECORDS_SERVER_NAME } from './records-tool.ts';
 import { conversationKindOf } from './channel.ts';
@@ -1285,6 +1285,13 @@ export class ReleaseLoop<S = Session> {
   // said the turn was answered.
   async deliver() {
     const sent = [];
+    // A crash can land after the channel confirms a send and before the job
+    // observation is recorded. Complete that receipt without sending again.
+    for (const record of this.store.rebuild()) {
+      if (record.direction !== 'outbound' || record.delivery?.status !== 'sent'
+        || !record.delivery.action_claim || record.adapter_fields?.action_recorded_at) continue;
+      await recordSentAction(this.store, record, { now: () => new Date(this.now()) });
+    }
     for (const record of this.store.rebuild()) {
       if (record.direction !== 'outbound') continue;
       if (record.delivery?.status !== 'pending') continue;
@@ -1304,7 +1311,11 @@ export class ReleaseLoop<S = Session> {
         sent.push({ request_id: record.delivery!.request_id, status: 'unknown' }); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
         continue;
       }
-      if (outcome.status === 'sent') this.store.markSent(record.delivery!.request_id, outcome.chunk_ids ?? []); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
+      if (outcome.status === 'sent') {
+        const confirmed = this.store.markSent(record.delivery!.request_id, outcome.chunk_ids ?? []);
+        if (confirmed.delivery?.action_claim) await recordSentAction(this.store, confirmed,
+          { now: () => new Date(this.now()) });
+      }
       else if (outcome.status === 'unknown') this.store.markUnknown(record.delivery!.request_id); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
       else this.store.markFailed(record.delivery!.request_id); // The preceding filter or status check established delivery; preserve direct access to its stored fields.
       this.log({ event: 'deliver', request_id: record.delivery!.request_id, status: outcome.status }); // The preceding filter or status check established delivery; preserve direct access to its stored fields.

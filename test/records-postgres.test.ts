@@ -10,6 +10,9 @@ import { readStatement, recordsDb, oneStatement, writeStatement } from '../recor
 import { createJobTools } from '../records/job-tools.ts';
 import { serveRecordsTool } from '../runtime/records-tool.ts';
 import { installedJob, installedSop, renderCard, renderDiagram, viewParity } from '../records/views.ts';
+import { beginMappedAction, beginBoundAction, finishMappedAction } from '../tools/lib/action-check.ts';
+import { Store } from '../stream/store.ts';
+import { recordsReplyHandler, recordSentAction } from '../runtime/reply-tool.ts';
 
 function command(program: string, args: string[]) {
   const result = spawnSync(program, args, { encoding: 'utf8', timeout: 15000 });
@@ -44,7 +47,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       { id: 'open', label: 'Open', means: 'Unsent', do_here: 'Send', waiting_on: 'agent', terminal: false },
       { id: 'sent', label: 'Sent', means: 'Sent', do_here: 'Wait', waiting_on: 'client', terminal: false }
     ] }],
-    events: [{ id: 'send', kind: 'intent', mover: 'agent', observed_via: 'agent_action', action: 'send',
+    events: [{ id: 'send', kind: 'intent', mover: 'agent', observed_via: 'agent_action',
+      action: { tool: 'carbon-send', operation: 'send' },
       moves: [{ track: 'work', from: ['open'], to: 'sent' }] },
     { id: 'check', kind: 'observation', mover: 'client', observed_via: 'external_read',
       moves: [{ track: 'work', from: ['open'], to: 'sent' }] }] };
@@ -104,6 +108,16 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       assert.equal((await jobs.job_record(opened.job, 'send', 'observation', 'receipt-1')).status, 'already_recorded');
       const offModel = await jobs.job_record(opened.job, 'check', 'observation', 'client-check-1');
       assert.equal(offModel.off_model, true);
+      const mappedJob = await jobs.job_open('demo', 'thread-mapped', [], 'message-mapped');
+      await assert.rejects(() => jobs.action_begin(mappedJob.job, 'send', 'message-mapped', 'another-operation'),
+        /JOB_ACTION_UNMAPPED/);
+      const claim = await jobs.action_begin(mappedJob.job, 'send', 'message-mapped', 'send');
+      assert.equal(claim.status, 'claimed');
+      await assert.rejects(() => jobs.action_begin(mappedJob.job, 'send', 'message-racer', 'send'),
+        /JOB_ACTION_PENDING/);
+      const finished = await jobs.action_finish(mappedJob.job, 'send', 'tool-receipt-mapped', claim.action_id);
+      assert.equal(finished.status, 'recorded');
+      assert.equal((await jobs.job_read(mappedJob.job)).positions[0].position, 'sent');
       const secondJob = await jobs.job_open('demo', 'thread-2', [], 'message-2');
       const peer = createJobTools('carbon_test', async () => false, socket);
       try {
@@ -120,7 +134,7 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const agentDir = path.join(tmp, 'agent');
     fs.mkdirSync(path.join(agentDir, 'tools-work'), { recursive: true });
     const served = await serveRecordsTool({ database: 'carbon_test', agentId: 'carbon-test', agentDir,
-      socketDir: socket, port: 0, verifyObservation: async () => false });
+      socketDir: socket, port: 0, actionPort: 0, verifyObservation: async () => false });
     const port = (served.http.address() as AddressInfo).port;
     const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json() as Record<string, unknown>;
     assert.equal(health.status, 'ready');
@@ -136,6 +150,70 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const queried = await rpc('tools/call', { name: 'records_query',
       arguments: { sql: 'SELECT count(*)::int AS n FROM notes', max_rows: 10 } });
     assert.equal(queried.result.structuredContent.rows[0].n, 1);
+    const actionJob = await rpc('tools/call', { name: 'job_open', arguments: {
+      sop: 'demo', unit: 'thread-action-http', references: [], source_message_id: 'message-action-http' } });
+    const actionJobId = actionJob.result.structuredContent.job;
+    const actionCall = async (route: string, body: unknown) => {
+      const result = await fetch(`http://127.0.0.1:${served.actionPort}${route}`, { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: result.status, body: await result.json() as any };
+    };
+    const unmapped = await actionCall('/begin', { job: actionJobId, step: 'send',
+      source_id: 'message-action-http', operation: 'other' });
+    assert.equal(unmapped.status, 409);
+    assert.equal(unmapped.body.faults[0].code, 'JOB_ACTION_UNMAPPED');
+    const baseUrl = `http://127.0.0.1:${served.actionPort}`;
+    const mapped = { about_job: actionJobId, derived_job: actionJobId,
+      derived_move: 'send', operation: 'send', source_id: 'message-action-http' };
+    await assert.rejects(() => beginMappedAction({ ...mapped, about_move: 'other' }, { baseUrl }),
+      /JOB_ACTION_CONTEXT_MISMATCH/);
+    const claim = await beginMappedAction({ ...mapped, about_move: 'send' }, { baseUrl });
+    assert.equal(claim.kind, 'claimed');
+    await assert.rejects(() => beginMappedAction({ ...mapped, about_move: 'send',
+      source_id: 'message-racer-http' }, { baseUrl }), /JOB_ACTION_PENDING/);
+    if (claim.kind !== 'claimed') throw new Error('the mapped action did not claim');
+    const complete = await finishMappedAction(claim, 'receipt-action-http', { baseUrl });
+    assert.equal(complete.status, 'recorded');
+    const boundJob = await rpc('tools/call', { name: 'job_open', arguments: {
+      sop: 'demo', unit: 'thread-bound-http', references: [], source_message_id: 'message-bound-http' } });
+    const boundJobId = boundJob.result.structuredContent.job;
+    assert.deepEqual(await beginBoundAction({ unit: 'thread-bound-http', operation: 'reply',
+      about_job: boundJobId, about_move: 'other', source_id: 'reply-1' }, { baseUrl }), { kind: 'other' });
+    await assert.rejects(() => beginBoundAction({ unit: 'thread-bound-http', operation: 'reply',
+      about_job: 'unbound-job', about_move: 'other', source_id: 'reply-1' }, { baseUrl }),
+      /JOB_ACTION_CONTEXT_MISMATCH/);
+    await assert.rejects(() => beginBoundAction({ unit: 'thread-bound-http', operation: 'send',
+      about_job: boundJobId, about_move: 'other', source_id: 'reply-2' }, { baseUrl }),
+      /JOB_ACTION_CONTEXT_MISMATCH/);
+    const bound = await beginBoundAction({ unit: 'thread-bound-http', operation: 'send',
+      about_job: boundJobId, about_move: 'send', source_id: 'reply-2' }, { baseUrl });
+    assert.equal(bound.kind, 'claimed');
+    const replyJob = await rpc('tools/call', { name: 'job_open', arguments: {
+      sop: 'demo', unit: 'reply-conversation', references: [], source_message_id: 'reply-inbound' } });
+    const replyJobId = replyJob.result.structuredContent.job;
+    const replyStore = Store.open(path.join(tmp, 'reply-store'));
+    replyStore.capture({ schema: 'carbon.message.v1', agent: 'carbon-test', source: 'telegram',
+      account: 'test', conversation_id: 'reply-conversation', conversation_kind: 'direct',
+      message_id: 'reply-inbound', platform_message_id: 'inbound', revision: 0,
+      direction: 'inbound', role: 'contact', sender_id: 'contact',
+      received_at: new Date().toISOString(), body: 'Send it', attachments: [],
+      historical: false, disposition: 'captured' });
+    const reply = recordsReplyHandler({ store: replyStore, agent: 'carbon-test',
+      declaration: { records: { enabled: true } }, actionUrl: baseUrl });
+    const replyArgs = { conversation_id: 'reply-conversation', request_id: 'reply-request',
+      text: 'Sent', about_job: replyJobId, about_move: 'other' };
+    await assert.rejects(() => reply(replyArgs), /JOB_ACTION_CONTEXT_MISMATCH/);
+    assert.equal(replyStore.rebuild().filter((r) => r.direction === 'outbound').length, 0);
+    const written = await reply({ ...replyArgs, about_move: 'send' });
+    assert.equal(written.data.status, 'written');
+    const pendingReply = replyStore.rebuild().find((r) => r.direction === 'outbound')!;
+    assert.ok(pendingReply.delivery?.action_claim);
+    const sentReply = replyStore.markSent('reply-request', ['channel-id']);
+    await recordSentAction(replyStore, sentReply, { actionUrl: baseUrl });
+    // Recovery can repeat the receipt after a crash before its file annotation.
+    await recordSentAction(replyStore, sentReply, { actionUrl: baseUrl });
+    assert.equal((await installedJob('carbon_test', replyJobId, socket)).job.positions.work, 'sent');
+    assert.ok(replyStore.rebuild().find((r) => r.direction === 'outbound')?.adapter_fields?.action_recorded_at);
     await served.stop();
     const receipt = JSON.parse(fs.readFileSync(path.join(agentDir, 'tools-work', 'carbon-records-drain.json'), 'utf8'));
     assert.equal(receipt.database_sessions_closed, true);
