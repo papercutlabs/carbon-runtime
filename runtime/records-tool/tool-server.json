@@ -36,7 +36,7 @@
     },
     {
       "name": "job_open",
-      "description": "Open one run of an installed SOP. Name its SOP, the conversation or work unit, the client references, and the current message or timer event id. The cause id is required for the change log and is a trace supplied by you, not verified authority. Read the new job before taking an action.",
+      "description": "Open one run of an installed SOP. Name its SOP, the current conversation or work unit, the client references, and the current message or timer event id. The runtime verifies the unit and cause against this turn before the job is opened. Read the new job before taking an action.",
       "arguments": { "type": "object", "additionalProperties": false,
         "required": ["sop", "unit", "references", "source_message_id"], "properties": {
           "sop": { "type": "string", "description": "installed SOP id from records/sops/<sop>.json" },

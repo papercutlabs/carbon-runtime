@@ -58,6 +58,18 @@ async function post(route: string, body: unknown, baseUrl: string, doFetch: type
   return result;
 }
 
+export async function beginRecordsTurn(input: { releaseId: string; unit: string; sourceIds: string[] }, {
+  baseUrl = RECORDS_ACTION_URL, doFetch = fetch
+}: { baseUrl?: string; doFetch?: typeof fetch } = {}) {
+  return post('/turn-start', input, baseUrl, doFetch);
+}
+
+export async function endRecordsTurn(releaseId: string, {
+  baseUrl = RECORDS_ACTION_URL, doFetch = fetch
+}: { baseUrl?: string; doFetch?: typeof fetch } = {}) {
+  return post('/turn-end', { releaseId }, baseUrl, doFetch);
+}
+
 // The client tool supplies derived_job and derived_move from its own target and
 // operation map. The model's about_* arguments are compared with that result;
 // they do not select which job or move the tool checks.
@@ -105,13 +117,23 @@ export async function finishMappedAction(claim: Claimed, sourceId: string, {
     action_id: claim.action_id, source_id: sourceId }, baseUrl, doFetch);
 }
 
-// Only a client-system read that found no effect calls this. The records
-// service checks the original claiming process generation before re-arming.
-export async function reconcileAbsentAction(claim: Claimed, sourceId: string, {
+// The mapped client tool owns the external read. The service first proves the
+// original process generation is gone, then the tool reads the client record.
+// The read result is a trusted tool receipt, never an agent-supplied claim.
+export async function reconcileAbsentAction(claim: Claimed, sourceId: string,
+  readEffect: () => Promise<{ effect: 'absent' | 'present'; evidence_id: string }>, {
   baseUrl = RECORDS_ACTION_URL, doFetch = fetch
 }: { baseUrl?: string; doFetch?: typeof fetch } = {}) {
+  await post('/reconcile-ready', { job: claim.job, step: claim.step,
+    action_id: claim.action_id }, baseUrl, doFetch);
+  const read_receipt = await readEffect();
+  if (!read_receipt || read_receipt.effect !== 'absent') {
+    throw new ToolFault([fault('JOB_ACTION_EFFECT_PRESENT', claim.action_id,
+      'the client-system read did not establish that the effect is absent',
+      'keep the claim pending and reconcile the observed client effect')]);
+  }
   return post('/reconcile-absent', { job: claim.job, step: claim.step,
-    action_id: claim.action_id, source_id: sourceId }, baseUrl, doFetch);
+    action_id: claim.action_id, source_id: sourceId, read_receipt }, baseUrl, doFetch);
 }
 
 // The runtime or a mapped client-read tool calls this after it has captured a

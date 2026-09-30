@@ -1,7 +1,10 @@
 import http from 'node:http';
 import { asFaults, fault } from '../tools/lib/fault.ts';
+import type { TurnContext } from '../records/job-tools.ts';
 
 type Actions = {
+  action_turn_start(context: TurnContext): unknown;
+  action_turn_end(releaseId: string): unknown;
   action_collect(source_id: string, channel: string, unit: string): Promise<unknown>;
   action_classify(job: string | null, operation: string): Promise<unknown>;
   action_begin(job: string, step: string, source_id: string, operation: string,
@@ -9,7 +12,9 @@ type Actions = {
   action_bound(unit: string, operation: string, about_job: string, about_move: string,
     source_id: string, owner: { pid: number; generation: string }): Promise<unknown>;
   action_finish(job: string, step: string, source_id: string, action_id: string): Promise<unknown>;
-  action_reconcile_absent(job: string, step: string, source_id: string, action_id: string): Promise<unknown>;
+  action_reconcile_ready(job: string, step: string, action_id: string): Promise<unknown>;
+  action_reconcile_absent(job: string, step: string, source_id: string, action_id: string,
+    read_receipt: { effect: string; evidence_id: string }): Promise<unknown>;
 };
 const MAX_BODY = 16384;
 
@@ -27,7 +32,8 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
       send(200, { schema: 'carbon.records-action-health.v1', status: 'ready' });
       return;
     }
-    if (request.method !== 'POST' || !['/collect', '/classify', '/begin', '/bound', '/finish', '/reconcile-absent'].includes(request.url ?? '')) {
+    if (request.method !== 'POST' || !['/collect', '/classify', '/begin', '/bound', '/finish', '/reconcile-ready', '/reconcile-absent',
+      '/turn-start', '/turn-end'].includes(request.url ?? '')) {
       send(404, { faults: [fault('RECORDS_ACTION_ROUTE', String(request.url),
         'this route does not exist', 'use an action route from a mapped tool')] });
       return;
@@ -45,18 +51,20 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
     }
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const value = request.url === '/collect'
-        ? await actions.action_collect(body.source_id, body.channel, body.unit)
-        : request.url === '/classify'
-        ? await actions.action_classify(body.job, body.operation)
-        : request.url === '/begin'
-          ? await actions.action_begin(body.job, body.step, body.source_id, body.operation, body.owner)
-        : request.url === '/bound'
-          ? await actions.action_bound(body.unit, body.operation, body.about_job, body.about_move,
-            body.source_id, body.owner)
-          : request.url === '/finish'
-            ? await actions.action_finish(body.job, body.step, body.source_id, body.action_id)
-            : await actions.action_reconcile_absent(body.job, body.step, body.source_id, body.action_id);
+      const routes: Record<string, () => unknown> = {
+        '/turn-start': () => actions.action_turn_start(body),
+        '/turn-end': () => actions.action_turn_end(body.releaseId),
+        '/collect': () => actions.action_collect(body.source_id, body.channel, body.unit),
+        '/classify': () => actions.action_classify(body.job, body.operation),
+        '/begin': () => actions.action_begin(body.job, body.step, body.source_id, body.operation, body.owner),
+        '/bound': () => actions.action_bound(body.unit, body.operation, body.about_job, body.about_move,
+          body.source_id, body.owner),
+        '/finish': () => actions.action_finish(body.job, body.step, body.source_id, body.action_id),
+        '/reconcile-ready': () => actions.action_reconcile_ready(body.job, body.step, body.action_id),
+        '/reconcile-absent': () => actions.action_reconcile_absent(body.job, body.step, body.source_id,
+          body.action_id, body.read_receipt)
+      };
+      const value = await routes[request.url!]();
       send(200, value);
     } catch (error) {
       send(409, { faults: asFaults(error) });

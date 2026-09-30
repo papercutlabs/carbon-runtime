@@ -84,12 +84,19 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       "WITH input(body) AS (VALUES ('second'), ('third')) INSERT INTO notes(body) SELECT body FROM input",
       'message-2', 1, socket), /over max_rows/);
     assert.equal((await readStatement('carbon_test', 'SELECT count(*)::int AS n FROM notes', socket))[0].n, 1);
+    let directContext: { releaseId: string; unit: string; sourceIds: string[] } | null = null;
     const jobs = createJobTools('carbon_test', async (source, channel) =>
-      source === 'client-check-1' && channel === 'external_read', socket);
+      source === 'client-check-1' && channel === 'external_read', socket, () => directContext);
+    const openDirect = (sopId: string, unit: string, references: string[], cause: string) => {
+      directContext = { releaseId: `direct-${unit}`, unit, sourceIds: [cause] };
+      return jobs.job_open(sopId, unit, references, cause);
+    };
     const activeOwner = { pid: process.pid, generation: processGeneration(process.pid)! };
     try {
-      await assert.rejects(() => jobs.job_open('demo', 'thread-1', [], ''), /JOB_OPEN_CAUSE_INVALID/);
-      const opened = await jobs.job_open('demo', 'thread-1', ['reference-1'], 'message-1');
+      await assert.rejects(() => openDirect('demo', 'thread-1', [], ''), /JOB_OPEN_CAUSE_INVALID/);
+      const opened = await openDirect('demo', 'thread-1', ['reference-1'], 'message-1');
+      await assert.rejects(() => jobs.job_open('demo', 'decoy-thread', [], 'message-1'), /JOB_OPEN_UNIT_MISMATCH/);
+      await assert.rejects(() => jobs.job_open('demo', 'thread-1', [], 'made-up-message'), /JOB_OPEN_CAUSE_MISMATCH/);
       assert.equal(opened.sop_version, '1');
       const installed = await installedSop('carbon_test', 'demo', socket);
       const viewed = await installedJob('carbon_test', opened.job, socket);
@@ -116,7 +123,7 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       assert.equal((await jobs.job_record(opened.job, 'send', 'observation', 'receipt-1')).status, 'already_recorded');
       const offModel = await jobs.job_record(opened.job, 'check', 'observation', 'client-check-1');
       assert.equal(offModel.off_model, true);
-      const mappedJob = await jobs.job_open('demo', 'thread-mapped', [], 'message-mapped');
+      const mappedJob = await openDirect('demo', 'thread-mapped', [], 'message-mapped');
       await assert.rejects(() => jobs.action_begin(mappedJob.job, 'send', 'message-mapped', 'another-operation', activeOwner),
         /JOB_ACTION_UNMAPPED/);
       const claim = await jobs.action_begin(mappedJob.job, 'send', 'message-mapped', 'send', activeOwner);
@@ -126,7 +133,7 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       const finished = await jobs.action_finish(mappedJob.job, 'send', 'tool-receipt-mapped', claim.action_id);
       assert.equal(finished.status, 'recorded');
       assert.equal((await jobs.job_read(mappedJob.job)).positions[0].position, 'sent');
-      const secondJob = await jobs.job_open('demo', 'thread-2', [], 'message-2');
+      const secondJob = await openDirect('demo', 'thread-2', [], 'message-2');
       const peer = createJobTools('carbon_test', async () => false, socket);
       try {
         const contenders = await Promise.allSettled([
@@ -153,14 +160,58 @@ test('real PostgreSQL applies each migration once, protects generated tables and
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
       return response.json() as Promise<any>;
     };
+    const openServer = async (args: { sop: string; unit: string; references: string[]; source_message_id: string },
+      contextUnit = args.unit, contextCause = args.source_message_id) => {
+      const releaseId = `test-${args.source_message_id}`;
+      const start = await fetch(`http://127.0.0.1:${served.actionPort}/turn-start`, { method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ releaseId, unit: contextUnit, sourceIds: [contextCause] }) });
+      assert.equal(start.status, 200);
+      try { return await rpc('tools/call', { name: 'job_open', arguments: args }); }
+      finally {
+        const end = await fetch(`http://127.0.0.1:${served.actionPort}/turn-end`, { method: 'POST',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ releaseId }) });
+        assert.equal(end.status, 200);
+      }
+    };
     const listed = await rpc('tools/list', {});
     assert.equal(listed.result.tools.length, 7);
     const queried = await rpc('tools/call', { name: 'records_query',
       arguments: { sql: 'SELECT count(*)::int AS n FROM notes', max_rows: 10 } });
     assert.equal(queried.result.structuredContent.rows[0].n, 1);
-    const actionJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'thread-action-http', references: [], source_message_id: 'message-action-http' } });
+    const actionJob = await openServer({
+      sop: 'demo', unit: 'thread-action-http', references: [], source_message_id: 'message-action-http' });
     const actionJobId = actionJob.result.structuredContent.job;
+    const decoy = await openServer({ sop: 'demo', unit: 'decoy-thread', references: [],
+      source_message_id: 'message-decoy' }, 'real-thread');
+    assert.equal(decoy.result.isError, true);
+    assert.equal(decoy.result.structuredContent.faults[0].code, 'JOB_OPEN_UNIT_MISMATCH');
+    const falseCause = await openServer({ sop: 'demo', unit: 'real-thread', references: [],
+      source_message_id: 'message-false' }, 'real-thread', 'message-current');
+    assert.equal(falseCause.result.isError, true);
+    assert.equal(falseCause.result.structuredContent.faults[0].code, 'JOB_OPEN_CAUSE_MISMATCH');
+    const concurrentTurns = [
+      { releaseId: 'test-concurrent-a', unit: 'concurrent-a', sourceIds: ['message-concurrent-a'] },
+      { releaseId: 'test-concurrent-b', unit: 'concurrent-b', sourceIds: ['message-concurrent-b'] }
+    ];
+    for (const context of concurrentTurns) {
+      const started = await fetch(`http://127.0.0.1:${served.actionPort}/turn-start`, { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify(context) });
+      assert.equal(started.status, 200);
+    }
+    try {
+      for (const context of concurrentTurns) {
+        const opened = await rpc('tools/call', { name: 'job_open', arguments: {
+          sop: 'demo', unit: context.unit, references: [], source_message_id: context.sourceIds[0] } });
+        assert.equal(opened.result.isError, false);
+      }
+    } finally {
+      for (const context of concurrentTurns) {
+        const ended = await fetch(`http://127.0.0.1:${served.actionPort}/turn-end`, { method: 'POST',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ releaseId: context.releaseId }) });
+        assert.equal(ended.status, 200);
+      }
+    }
     const actionCall = async (route: string, body: unknown) => {
       const result = await fetch(`http://127.0.0.1:${served.actionPort}${route}`, { method: 'POST',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -171,8 +222,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     assert.equal(unmapped.status, 409);
     assert.equal(unmapped.body.faults[0].code, 'JOB_ACTION_UNMAPPED');
     const baseUrl = `http://127.0.0.1:${served.actionPort}`;
-    const collectedJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'telegram-unit', references: [], source_message_id: 'message-collected' } });
+    const collectedJob = await openServer({
+      sop: 'demo', unit: 'telegram-unit', references: [], source_message_id: 'message-collected' });
     const collectedJobId = collectedJob.result.structuredContent.job;
     const uncollected = await rpc('tools/call', { name: 'job_record', arguments: {
       job: collectedJobId, step: 'arrive', kind: 'observation', source_id: 'telegram-event-1' } });
@@ -180,8 +231,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     assert.match(JSON.stringify(uncollected), /JOB_SOURCE_UNVERIFIED/);
     assert.equal((await recordCollectedEvent({ source_id: 'telegram-event-1', channel: 'telegram',
       unit: 'telegram-unit' }, { baseUrl })).status, 'collected');
-    const wrongUnitJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'other-unit', references: [], source_message_id: 'message-other-unit' } });
+    const wrongUnitJob = await openServer({
+      sop: 'demo', unit: 'other-unit', references: [], source_message_id: 'message-other-unit' });
     const wrongUnitObservation = await rpc('tools/call', { name: 'job_record', arguments: {
       job: wrongUnitJob.result.structuredContent.job, step: 'arrive', kind: 'observation',
       source_id: 'telegram-event-1' } });
@@ -206,8 +257,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     if (claim.kind !== 'claimed') throw new Error('the mapped action did not claim');
     const complete = await finishMappedAction(claim, 'receipt-action-http', { baseUrl });
     assert.equal(complete.status, 'recorded');
-    const boundJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'thread-bound-http', references: [], source_message_id: 'message-bound-http' } });
+    const boundJob = await openServer({
+      sop: 'demo', unit: 'thread-bound-http', references: [], source_message_id: 'message-bound-http' });
     const boundJobId = boundJob.result.structuredContent.job;
     assert.deepEqual(await beginBoundAction({ unit: 'thread-bound-http', operation: 'reply',
       about_job: boundJobId, about_move: 'other', source_id: 'reply-1' }, { baseUrl }), { kind: 'other' });
@@ -220,8 +271,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const bound = await beginBoundAction({ unit: 'thread-bound-http', operation: 'send',
       about_job: boundJobId, about_move: 'send', source_id: 'reply-2' }, { baseUrl });
     assert.equal(bound.kind, 'claimed');
-    const toolJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'thread-client-tool', references: [], source_message_id: 'message-tool' } });
+    const toolJob = await openServer({
+      sop: 'demo', unit: 'thread-client-tool', references: [], source_message_id: 'message-tool' });
     const toolJobId = toolJob.result.structuredContent.job;
     const toolTarget = path.join(tmp, 'client-tool.json');
     fs.writeFileSync(toolTarget, JSON.stringify({ job: toolJobId, status: 'open', writes: 0 }));
@@ -237,8 +288,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const recovered = await standinClientWrite(tmp, toolCall, { baseUrl });
     assert.equal(recovered.writes, 1, 'a repeated call reads the client effect before making another');
     assert.equal((await installedJob('carbon_test', toolJobId, socket)).job.positions.work, 'sent');
-    const raceJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'thread-client-race', references: [], source_message_id: 'message-race' } });
+    const raceJob = await openServer({
+      sop: 'demo', unit: 'thread-client-race', references: [], source_message_id: 'message-race' });
     const raceJobId = raceJob.result.structuredContent.job;
     const raceTarget = path.join(tmp, 'client-race.json');
     fs.writeFileSync(raceTarget, JSON.stringify({ job: raceJobId, status: 'open', writes: 0 }));
@@ -251,8 +302,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     assert.ok(race.some((result) => result.status === 'fulfilled'));
     assert.equal(JSON.parse(fs.readFileSync(raceTarget, 'utf8')).writes, 1,
       'two concurrent client tools cause one external effect');
-    const crashJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'thread-crash', references: [], source_message_id: 'message-crash' } });
+    const crashJob = await openServer({
+      sop: 'demo', unit: 'thread-crash', references: [], source_message_id: 'message-crash' });
     const crashJobId = crashJob.result.structuredContent.job;
     const target = path.join(tmp, 'standin-client-record.json');
     fs.writeFileSync(target, JSON.stringify({ job: crashJobId, status: 'open' }));
@@ -269,16 +320,25 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       assert.equal(claimed.status, 200);
       const crashClaim = { kind: 'claimed' as const, job: crashJobId, step: 'send',
         action_id: claimed.body.action_id as string };
-      await assert.rejects(() => reconcileAbsentAction(crashClaim, 'client-read-still-live', { baseUrl }),
+      const readCrashTarget = async () => ({
+        effect: JSON.parse(fs.readFileSync(target, 'utf8')).status === 'sent'
+          ? 'present' as const : 'absent' as const,
+        evidence_id: 'client-read-absent'
+      });
+      await assert.rejects(() => reconcileAbsentAction(crashClaim, 'client-read-still-live',
+        readCrashTarget, { baseUrl }),
         /JOB_ACTION_OWNER_ACTIVE/);
       assert.equal(processGeneration(claimantPid), claimantGeneration,
         'the test signals only the exact process generation it started');
       const exited = once(claimant, 'exit');
       assert.equal(claimant.kill('SIGTERM'), true);
       await exited;
-      assert.equal(JSON.parse(fs.readFileSync(target, 'utf8')).status, 'open',
-        'the client record read establishes that the claimed effect is absent');
-      const reconciled = await reconcileAbsentAction(crashClaim, 'client-read-absent', { baseUrl });
+      const noReceipt = await actionCall('/reconcile-absent', { job: crashJobId, step: 'send',
+        action_id: crashClaim.action_id, source_id: 'no-client-read' });
+      assert.equal(noReceipt.status, 409);
+      assert.equal(noReceipt.body.faults[0].code, 'JOB_ACTION_READ_ABSENT');
+      const reconciled = await reconcileAbsentAction(crashClaim, 'client-read-absent',
+        readCrashTarget, { baseUrl });
       assert.equal(reconciled.status, 'reconciled_absent');
       const retry = await beginMappedAction({ about_job: crashJobId, about_move: 'send',
         derived_job: crashJobId, derived_move: 'send', operation: 'send',
@@ -295,8 +355,8 @@ test('real PostgreSQL applies each migration once, protects generated tables and
         await exited;
       }
     }
-    const replyJob = await rpc('tools/call', { name: 'job_open', arguments: {
-      sop: 'demo', unit: 'reply-conversation', references: [], source_message_id: 'reply-inbound' } });
+    const replyJob = await openServer({
+      sop: 'demo', unit: 'reply-conversation', references: [], source_message_id: 'reply-inbound' });
     const replyJobId = replyJob.result.structuredContent.job;
     const replyStore = Store.open(path.join(tmp, 'reply-store'));
     replyStore.capture({ schema: 'carbon.message.v1', agent: 'carbon-test', source: 'telegram',
@@ -377,7 +437,7 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const hiddenRls = path.join(repo, 'records', 'migrations', '0002-hidden-rls.sql');
     fs.writeFileSync(hiddenRls,
       "DO $$BEGIN EXECUTE 'ALTER TABLE notes ENABLE ROW LEVEL SECURITY'; END$$;");
-    await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-3', socket), /row-level security/);
+    await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-3', socket), /executable DO/);
     const rls = psql('carbon_test', "SELECT relrowsecurity FROM pg_class WHERE relname = 'notes'");
     assert.match(rls, /\bf\b/);
     fs.rmSync(hiddenRls);
@@ -389,14 +449,14 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       + 'GRANT USAGE ON SCHEMA client_internal TO carbon_backup; '
       + 'GRANT EXECUTE ON FUNCTION client_internal.mutate() TO carbon_backup;');
     await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-3a', socket),
-      /backup login can call owner-rights function client_internal.mutate/);
+      /routine definitions are forbidden/);
     assert.doesNotMatch(psql('carbon_test', "SELECT nspname FROM pg_namespace WHERE nspname = 'client_internal'"),
       /client_internal/);
     fs.rmSync(hiddenFunction);
     const hiddenDisable = path.join(repo, 'records', 'migrations', '0002-disable-change-trigger.sql');
     fs.writeFileSync(hiddenDisable,
       "DO $$BEGIN EXECUTE 'ALTER TABLE notes DISABLE TRIGGER carbon_changes_notes'; END$$;");
-    await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-3b', socket), /no enabled Carbon change trigger/);
+    await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-3b', socket), /executable DO/);
     assert.match(psql('carbon_test', "SELECT tgenabled FROM pg_trigger WHERE tgname = 'carbon_changes_notes'"), /\bO\b/);
     fs.rmSync(hiddenDisable);
     fs.writeFileSync(path.join(repo, 'records', 'migrations', '0000-too-late.sql'), 'SELECT 1;');

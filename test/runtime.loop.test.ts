@@ -697,8 +697,11 @@ test('an app-server listing a tool server nobody declared still ends the process
 });
 
 test('enabled records refuse an unrendered server and hold while a rendered server is down', async () => {
+  const calls: { route: string | undefined; body: Record<string, unknown> }[] = [];
   const collector = http.createServer(async (request, response) => {
-    for await (const _part of request) { /* consume the captured receipt */ }
+    const parts: Buffer[] = [];
+    for await (const part of request) parts.push(part);
+    calls.push({ route: request.url, body: JSON.parse(Buffer.concat(parts).toString('utf8')) });
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ status: 'collected' }));
   });
@@ -733,6 +736,12 @@ test('enabled records refuse an unrendered server and hold while a rendered serv
   const ready = await loop.pass([]);
   assert.equal(ready.released.length, 1);
   assert.equal(harness.session.turns.length, 1);
+  const started = calls.find((call) => call.route === '/turn-start');
+  assert.ok(started);
+  assert.equal(started.body.unit, 'account-1:c1');
+  assert.deepEqual(started.body.sourceIds, [ready.released[0].message_id]);
+  assert.deepEqual(calls.filter((call) => call.route === '/turn-end').map((call) => call.body.releaseId),
+    [started.body.releaseId]);
   } finally {
     await new Promise<void>((resolve) => collector.close(() => resolve()));
   }

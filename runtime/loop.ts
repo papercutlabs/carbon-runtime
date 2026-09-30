@@ -47,7 +47,7 @@ import { TEACH_SERVER_NAME } from './teach-tool.ts';
 import { RECORDS_SERVER_NAME } from './records-tool.ts';
 import { conversationKindOf } from './channel.ts';
 import { unitIdFor } from './unit.ts';
-import { recordCollectedEvent } from '../tools/lib/action-check.ts';
+import { beginRecordsTurn, endRecordsTurn, recordCollectedEvent } from '../tools/lib/action-check.ts';
 export { unitIdFor } from './unit.ts';
 // The recorder runs beside the loops rather than in one: the runtime process
 // makes one and every loop's after-turn hook asks it for a read. It is reached
@@ -1030,11 +1030,23 @@ export class ReleaseLoop<S = Session> {
       release_id: releaseId, thread_id: threadId, reissue
     });
 
-    const { result, completedAt } = await this.takeTurn({
-      unitId, threadId, releaseId,
-      input: turnInput(records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration }),
-      clientUserMessageId: releaseId
-    });
+    if (this.declaration.records?.enabled === true) {
+      await beginRecordsTurn({ releaseId, unit: unitId, sourceIds: messageIds },
+        { baseUrl: this.recordsActionUrl });
+    }
+    let taken: Awaited<ReturnType<typeof this.takeTurn>>;
+    try {
+      taken = await this.takeTurn({
+        unitId, threadId, releaseId,
+        input: turnInput(records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration }),
+        clientUserMessageId: releaseId
+      });
+    } finally {
+      if (this.declaration.records?.enabled === true) {
+        await endRecordsTurn(releaseId, { baseUrl: this.recordsActionUrl });
+      }
+    }
+    const { result, completedAt } = taken;
 
     // The status is recorded verbatim. `failed` is the model's own permanent
     // refusal of this input, so it closes the release, marks the record and takes

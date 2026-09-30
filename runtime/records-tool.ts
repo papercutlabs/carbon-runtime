@@ -5,7 +5,7 @@ import { readManifest } from '../tools/lib/manifest.ts';
 import { renderHelp } from '../tools/lib/help.ts';
 import { refuse } from '../tools/lib/fault.ts';
 import { readStatement, recordsDb, writeStatement } from '../records/db.ts';
-import { createJobTools } from '../records/job-tools.ts';
+import { createJobTools, type TurnContext } from '../records/job-tools.ts';
 import { serveActionHttp } from './records-action-http.ts';
 
 export const RECORDS_SERVER_NAME = 'carbon-records';
@@ -33,7 +33,9 @@ function statement(value: unknown): string {
 }
 
 function createRecordsServer(database: string, verifyObservation: VerifyObservation, socketDir?: string) {
-  const jobs = createJobTools(database, verifyObservation, socketDir);
+  const activeTurns = new Map<string, TurnContext>();
+  const jobs = createJobTools(database, verifyObservation, socketDir,
+    (cause) => [...activeTurns.values()].find((turn) => turn.sourceIds.includes(cause)) ?? null);
   const server = createServer({
     manifest: MANIFEST,
     handlers: {
@@ -56,7 +58,30 @@ function createRecordsServer(database: string, verifyObservation: VerifyObservat
         args.kind as 'intent' | 'observation', args.source_id as string)
     }
   });
-  return { server, jobs };
+  return { server, jobs, turn: {
+    start(context: TurnContext) {
+      if (activeTurns.has(context.releaseId)) refuse('JOB_TURN_ACTIVE', context.releaseId,
+        'this release already holds a records turn context', 'finish that release before starting it again');
+      if (typeof context.releaseId !== 'string' || !context.releaseId.trim()
+        || typeof context.unit !== 'string' || !context.unit.trim()
+        || !Array.isArray(context.sourceIds) || context.sourceIds.length === 0
+        || context.sourceIds.some((id) => typeof id !== 'string' || !id.trim())) {
+        refuse('JOB_TURN_CONTEXT_INVALID', String(context.releaseId),
+          'the runtime supplied an incomplete work unit or cause', 'supply the captured turn context');
+      }
+      if ([...activeTurns.values()].some((turn) =>
+        context.sourceIds.some((id) => turn.sourceIds.includes(id)))) refuse('JOB_TURN_CONTEXT_DUPLICATE',
+          context.releaseId, 'one event id cannot belong to two active turns',
+          'finish the first release before starting a second for that event');
+      activeTurns.set(context.releaseId, context);
+      return { status: 'active', release_id: context.releaseId };
+    },
+    end(releaseId: string) {
+      if (!activeTurns.delete(releaseId)) refuse('JOB_TURN_CONTEXT_MISMATCH', releaseId,
+        'no active records turn has this release id', 'end the release that started this records context');
+      return { status: 'ended', release_id: releaseId };
+    }
+  } };
 }
 
 function drainReceipt(file: string, invocationId: string | null, agentId: string) {
@@ -81,14 +106,17 @@ export async function serveRecordsTool({ database, agentId, agentDir, verifyObse
   finally { await probe.end({ timeout: 2 }); }
   const receiptFile = path.join(agentDir, 'tools-work', 'carbon-records-drain.json');
   fs.rmSync(receiptFile, { force: true });
-  const { server, jobs } = createRecordsServer(database, verifyObservation, socketDir);
+  const { server, jobs, turn } = createRecordsServer(database, verifyObservation, socketDir);
   let status: 'ready' | 'draining' | 'stopped' = 'ready';
   const invocationId = process.env.INVOCATION_ID ?? null;
   const { server: http, url } = await server.serveHttp({ host, port,
     health: () => ({ schema: 'carbon.records-health.v1', status, agent_id: agentId,
       invocation_id: invocationId }) });
   let actionHttp: Awaited<ReturnType<typeof serveActionHttp>>;
-  try { actionHttp = await serveActionHttp(jobs, actionPort); }
+  try { actionHttp = await serveActionHttp({ ...jobs,
+    action_turn_start: (context) => turn.start(context),
+    action_turn_end: (releaseId) => turn.end(releaseId)
+  }, actionPort); }
   catch (error) { await new Promise<void>((resolve) => http.close(() => resolve())); await jobs.close(); throw error; }
   let stopPromise: Promise<void> | null = null;
   function stop() {

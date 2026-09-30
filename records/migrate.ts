@@ -161,6 +161,7 @@ async function installSops(db: AnySql, checked: CheckedRecords, digest: string) 
         id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         job_id uuid NOT NULL REFERENCES public.${identifier(jobs)}(job_id),
         event text NOT NULL, kind text NOT NULL, source_id text NOT NULL,
+        read_evidence_id text,
         at timestamptz NOT NULL DEFAULT clock_timestamp(), off_model boolean NOT NULL DEFAULT false,
         UNIQUE (job_id, source_id, event, kind))`);
       await tx.unsafe(`GRANT SELECT ON public.${identifier(jobs)}, public.${identifier(events)} TO carbon_read, carbon_write`);

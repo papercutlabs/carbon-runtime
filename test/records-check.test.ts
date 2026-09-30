@@ -53,6 +53,18 @@ test('records check refuses destructive SQL, protected schema, RLS and duplicate
   } finally { fs.rmSync(repo, { recursive: true, force: true }); }
 });
 
+test('records check refuses destructive SQL hidden in an executable DO block', () => {
+  const repo = fixture("CREATE TABLE dispatch_notes (id bigint); DO $$BEGIN EXECUTE 'TRUNCATE dispatch_notes'; END$$;");
+  try { assert.match(checkRecords(repo).faults.join('\n'), /executable DO, CALL and routine definitions are forbidden/); }
+  finally { fs.rmSync(repo, { recursive: true, force: true }); }
+});
+
+test('records check refuses a DELETE inside a data-changing CTE', () => {
+  const repo = fixture('CREATE TABLE dispatch_notes (id bigint); WITH gone AS (DELETE FROM dispatch_notes RETURNING id) SELECT count(*) FROM gone;');
+  try { assert.match(checkRecords(repo).faults.join('\n'), /DROP, TRUNCATE and DELETE are forbidden/); }
+  finally { fs.rmSync(repo, { recursive: true, force: true }); }
+});
+
 test('records check refuses an uncollected step and a deadline without a chase', () => {
   const changed = structuredClone(SOP);
   changed.events[0].observed_via = 'unknown';

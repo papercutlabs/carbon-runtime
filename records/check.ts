@@ -103,8 +103,14 @@ export function checkRecords(repo: string): CheckResult {
     migrations.push({ number, name, file, sha256, sql });
     try {
       const skeleton = sqlSkeleton(sql);
-      if (/(^|;)\s*(drop|truncate|delete)\b/im.test(skeleton)
-        || /\balter\s+table\b[^;]*\bdrop\b/im.test(skeleton)) {
+      // A DO block or callable routine can execute dynamic SQL that the
+      // lexical check cannot inspect. Migrations are schema/data statements,
+      // not a route around the no-delete promise.
+      if (/\b(?:do|call)\b/i.test(skeleton)
+        || /\b(?:create|alter)\s+(?:or\s+replace\s+)?(?:function|procedure)\b/i.test(skeleton)) {
+        faults.push(`records/migrations/${name}: executable DO, CALL and routine definitions are forbidden`);
+      }
+      if (/\b(?:drop|truncate|delete)\b/i.test(skeleton)) {
         faults.push(`records/migrations/${name}: DROP, TRUNCATE and DELETE are forbidden; see agent-records-principles.md`);
       }
       if (/\bcarbon\s*\./i.test(sql) || /\b(?:create|alter|drop)\s+schema\s+carbon\b/i.test(skeleton)) {

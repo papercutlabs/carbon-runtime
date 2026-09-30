@@ -7,6 +7,7 @@ import { allowedIntents, applyObservation, initialPositions, legality, positionV
 
 type VerifyObservation = (sourceId: string, channel: string, jobId: string) => Promise<boolean>;
 type Owner = { pid: number; generation: string };
+export type TurnContext = { releaseId: string; unit: string; sourceIds: string[] };
 type Pending = Record<string, { step: string; action_id: string; source_id: string;
   state: 'reserved' | 'claimed'; since: string; owner?: Owner }>;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,7 +38,7 @@ function jobId(value: unknown): string {
 }
 
 export function createJobTools(database: string, verifyObservation: VerifyObservation,
-  socketDir?: string) {
+  socketDir?: string, currentTurn: (cause: string) => TurnContext | null = () => null) {
   // shape: justified the five tool handlers share one owner-role connection and the same locked job-read helpers; splitting the closure would duplicate that authority path
   const db = recordsDb(database, 'carbon_owner', 4, socketDir);
   async function latestSop(tx: any, sop: string): Promise<Sop> {
@@ -107,6 +108,13 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
       const cause = sourceId(source_message_id, 'source_message_id');
       if (typeof unit !== 'string' || !unit.trim()) refuse('JOB_UNIT_INVALID', 'unit',
         'a job needs the conversation or work unit it belongs to', 'pass a nonempty unit id');
+      const trusted = currentTurn(cause);
+      if (!trusted || !trusted.sourceIds.includes(cause)) refuse('JOB_OPEN_CAUSE_MISMATCH', cause,
+        'the job cause differs from the current message or timer event',
+        'pass the current message or timer event id exactly as the turn received it');
+      if (trusted.unit !== unit) refuse('JOB_OPEN_UNIT_MISMATCH', unit,
+        'the job unit differs from the runtime\'s current work unit',
+        'pass the current work unit exactly as the turn received it');
       if (!Array.isArray(references) || references.some((value) => typeof value !== 'string' || !value.trim())) {
         refuse('JOB_REFERENCES_INVALID', 'references',
           'references must be a list of nonempty client reference strings', 'pass [] or the known client references');
@@ -225,11 +233,34 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
       const claim = await this.action_begin(about_job, about_move, cause, operation, owner);
       return { kind: 'claimed' as const, ...claim };
     },
-    async action_reconcile_absent(job: string, step: string, source_id: string, action_id: string) {
+    async action_reconcile_ready(job: string, step: string, action_id: string) {
+      const id = jobId(job);
+      if (!JOB_ID.test(action_id)) refuse('JOB_ACTION_ID_INVALID', String(action_id),
+        'action_id must be the claim returned by the records service', 'pass the original action claim');
+      const row = await readJob(db, id);
+      const action = Object.values(row.pending as Pending).find((item) =>
+        item.action_id === action_id && item.step === step);
+      if (!action) refuse('JOB_ACTION_CLAIM_ABSENT', step,
+        'this job has no matching pending action to reconcile', 'read the job and its pending action');
+      if (!action.owner || !Number.isSafeInteger(action.owner.pid)
+        || typeof action.owner.generation !== 'string') refuse('JOB_ACTION_OWNER_UNKNOWN', step,
+        'the original writer generation is absent', 'leave the claim pending for an operator decision');
+      if (processGeneration(action.owner.pid) === action.owner.generation) refuse('JOB_ACTION_OWNER_ACTIVE', step,
+        'the original writer process generation can still make its external effect',
+        'stop that exact writer through its supported service, read the client record again, then reconcile');
+      return { job: id, step, action_id, status: 'ready_for_client_read' };
+    },
+    async action_reconcile_absent(job: string, step: string, source_id: string, action_id: string,
+      read_receipt: { effect: string; evidence_id: string }) {
       const id = jobId(job);
       const cause = sourceId(source_id);
       if (!JOB_ID.test(action_id)) refuse('JOB_ACTION_ID_INVALID', String(action_id),
         'action_id must be the claim returned by the records service', 'pass the original action claim');
+      if (!read_receipt || read_receipt.effect !== 'absent'
+        || typeof read_receipt.evidence_id !== 'string'
+        || !SOURCE_ID.test(read_receipt.evidence_id)) refuse('JOB_ACTION_READ_ABSENT', step,
+        'the mapped client tool supplied no client-system read showing this effect absent',
+        'read the client record after the original writer stops and pass its read receipt');
       return db.begin(async (tx) => {
         const row = await readJob(tx, id, true);
         const pending = { ...(row.pending as Pending) };
@@ -248,9 +279,12 @@ export function createJobTools(database: string, verifyObservation: VerifyObserv
         await tx`SELECT set_config('carbon.source_message_id', ${cause}, true)`;
         await tx.unsafe(`UPDATE public.${identifier(jobs)} SET pending = $1::jsonb WHERE job_id = $2`,
           [tx.json(pending), id], oneStatement);
-        await tx.unsafe(`INSERT INTO public.${identifier(events)} (job_id, event, kind, source_id)
-          VALUES ($1,$2,'reconciled_absent',$3)`, [id, step, cause], oneStatement);
-        return { job: id, step, action_id, status: 'reconciled_absent' };
+        await tx.unsafe(`INSERT INTO public.${identifier(events)}
+          (job_id, event, kind, source_id, read_evidence_id)
+          VALUES ($1,$2,'reconciled_absent',$3,$4)`,
+        [id, step, cause, read_receipt.evidence_id], oneStatement);
+        return { job: id, step, action_id, read_evidence_id: read_receipt.evidence_id,
+          status: 'reconciled_absent' };
       });
     },
     async action_finish(job: string, step: string, source_id: string, action_id: string) {
