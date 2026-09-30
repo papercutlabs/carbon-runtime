@@ -32,6 +32,7 @@ import { createServer } from '../tools/lib/mcp.ts';
 import { StreamFault } from '../stream/store.ts';
 import { fault } from '../stream/faults.ts';
 import { managementConversationOf } from './channel.ts';
+import { unitIdFor } from './unit.ts';
 import { beginBoundAction, finishMappedAction } from '../tools/lib/action-check.ts';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
@@ -280,7 +281,9 @@ export function recordsReplyHandler({ store, agent, declaration = null, work = n
     // Validate ownership and attachments before reserving a job action. This
     // preflight does not write attachment blobs if the action is refused.
     const conversation = args.conversation_id as string;
-    if (!store.recordsIn(conversation).some((record) => record.direction === 'inbound')) {
+    const inbound = store.recordsIn(conversation).filter((record) => record.direction === 'inbound')
+      .sort((a, b) => String(a.received_at).localeCompare(String(b.received_at))).at(-1);
+    if (!inbound) {
       throw new StreamFault([fault('CONVERSATION_NOT_OWNED', conversation,
         'this agent has captured nothing on this conversation, so it does not answer on it',
         'reply on a conversation this agent owns')]);
@@ -293,7 +296,7 @@ export function recordsReplyHandler({ store, agent, declaration = null, work = n
         'records-enabled replies must say which job and move this send is about',
         'pass about_job and about_move, using an empty job and other for an ordinary reply')]);
     }
-    const claim = await beginBoundAction({ unit: args.conversation_id as string,
+    const claim = await beginBoundAction({ unit: unitIdFor(declaration!, inbound),
       operation: 'carbon-send', about_job: args.about_job, about_move: args.about_move,
       source_id: args.request_id as string }, { baseUrl: actionUrl });
     return write(args, claim.kind === 'claimed' ? claim : undefined);

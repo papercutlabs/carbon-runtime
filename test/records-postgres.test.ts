@@ -199,7 +199,7 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       received_at: new Date().toISOString(), body: 'Send it', attachments: [],
       historical: false, disposition: 'captured' });
     const reply = recordsReplyHandler({ store: replyStore, agent: 'carbon-test',
-      declaration: { records: { enabled: true } }, actionUrl: baseUrl });
+      declaration: { records: { enabled: true }, unit_of_work: { kind: 'conversation' } }, actionUrl: baseUrl });
     const replyArgs = { conversation_id: 'reply-conversation', request_id: 'reply-request',
       text: 'Sent', about_job: replyJobId, about_move: 'other' };
     await assert.rejects(() => reply(replyArgs), /JOB_ACTION_CONTEXT_MISMATCH/);
