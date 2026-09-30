@@ -521,6 +521,7 @@ export function layerOf(rel: string): number | null {
 export const VENDORED = [
   'lib/faults.ts',
   'tools/lib/fault.ts',
+  'tools/lib/action-check.ts',
   'tools/lib/args.ts',
   'tools/lib/manifest.ts',
   'tools/lib/mcp.ts',
