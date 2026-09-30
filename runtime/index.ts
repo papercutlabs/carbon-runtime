@@ -202,8 +202,14 @@ export function harnessBinary(declaration: Declaration, { harnessRoot, binary }:
   return at;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// A sleep the stop signal can cut short. `wake` is handed the way to end it
+// early, and is handed null again once it has ended either way.
+function sleep(ms: number, wake: (end: (() => void) | null) => void) {
+  return new Promise<void>((resolve) => {
+    const end = () => { clearTimeout(timer); wake(null); resolve(); };
+    const timer = setTimeout(end, ms);
+    wake(end);
+  });
 }
 
 // The child dying mid-turn arrives as this fault rather than as a completion,
@@ -291,6 +297,32 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     if (session && typeof session.stop === 'function') await session.stop();
   };
 
+  // PA-322: a stop is a drain. On SIGTERM, which is what `systemctl stop` sends
+  // this process alone under KillMode=mixed, or on SIGINT, no new pass or
+  // release starts, the release in progress finishes with its turns, and the
+  // pass delivers what it has before it ends. A conversation the pass had not
+  // yet released stays captured and is released after the restart. The sleep
+  // between passes ends at once, and the run returns through the `finally` like
+  // any other ending, so stop() closes what it always closes and the exit is 0.
+  // Without a handler Node dies on the signal: the `finally` never runs, the turn
+  // in flight is re-issued on the next start, and a claimed send can be left
+  // `unknown`. A second signal changes nothing; systemd's TimeoutStopSec is the
+  // ceiling, and past it the unit is killed. The handlers are registered before
+  // the harness starts, so a stop during start-up is a drain too, and removed
+  // when run() returns, so a caller that runs it twice does not collect them.
+  const draining: { signal: NodeJS.Signals | null; since: number; wake: (() => void) | null } = {
+    signal: null, since: 0, wake: null
+  };
+  const onStopSignal = (signal: NodeJS.Signals) => {
+    if (draining.signal) return;
+    draining.signal = signal;
+    draining.since = performance.now();
+    log({ event: 'drain.signal', signal });
+    draining.wake?.();
+  };
+  process.on('SIGTERM', onStopSignal);
+  process.on('SIGINT', onStopSignal);
+
   try {
     for (const { channel } of loaded) {
       const lock = takeLock(storeDir, `${channel.kind}:${channel.account}`);
@@ -368,6 +400,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
         afterTurn: () => { providerAccount.request('turn'); },
+        // A drain finishes the release in progress and starts no other.
+        stopping: () => draining.signal !== null,
         // The provider proxy's port probe (PA-259). Without one the loop holds release.
         probe: answers
       });
@@ -391,8 +425,9 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     const dueAt = new Map(loops.map((loop) => [loop, 0]));
     let done = 0;
     while (done < passes) {
-      if (childExit) break;
+      if (childExit || draining.signal) break;
       for (const loop of loops) {
+        if (draining.signal) break;
         if (dueAt.get(loop)! > now()) continue; // dueAt contains every loop and entries are never removed.
         try {
           await loop.pass(items(loop.channel));
@@ -405,8 +440,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
         if (childExit) break;
       }
       done += 1;
-      if (done < passes && !childExit) {
-        await sleep(Math.max(0, Math.min(...loops.map((loop) => dueAt.get(loop)!)) - now())); // dueAt was initialized for every loop above and entries are never removed.
+      if (done < passes && !childExit && !draining.signal) {
+        await sleep(Math.max(0, Math.min(...loops.map((loop) => dueAt.get(loop)!)) - now()), (end) => { draining.wake = end; }); // dueAt was initialized for every loop above and entries are never removed.
       }
     }
 
@@ -418,6 +453,14 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     }
     return EXIT.OK;
   } finally {
-    await stop();
+    try {
+      await stop();
+    } finally {
+      process.off('SIGTERM', onStopSignal);
+      process.off('SIGINT', onStopSignal);
+      if (draining.signal) {
+        log({ event: 'drain.completed', signal: draining.signal, elapsed_ms: Math.round(performance.now() - draining.since) });
+      }
+    }
   }
 }

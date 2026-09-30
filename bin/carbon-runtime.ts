@@ -83,7 +83,8 @@ poll works again, and doctor reports the hold from outside the box.
 
 Every fault is one JSON line of {code, subject, problem, fix}. Exit codes:
 
-  0   stopped cleanly, having run the passes asked for
+  0   stopped cleanly, having run the passes asked for, or drained on SIGTERM or
+      SIGINT: the release in flight finished, its turns and delivery included
   1   a refusal: nothing started
   ${EXIT.HARNESS_EXITED}  the harness child exited; the unit restarts the pair
   ${EXIT.LOCK_HELD}  another runtime is alive and holds an adapter's lock
