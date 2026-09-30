@@ -253,6 +253,18 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     const rls = psql('carbon_test', "SELECT relrowsecurity FROM pg_class WHERE relname = 'notes'");
     assert.match(rls, /\bf\b/);
     fs.rmSync(hiddenRls);
+    const hiddenFunction = path.join(repo, 'records', 'migrations', '0002-hidden-function.sql');
+    fs.writeFileSync(hiddenFunction,
+      "CREATE SCHEMA client_internal; "
+      + "CREATE FUNCTION client_internal.mutate() RETURNS void LANGUAGE sql SECURITY DEFINER "
+      + "AS $$ UPDATE public.notes SET body = 'changed'; $$; "
+      + 'GRANT USAGE ON SCHEMA client_internal TO carbon_backup; '
+      + 'GRANT EXECUTE ON FUNCTION client_internal.mutate() TO carbon_backup;');
+    await assert.rejects(() => migrateRecords(repo, 'carbon_test', 'test-release-3a', socket),
+      /backup login can call owner-rights function client_internal.mutate/);
+    assert.doesNotMatch(psql('carbon_test', "SELECT nspname FROM pg_namespace WHERE nspname = 'client_internal'"),
+      /client_internal/);
+    fs.rmSync(hiddenFunction);
     const hiddenDisable = path.join(repo, 'records', 'migrations', '0002-disable-change-trigger.sql');
     fs.writeFileSync(hiddenDisable,
       "DO $$BEGIN EXECUTE 'ALTER TABLE notes DISABLE TRIGGER carbon_changes_notes'; END$$;");

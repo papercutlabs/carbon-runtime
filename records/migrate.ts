@@ -79,7 +79,8 @@ async function catalogGuard(tx: AnySql, described: Set<string>) {
   await tx.unsafe(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public, carbon FROM PUBLIC`);
   const callable = await tx.unsafe(`SELECT n.nspname, p.proname FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname IN ('public', 'carbon') AND p.prosecdef
+    WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND p.prosecdef
+      AND has_schema_privilege('carbon_backup', n.oid, 'USAGE')
       AND has_function_privilege('carbon_backup', p.oid, 'EXECUTE')`);
   if (callable.length) migrationRefused(`backup login can call owner-rights function ${callable[0].nspname}.${callable[0].proname}`);
 }
