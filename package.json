@@ -28,7 +28,8 @@
     "release": "node tools/release.ts"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc14"
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "postgres": "3.4.9"
   },
   "devDependencies": {
     "typescript": "7.0.2"
