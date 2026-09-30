@@ -503,7 +503,7 @@ const LAYERS: Array<[string, number]> = [
   ['schema/', 0],
   ['stream/', 1], ['lib/', 1], ['tools/lib/', 1], ['harness/', 1],
   ['adapters/', 2], ['import/', 2], ['conformance/', 2],
-  ['runtime/', 3], ['scout/', 3],
+  ['runtime/', 3], ['explore/', 3],
   ['bin/', 4], ['tools/', 4], ['test/', 5]
 ];
 
