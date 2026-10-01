@@ -65,7 +65,7 @@ export const RETRY_MS = 5000;
 
 type PollEntry = {
   items: ArrivedItem[]; highest: number | null; worker: Promise<void> | null;
-  stopped: boolean; fault: unknown; started_at: number | null;
+  stopped: boolean; ending: AbortController; fault: unknown; started_at: number | null;
   seen: Map<unknown, ArrivedItem>; media: Map<unknown, FetchedMedia | null>;
 };
 const channels = new Map<string, PollEntry>();
@@ -79,11 +79,20 @@ function keyOf(context: Pick<Context, 'agent' | 'account'>) {
 // process alive, so a run that has done its work and returned would sit there
 // until somebody killed it. The runtime calls this when it stops, which is the
 // only thing that ends it.
+//
+// It aborts the getUpdates in flight rather than waiting it out (PA-322): a long
+// poll holds at the server for its whole timeout when nothing arrives, and a
+// drain that waited for it took ten seconds on a box. Aborting loses nothing.
+// The server forgets an update only when a call asks for an offset past it, and
+// the call in flight asked for the offset on disk, one past the last update the
+// store has written; what its answer would have carried is still the server's,
+// and the next start asks for the same offset again.
 export async function stop(context: Pick<Context, 'agent' | 'account'>) {
   const key = keyOf(context);
   const entry = channels.get(key);
   if (!entry) return;
   entry.stopped = true;
+  entry.ending.abort();
   channels.delete(key);
   if (entry.worker) await entry.worker;
 }
@@ -91,7 +100,7 @@ export async function stop(context: Pick<Context, 'agent' | 'account'>) {
 // For a test, and for a process that stops one agent and starts another in the
 // same process, which nothing does today.
 export function forget() {
-  for (const entry of channels.values()) entry.stopped = true;
+  for (const entry of channels.values()) { entry.stopped = true; entry.ending.abort(); }
   channels.clear();
 }
 
@@ -110,7 +119,7 @@ function entryFor(context: Context) {
   let entry = channels.get(key);
   if (!entry) {
     entry = {
-      items: [], highest: null, worker: null, stopped: false, fault: null,
+      items: [], highest: null, worker: null, stopped: false, ending: new AbortController(), fault: null,
       started_at: null, seen: new Map(), media: new Map()
     };
     channels.set(key, entry);
@@ -149,7 +158,7 @@ async function work(entry: PollEntry, context: Context) {
     // What was handed over last time and has not been consumed yet. Asking for a
     // higher offset now would tell the server to forget it.
     if (entry.highest !== null && (offset === null || offset <= entry.highest)) {
-      await sleep(IDLE_MS);
+      await sleep(IDLE_MS, entry.ending.signal);
       continue;
     }
 
@@ -177,7 +186,7 @@ async function work(entry: PollEntry, context: Context) {
         : new TelegramFault([fault('BOT_API_POLL_FAILED', 'getUpdates',
           (error as Fields | null | undefined)?.message ?? String(error),
           'the runtime keeps polling until the channel\'s declared failure count is reached')]);
-      await sleep(RETRY_MS);
+      await sleep(RETRY_MS, entry.ending.signal);
     }
   }
 }
@@ -224,14 +233,14 @@ async function settledBatch(entry: PollEntry, transport: Transport, context: Con
       offset: offset ?? undefined,
       timeout: requestTimeout,
       allowed_updates: ALLOWED_UPDATES
-    }, { timeoutMs: (requestTimeout + 20) * 1000 });
+    }, { timeoutMs: (requestTimeout + 20) * 1000, signal: entry.ending.signal });
     remember(entry, updates);
     const items = retained(entry, offset);
     const remaining = albumWait(items, albumQuiet);
     if (remaining === 0) {
       return { items: await withAttachments(entry, transport, context, items) };
     }
-    await sleep(Math.min(IDLE_MS, remaining));
+    await sleep(Math.min(IDLE_MS, remaining), entry.ending.signal);
     requestTimeout = 0;
   }
   return { items: [] };
@@ -311,6 +320,13 @@ async function fetchMedia(transport: Transport, media: Media) {
   }
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// A wait that a stop ends at once, so the worker never outlives stop() by a
+// retry interval.
+function sleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) { resolve(); return; }
+    const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
 }

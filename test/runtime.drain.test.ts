@@ -16,7 +16,10 @@ import { EXIT } from '../runtime/faults.ts';
 import { lockFile } from '../runtime/lock.ts';
 import { Store } from '../stream/store.ts';
 import { fakeHarness } from './fake-harness.ts';
-import { ACCOUNT, ITEM, SECOND, answer, placed } from './fixtures/drain-runner.ts';
+import { ACCOUNT, ITEM, SECOND, TELEGRAM_ACCOUNT, answer, holdingBotApi, placed, telegramDeclarationFor } from './fixtures/drain-runner.ts';
+import { forget } from '../adapters/telegram/live.ts';
+import { nextOffset, offsetPositionOf, updatesConversation } from '../adapters/telegram/cursors.ts';
+import { TOKEN } from './telegram-fixtures.ts';
 
 const RUNNER = path.join(import.meta.dirname, 'fixtures', 'drain-runner.ts');
 
@@ -27,7 +30,7 @@ function tmp(name: string) {
 }
 
 // Starts the runner and reads its JSON lines as they come.
-function start(dir: string, mode: 'idle' | 'turn' | 'two') {
+function start(dir: string, mode: 'idle' | 'turn' | 'two' | 'telegram') {
   const child = spawn(process.execPath, [RUNNER, dir, mode], { stdio: ['ignore', 'pipe', 'pipe'] });
   const lines: Line[] = [];
   let stderr = '';
@@ -210,4 +213,50 @@ test('SIGTERM during the first of two releases in a pass finishes that release, 
   const outbound = after.filter((r) => r.direction === 'outbound');
   assert.deepEqual(outbound.map((r) => [r.conversation_id, r.delivery?.status]).sort(),
     [[`${ACCOUNT}:c1`, 'sent'], [`${ACCOUNT}:c2`, 'sent']]);
+});
+
+test('SIGTERM during a Telegram long poll ends the run within a second, releases nothing, and the restart asks from the same offset', async () => {
+  const dir = tmp('drain-telegram');
+  const storeDir = path.join(dir, 'store');
+  fs.writeFileSync(path.join(dir, 'bot-token'), TOKEN, { mode: 0o600 });
+  // Update 41 is on disk, so the next ask is for 42 and everything below it is confirmed.
+  Store.open(storeDir).advanceCursor(updatesConversation(TELEGRAM_ACCOUNT), 'message', offsetPositionOf(41));
+  const runner = start(dir, 'telegram');
+  const asked = await runner.waitFor(fixtureLine('getUpdates'));
+  assert.ok(asked, `the long poll never asked: ${runner.stderr()}`);
+  assert.equal(asked.offset, 42);
+  // Well inside the 10 s the server holds the call for.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const sentAt = performance.now();
+  runner.child.kill('SIGTERM');
+  const exit = await runner.ended();
+
+  assert.deepEqual({ code: exit.code, signal: exit.signal }, { code: EXIT.OK, signal: null }, runner.stderr());
+  assert.ok(exit.at - sentAt < 1500, `the drain waited out the long poll: exit took ${Math.round(exit.at - sentAt)} ms`);
+  assert.equal(runner.lines.filter(eventLine('release')).length, 0, 'a release started');
+  assert.equal(runner.lines.filter(fixtureLine('turn.started')).length, 0, 'a turn started');
+  assert.deepEqual(runner.lines.filter(fixtureLine('getUpdates')).map((line) => line.offset), [42], 'the aborted ask was repeated');
+  // The aborted ask confirmed nothing new: the watermark on disk is where it was.
+  assert.equal(nextOffset(Store.open(storeDir), TELEGRAM_ACCOUNT), 42);
+
+  // The restart, in this process: its first ask is for the same offset, so the
+  // server still holds and re-sends anything at or past 42.
+  const offsets: unknown[] = [];
+  const restore = holdingBotApi((offset) => offsets.push(offset));
+  try {
+    const harness = fakeHarness({ statuses: () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }] });
+    const code = await run({
+      ...placed(dir, 100, telegramDeclarationFor(path.join(dir, 'bot-token'))),
+      replyPort: 20000 + Math.floor(Math.random() * 20000),
+      harness,
+      passes: 2,
+      log: () => {}
+    });
+    assert.equal(code, EXIT.OK);
+    assert.equal(harness.session.turns.length, 0);
+  } finally {
+    restore();
+    forget();
+  }
+  assert.deepEqual(offsets, [42]);
 });

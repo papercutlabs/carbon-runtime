@@ -9,11 +9,14 @@
 //   node test/fixtures/drain-runner.ts <dir> turn   one item, whose turn waits for <dir>/go to exist
 //   node test/fixtures/drain-runner.ts <dir> two    two conversations, one item each, both eligible in
 //                                                   the first pass; every turn waits for <dir>/go
+//   node test/fixtures/drain-runner.ts <dir> telegram  the real Telegram adapter against a Bot API whose
+//                                                   getUpdates holds for its whole 10 s long poll
 //
 // Every line on stdout is JSON: the runtime's own log lines, and this file's
 // lines, which carry `fixture` rather than `event`, so the test can see when a
 // pass asked for items, when a turn started and when it answered.
 
+import type { Declaration } from '../../runtime/types.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { run } from '../../runtime/index.ts';
@@ -22,6 +25,7 @@ import { replyHandler } from '../../runtime/reply-tool.ts';
 import { Store } from '../../stream/store.ts';
 import { fakeHarness } from '../fake-harness.ts';
 import * as fixture from '../../adapters/fixture/index.ts';
+import * as telegram from '../../adapters/telegram/index.ts';
 
 export const AGENT = 'test-agent';
 export const ACCOUNT = 'account-1';
@@ -58,9 +62,43 @@ export function declarationFor(pollIntervalMs: number) {
   };
 }
 
+export const TELEGRAM_ACCOUNT = 'example_agent_bot';
+export const LONG_POLL_S = 10;
+
+// One Telegram channel, long-polling for LONG_POLL_S as the live agent does.
+export function telegramDeclarationFor(botToken: string) {
+  const declaration = declarationFor(100);
+  return {
+    ...declaration,
+    secrets: [{ name: 'telegram_bot_token', path: botToken, purpose: 'the bot token' }],
+    channels: [{
+      kind: 'telegram', account: TELEGRAM_ACCOUNT, release: 'quiet', quiet_ms: 0, poll_interval_ms: 100,
+      conversations: [], default_conversation_kind: 'customer',
+      transport: { bot_token_ref: 'telegram_bot_token', long_poll_timeout_s: LONG_POLL_S, allowed_chat_ids: 'any' }
+    }]
+  };
+}
+
+// A Bot API whose getUpdates answers nothing and holds for the whole long poll,
+// as the real one does when no message arrives, and gives up early only when
+// the request is aborted, as fetch does. Every ask is reported with its offset.
+export function holdingBotApi(onAsk: (offset: unknown) => void) {
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async (url: string, options: RequestInit = {}) => {
+    if (!url.includes('/getUpdates')) throw new Error(`unexpected fake request ${url}`);
+    // The adapter JSON-encodes its request body.
+    onAsk(JSON.parse(options.body as string).offset ?? null);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, LONG_POLL_S * 1000);
+      options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(options.signal?.reason); }, { once: true });
+    });
+    return { status: 200, json: async () => ({ ok: true, result: [] }) };
+  }) as unknown as typeof fetch; // Only the response fields the adapter reads on getUpdates: status and json.
+  return () => { globalThis.fetch = previous; };
+}
+
 // What run() is given for a directory, the way runtime.process.test.ts builds it.
-export function placed(dir: string, pollIntervalMs: number) {
-  const declaration = declarationFor(pollIntervalMs);
+export function placed(dir: string, pollIntervalMs: number, declaration: Declaration = declarationFor(pollIntervalMs)) {
   const declarationPath = path.join(dir, 'carbon.agent.json');
   fs.writeFileSync(declarationPath, JSON.stringify(declaration, null, 2));
   fs.mkdirSync(path.join(dir, 'work'), { recursive: true });
@@ -76,7 +114,7 @@ export function placed(dir: string, pollIntervalMs: number) {
     work: path.join(dir, 'work'),
     harnessRoot: path.join(dir, 'harness'),
     binary: '/nowhere/codex',
-    adapters: { fixture },
+    adapters: { fixture, telegram },
     sandboxDeny: { file: denyFile, root: dir, ownerUid: process.getuid ? process.getuid() : 0 }
   };
 }
@@ -84,7 +122,10 @@ export function placed(dir: string, pollIntervalMs: number) {
 async function main(dir: string, mode: string) {
   const say = (line: Record<string, unknown>) => process.stdout.write(JSON.stringify(line) + '\n');
   const turn = mode === 'turn' || mode === 'two';
-  const where = placed(dir, turn ? 10 : 60000);
+  const where = mode === 'telegram'
+    ? placed(dir, 100, telegramDeclarationFor(path.join(dir, 'bot-token')))
+    : placed(dir, turn ? 10 : 60000);
+  if (mode === 'telegram') holdingBotApi((offset) => say({ fixture: 'getUpdates', offset }));
   const go = path.join(dir, 'go');
   const harness = fakeHarness({
     statuses: () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }],
