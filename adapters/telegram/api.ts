@@ -105,11 +105,15 @@ export function readToken(file: unknown) {
 
 // One call. `timeoutMs` covers the whole call, and a long poll passes its own: a
 // getUpdates holding open for twenty-five seconds must not be cut off by a
-// timeout meant for a method that answers at once.
-export async function call(transport: Transport, method: string, params: Fields = {}, { timeoutMs = CALL_TIMEOUT_MS } = {}): Promise<unknown> {
+// timeout meant for a method that answers at once. `signal` lets the caller end
+// the call early, which is how a stop ends a long poll without waiting it out.
+export async function call(transport: Transport, method: string, params: Fields = {}, { timeoutMs = CALL_TIMEOUT_MS, signal }: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<unknown> {
   const { token, apiHost = DEFAULT_API_HOST } = transport;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   let status: number | null = null;
   let body: unknown = null;
   try {
@@ -128,6 +132,7 @@ export async function call(transport: Transport, method: string, params: Fields 
       `check that ${apiHost} is reachable from this box; it is the host the declaration names in outbound_hosts`)]);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   // The Bot API JSON remains untrusted; these optional reads preserve the refusal and retry fields as received.
