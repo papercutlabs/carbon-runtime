@@ -4,6 +4,8 @@ on: [push, pull_request]
 
 jobs:
   check:
+    # The check takes about a minute; two hung runs on 1 October each ran to the 6-hour default.
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
