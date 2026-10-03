@@ -2,9 +2,19 @@ name: check
 
 on: [push, pull_request]
 
+# Where the job runs. One expression, and the job name never changes, so the required check
+# `check` is the same check wherever it ran:
+# 1. a pull request from a fork runs on GitHub's hosted runner, always: this repository is
+#    public, and a stranger's code never reaches a self-hosted runner;
+# 2. a branch starting with the repository variable CARBON_RUNTIME_CI_TRIAL_REF runs where
+#    CARBON_RUNTIME_CI_TRIAL_RUNS_ON says, so one branch can try a runner pool without moving
+#    anyone;
+# 3. otherwise the repository variable CARBON_RUNTIME_CI_RUNS_ON, a JSON runs-on value: a
+#    self-hosted pool's labels, or "ubuntu-24.04" when the pool's watchdog has flipped it back;
+# 4. with no variable set, ubuntu-24.04, as before.
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-24.04"' || (vars.CARBON_RUNTIME_CI_TRIAL_REF != '' && startsWith(github.head_ref || github.ref_name, vars.CARBON_RUNTIME_CI_TRIAL_REF)) && vars.CARBON_RUNTIME_CI_TRIAL_RUNS_ON || vars.CARBON_RUNTIME_CI_RUNS_ON || '"ubuntu-24.04"') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,8 +56,13 @@ jobs:
             if (tests.length === 0) throw new Error("the node --test glob found no test modules");
           '
 
+      # A self-hosted runner image may carry 17.11 already, built for its own distribution; a
+      # hosted runner installs it here.
       - name: install pinned PostgreSQL 17 for records integration tests
         run: |
+          if /usr/lib/postgresql/17/bin/pg_config --version 2>/dev/null | grep -q '^PostgreSQL 17.11$'; then
+            echo "PostgreSQL 17.11 is already installed on this runner"; exit 0
+          fi
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o "$RUNNER_TEMP/pgdg.asc"
           echo "0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76  $RUNNER_TEMP/pgdg.asc" | sha256sum -c -
           sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
