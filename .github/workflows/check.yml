@@ -60,7 +60,7 @@ jobs:
       # hosted runner installs it here.
       - name: install pinned PostgreSQL 17 for records integration tests
         run: |
-          if /usr/lib/postgresql/17/bin/pg_config --version 2>/dev/null | grep -q '^PostgreSQL 17.11$'; then
+          if /usr/lib/postgresql/17/bin/pg_config --version 2>/dev/null | grep -qE '^PostgreSQL 17[.]11( |$)'; then
             echo "PostgreSQL 17.11 is already installed on this runner"; exit 0
           fi
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o "$RUNNER_TEMP/pgdg.asc"
