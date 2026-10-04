@@ -18,7 +18,32 @@ type VerifyObservation = (sourceId: string, channel: string, jobId: string) => P
 type ServerOptions = {
   database: string; agentId: string; agentDir: string;
   verifyObservation: VerifyObservation; host?: string; port?: number; actionPort?: number; socketDir?: string;
+  startupWaitMs?: number;
 };
+const STARTUP_WAIT_MS = 60_000;
+const STARTUP_RETRY_MS = 1_000;
+
+function databaseStarting(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ECONNRESET'
+    || code === 'ETIMEDOUT' || code === 'CONNECT_TIMEOUT' || code === '57P03';
+}
+
+async function waitForDatabase(database: string, socketDir: string | undefined, waitMs: number) {
+  const deadline = performance.now() + waitMs;
+  while (true) {
+    const probe = recordsDb(database, 'carbon_owner', 1, socketDir);
+    try { await probe`SELECT 1 FROM carbon.sop_definitions LIMIT 1`; return; }
+    catch (error) {
+      if (!databaseStarting(error)) throw error;
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) refuse('RECORDS_DATABASE_NOT_READY', database,
+        'PostgreSQL did not become available before the records startup deadline',
+        'systemd will retry this records unit after PostgreSQL is available');
+      await new Promise((resolve) => setTimeout(resolve, Math.min(STARTUP_RETRY_MS, remaining)));
+    } finally { await probe.end({ timeout: 2 }); }
+  }
+}
 
 function cap(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 1000) {
@@ -170,12 +195,11 @@ function drainReceipt(file: string, invocationId: string | null, agentId: string
 }
 
 export async function serveRecordsTool({ database, agentId, agentDir, verifyObservation,
-  host = '127.0.0.1', port = RECORDS_PORT, actionPort = ACTION_PORT, socketDir }: ServerOptions) {
+  host = '127.0.0.1', port = RECORDS_PORT, actionPort = ACTION_PORT, socketDir,
+  startupWaitMs = STARTUP_WAIT_MS }: ServerOptions) {
   if (database !== agentId.replaceAll('-', '_')) refuse('RECORDS_DATABASE_MISMATCH', database,
     'records database does not match agent id', 'start this tool with the installed agent database');
-  const probe = recordsDb(database, 'carbon_owner', 1, socketDir);
-  try { await probe`SELECT 1 FROM carbon.sop_definitions LIMIT 1`; }
-  finally { await probe.end({ timeout: 2 }); }
+  await waitForDatabase(database, socketDir, startupWaitMs);
   const receiptFile = path.join(agentDir, 'tools-work', 'carbon-records-drain.json');
   fs.rmSync(receiptFile, { force: true });
   const { server, jobs, turn } = createRecordsServer(database, verifyObservation, socketDir);

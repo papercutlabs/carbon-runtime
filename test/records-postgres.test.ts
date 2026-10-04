@@ -80,6 +80,9 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       ALTER FUNCTION public.owner_probe() OWNER TO carbon_owner`);
     assert.equal(scalar('carbon_test',
       "SELECT has_function_privilege('carbon_read', 'public.owner_probe()', 'EXECUTE')"), 't');
+    await assert.rejects(() => serveRecordsTool({ database: 'carbon_test', agentId: 'carbon-test',
+      agentDir: tmp, socketDir: socket, port: 0, actionPort: 0, startupWaitMs: 200,
+      verifyObservation: async () => false }), /relation .*sop_definitions.* does not exist/);
     const first = await migrateRecords(repo, 'carbon_test', 'test-release', socket);
     assert.deepEqual(first.applied, ['0001-notes.sql']);
     assert.deepEqual(first.installed, [{ sop: 'demo', version: '1' }]);
@@ -93,6 +96,29 @@ test('real PostgreSQL applies each migration once, protects generated tables and
     psql('carbon_test', 'DROP FUNCTION public.exposed()');
     const second = await migrateRecords(repo, 'carbon_test', 'test-release', socket);
     assert.equal(second.unchanged, true);
+    const startupAgentDir = path.join(tmp, 'startup-agent');
+    fs.mkdirSync(path.join(startupAgentDir, 'tools-work'), { recursive: true });
+    const startRecords = (startupWaitMs: number) => serveRecordsTool({
+      database: 'carbon_test', agentId: 'carbon-test', agentDir: startupAgentDir,
+      socketDir: socket, port: 0, actionPort: 0, startupWaitMs,
+      verifyObservation: async () => false
+    });
+    command(pg('pg_ctl'), ['-D', data, '-m', 'fast', 'stop']);
+    started = false;
+    const waitingServer = startRecords(5_000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    command(pg('pg_ctl'), ['-D', data, '-l', path.join(tmp, 'postgres.log'),
+      '-o', `-k ${socket} -c listen_addresses=`, 'start']);
+    started = true;
+    const recoveredServer = await waitingServer;
+    assert.equal(recoveredServer.health().status, 'ready');
+    await recoveredServer.stop();
+    command(pg('pg_ctl'), ['-D', data, '-m', 'fast', 'stop']);
+    started = false;
+    await assert.rejects(() => startRecords(150), /RECORDS_DATABASE_NOT_READY/);
+    command(pg('pg_ctl'), ['-D', data, '-l', path.join(tmp, 'postgres.log'),
+      '-o', `-k ${socket} -c listen_addresses=`, 'start']);
+    started = true;
     const read = await readStatement('carbon_test', 'SELECT sop, sop_version FROM jobs_demo', socket);
     assert.deepEqual(read, []);
     const changes = await writeStatement('carbon_test', "INSERT INTO notes(body) VALUES ('first')", 'message-1', 1, socket);
