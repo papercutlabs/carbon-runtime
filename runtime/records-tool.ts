@@ -22,26 +22,47 @@ type ServerOptions = {
 };
 const STARTUP_WAIT_MS = 60_000;
 const STARTUP_RETRY_MS = 1_000;
+const STARTUP_DEADLINE = Symbol('records startup deadline');
+
+function databaseNotReady(database: string): never {
+  refuse('RECORDS_DATABASE_NOT_READY', database,
+    'PostgreSQL did not become available before the records startup deadline',
+    'systemd will retry this records unit after PostgreSQL is available');
+}
 
 function databaseStarting(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ECONNRESET'
-    || code === 'ETIMEDOUT' || code === 'CONNECT_TIMEOUT' || code === '57P03';
+    || code === 'ETIMEDOUT' || code === 'CONNECT_TIMEOUT' || code === 'CONNECTION_CLOSED'
+    || code === '57P03';
 }
 
 async function waitForDatabase(database: string, socketDir: string | undefined, waitMs: number) {
   const deadline = performance.now() + waitMs;
   while (true) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) databaseNotReady(database);
     const probe = recordsDb(database, 'carbon_owner', 1, socketDir);
-    try { await probe`SELECT 1 FROM carbon.sop_definitions LIMIT 1`; return; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        probe`SELECT 1 FROM carbon.sop_definitions LIMIT 1`,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(STARTUP_DEADLINE), remaining);
+        })
+      ]);
+      if (performance.now() >= deadline) databaseNotReady(database);
+      return;
+    }
     catch (error) {
-      if (!databaseStarting(error)) throw error;
-      const remaining = deadline - performance.now();
-      if (remaining <= 0) refuse('RECORDS_DATABASE_NOT_READY', database,
-        'PostgreSQL did not become available before the records startup deadline',
-        'systemd will retry this records unit after PostgreSQL is available');
-      await new Promise((resolve) => setTimeout(resolve, Math.min(STARTUP_RETRY_MS, remaining)));
-    } finally { await probe.end({ timeout: 2 }); }
+      if (error !== STARTUP_DEADLINE && !databaseStarting(error)) throw error;
+      if (performance.now() >= deadline) databaseNotReady(database);
+    } finally {
+      clearTimeout(timer);
+      await probe.end({ timeout: 0 });
+    }
+    const retryWait = Math.min(STARTUP_RETRY_MS, deadline - performance.now());
+    if (retryWait > 0) await new Promise((resolve) => setTimeout(resolve, retryWait));
   }
 }
 

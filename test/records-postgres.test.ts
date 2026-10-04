@@ -103,6 +103,15 @@ test('real PostgreSQL applies each migration once, protects generated tables and
       socketDir: socket, port: 0, actionPort: 0, startupWaitMs,
       verifyObservation: async () => false
     });
+    const lockDb = recordsDb('carbon_test', 'carbon_owner', 1, socket);
+    try {
+      await lockDb.begin(async (tx) => {
+        await tx`LOCK TABLE carbon.sop_definitions IN ACCESS EXCLUSIVE MODE`;
+        const startedAt = performance.now();
+        await assert.rejects(() => startRecords(150), /RECORDS_DATABASE_NOT_READY/);
+        assert.ok(performance.now() - startedAt < 1_000, 'a blocked probe stays within its startup budget');
+      });
+    } finally { await lockDb.end({ timeout: 2 }); }
     command(pg('pg_ctl'), ['-D', data, '-m', 'fast', 'stop']);
     started = false;
     const waitingServer = startRecords(5_000);
