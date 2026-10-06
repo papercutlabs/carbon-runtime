@@ -3,9 +3,9 @@ import type { Declaration } from './types.ts';
 import type { Fault } from '../stream/faults.ts';
 import type { BrowserPacket } from '../adapters/browser/index.ts';
 export type BrowserReplyValidator = (input: { conversationId: string; releaseId: string; submissionId: string;
-  ticketKey: string; requestKind: BrowserPacket['request_kind']; text: string }) => Fault[];
+  ticketKey: string; requestKind?: BrowserPacket['request_kind']; text: string; metadata?: Record<string, unknown>; attachments: Attachment[] }) => Fault[];
 type ReplyArgs = { conversation_id: string; request_id: string; text: string; attachments?: unknown[] | null;
-  about_job?: string; about_move?: string };
+  metadata?: Record<string, unknown>; about_job?: string; about_move?: string };
 type ReplyOptions = { store: Store; agent: string; declaration?: Declaration | null; work?: string | null; validateBrowserReply?: BrowserReplyValidator };
 // The `reply` tool: the one door out of a turn.
 //
@@ -38,6 +38,7 @@ import { fault } from '../stream/faults.ts';
 import { managementConversationOf } from './channel.ts';
 import { unitIdFor } from './unit.ts';
 import { beginBoundAction, finishMappedAction } from '../tools/lib/action-check.ts';
+import { assertNoSymlinks, validateBrowserFilename } from './browser-files.ts';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
 // The reply tool listens here unless a caller names another port. It is a
@@ -68,6 +69,7 @@ export const MANIFEST = {
           conversation_id: { type: 'string', minLength: 1, description: 'the conversation the message arrived on, exactly as this turn stated it' },
           request_id: { type: 'string', minLength: 1, description: 'the request_id this turn was given; a second call with the same one never sends twice' },
           text: { type: 'string', minLength: 1, description: 'what to say' },
+          metadata: { type: 'object', description: 'optional structured source, uncertainty or draft metadata for this browser response; attachment metadata is created from accepted files by the tool' },
           attachments: {
             type: 'array',
             description: 'absolute paths of files this turn created under the work directory, for example ["/srv/carbon/mtu-agent/work/bor.pdf"]; omit or pass [] when there is no file'
@@ -119,8 +121,10 @@ function insideWork(root: string, resolved: string) {
   return resolved === root || resolved.startsWith(prefix);
 }
 
-function readAttachments(paths: unknown[] | null | undefined, work: unknown) {
+function readAttachments(paths: unknown[] | null | undefined, work: unknown, browser = false) {
   const list = paths ?? [];
+  if (!Array.isArray(list) || list.length > 100) throw new StreamFault([fault('ATTACHMENTS_INVALID', 'attachments',
+    'attachments must be a bounded list of file paths', 'supply at most 100 absolute file paths')]);
   if (list.length === 0) return [];
   const root = resolveWorkRoot(work);
   const faults = [];
@@ -131,6 +135,16 @@ function readAttachments(paths: unknown[] | null | undefined, work: unknown) {
         'a reply attachment is an absolute workspace path',
         'pass the absolute path of a file this turn created'));
       continue;
+    }
+    if (browser) {
+      try { validateBrowserFilename(path.basename(given)); }
+      catch (error) { if (error instanceof StreamFault) { faults.push(...error.faults); continue; } throw error; }
+      if (given.split(path.sep).includes('..')) {
+        faults.push(fault('ATTACHMENT_TRAVERSAL_REFUSED', given, 'browser output paths may not contain traversal components', 'pass a direct path within the active ticket output directory'));
+        continue;
+      }
+      try { assertNoSymlinks(path.resolve(work as string), given); }
+      catch (error) { if (error instanceof StreamFault) { faults.push(...error.faults); continue; } throw error; }
     }
     let resolved;
     try {
@@ -162,7 +176,20 @@ function readAttachments(paths: unknown[] | null | undefined, work: unknown) {
         'pass the absolute path of a file this turn created'));
       continue;
     }
-    const bytes = fs.readFileSync(resolved);
+    let bytes: Buffer;
+    if (browser) {
+      const fd = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      try {
+        const opened = fs.fstatSync(fd);
+        assertNoSymlinks(path.resolve(work as string), given);
+        if (opened.dev !== stat.dev || opened.ino !== stat.ino || !opened.isFile()
+          || fs.realpathSync(given) !== resolved) {
+          faults.push(fault('ATTACHMENT_CHANGED_DURING_READ', given, 'browser output changed identity during file acceptance', 'finish writing the output before replying'));
+          continue;
+        }
+        bytes = fs.readFileSync(fd);
+      } finally { fs.closeSync(fd); }
+    } else bytes = fs.readFileSync(resolved);
     const mime = bytes.slice(0, 5).toString() === '%PDF-' || resolved.toLowerCase().endsWith('.pdf')
       ? 'application/pdf'
       : 'application/octet-stream';
@@ -172,12 +199,34 @@ function readAttachments(paths: unknown[] | null | undefined, work: unknown) {
   return ready;
 }
 
+function attachmentRoot(store: Store, browser: boolean, work: unknown) {
+  return browser ? store.activeBrowserReply?.output_root : work;
+}
 function attachmentsFromPaths(store: Store, record: MessageRecord, paths: unknown[] | null | undefined, work: unknown) {
-  const ready = readAttachments(paths, work);
-  return ready.map((one) => store.putAttachment(record, one.bytes, {
-    mime: one.mime,
-    filename: one.filename
-  }));
+  const browser = record.source === 'browser';
+  const ready = readAttachments(paths, attachmentRoot(store, browser, work), browser);
+  return ready.map((one) => {
+    const attachment = store.putAttachment(record, one.bytes, { mime: one.mime, filename: one.filename });
+    return browser ? { ...attachment, attachment_id: `artifact-${crypto.createHash('sha256').update(JSON.stringify([
+      record.conversation_id, record.delivery!.request_id, one.filename, attachment.sha256])).digest('hex')}` } : attachment;
+  });
+}
+function responseMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  let nodes = 0;
+  function valid(one: unknown, depth: number): boolean {
+    if (++nodes > 2000 || depth > 8) return false;
+    if (one === null || typeof one === 'boolean') return true;
+    if (typeof one === 'string') return Buffer.byteLength(one) <= 65536;
+    if (typeof one === 'number') return Number.isFinite(one);
+    if (Array.isArray(one)) return one.length <= 1000 && one.every((child) => valid(child, depth + 1));
+    if (typeof one !== 'object' || Object.getPrototypeOf(one) !== Object.prototype) return false;
+    return Object.entries(one).every(([key, child]) => key.length <= 255 && valid(child, depth + 1));
+  }
+  if (!value || Array.isArray(value) || typeof value !== 'object' || !valid(value, 0)
+    || Object.hasOwn(value, 'attachments') || Buffer.byteLength(JSON.stringify(value)) > 65536)
+    throw new StreamFault([fault('BROWSER_REPLY_METADATA_INVALID', 'metadata', 'response metadata must be a bounded JSON object and cannot override attachment custody', 'supply valid optional metadata and use attachments for output files')]);
+  return JSON.parse(JSON.stringify(value));
 }
 
 function browserReplyFaults(validator: BrowserReplyValidator | undefined, input: Parameters<BrowserReplyValidator>[0]) {
@@ -193,7 +242,7 @@ function browserReplyFaults(validator: BrowserReplyValidator | undefined, input:
   }
 }
 
-export function outboundRecord(store: Store, { agent, conversation_id, request_id, text, attachments = [], work = null, now = new Date() }: ReplyArgs & { agent: string; work?: string | null; now?: Date }) {
+export function outboundRecord(store: Store, { agent, conversation_id, request_id, text, attachments = [], metadata, work = null, now = new Date() }: ReplyArgs & { agent: string; work?: string | null; now?: Date }) {
   const inbound = store.recordsIn(conversation_id).filter((r) => r.direction === 'inbound');
   if (inbound.length === 0) {
     throw new StreamFault([{
@@ -233,9 +282,11 @@ export function outboundRecord(store: Store, { agent, conversation_id, request_i
   };
   if (open) record.reply_to = open.message_id;
   if (newest.source === 'browser') {
-    const source = inbound.filter((one) => one.release?.turn_id === request_id).at(-1);
+    const associated = inbound.filter((one) => one.release?.turn_id === request_id);
+    const source = associated.at(-1);
     record.adapter_fields = { ticket_key: source?.adapter_fields?.ticket_key, submission_id: source?.platform_message_id ?? null,
-      request_kind: source?.adapter_fields?.request_kind ?? null };
+      submission_ids: associated.map((one) => one.platform_message_id), request_kind: source?.adapter_fields?.request_kind ?? null,
+      ...(metadata === undefined ? {} : { response_metadata: responseMetadata(metadata) }) };
     record.reply_to = source?.message_id;
     const previous = store.recordsIn(conversation_id).filter((one) => one.message_id === record.message_id);
     if (previous.length) record.revision = Math.max(...previous.map((one) => one.revision ?? 0)) + 1;
@@ -279,15 +330,18 @@ function replyWriter({ store, agent, declaration = null, work = null, validateBr
       request_id: args.request_id as string,
       text: args.text as string,
       attachments: args.attachments as ReplyArgs['attachments'],
+      metadata: args.metadata as ReplyArgs['metadata'],
       work,
       now: now()
     });
     const existing = store.readRequest(args.request_id as string);
     if (incoming?.source === 'browser' && (!existing || existing.status === 'failed')) {
-      const source = store.recordsIn(record.conversation_id).find((one) => one.direction === 'inbound' && one.release?.turn_id === args.request_id)!;
+      const source = store.recordsIn(record.conversation_id).filter((one) => one.direction === 'inbound' && one.release?.turn_id === args.request_id).at(-1)!;
       const failures = browserReplyFaults(validateBrowserReply, { conversationId: record.conversation_id,
         releaseId: args.request_id as string, submissionId: source.platform_message_id,
-        ticketKey: source.adapter_fields!.ticket_key as string, requestKind: source.adapter_fields!.request_kind as BrowserPacket['request_kind'], text: record.body });
+        ticketKey: source.adapter_fields!.ticket_key as string,
+        ...(source.adapter_fields!.request_kind ? { requestKind: source.adapter_fields!.request_kind as BrowserPacket['request_kind'] } : {}),
+        text: record.body, metadata: record.adapter_fields?.response_metadata as Record<string, unknown> | undefined, attachments: record.attachments as Attachment[] });
       if (failures.length) {
         store.capture({ ...record, disposition: 'parked', delivery: { ...record.delivery!, status: 'failed' },
           adapter_fields: { ...record.adapter_fields, reply_validation_faults: failures } });
@@ -331,7 +385,7 @@ export function recordsReplyHandler({ store, agent, declaration = null, work = n
         'this agent has captured nothing on this conversation, so it does not answer on it',
         'reply on a conversation this agent owns')]);
     }
-    readAttachments(args.attachments as ReplyArgs['attachments'], work);
+    readAttachments(args.attachments as ReplyArgs['attachments'], attachmentRoot(store, inbound.source === 'browser', work), inbound.source === 'browser');
     const existing = store.readRequest(args.request_id as string);
     if (existing && existing.status !== 'failed') return write(args);
     if (typeof args.about_job !== 'string' || typeof args.about_move !== 'string') {
