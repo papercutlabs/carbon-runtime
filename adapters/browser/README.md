@@ -4,6 +4,8 @@ A trusted companion server authenticates each consultant and supplies a
 `browserPacket` after its ticket grant check. The browser does not own the sender,
 account, ticket mapping, acceptance time or cursor. Canonical conversation identity
 is `browserConversationId(account,ticketKey)`. One conversation is one Carbon unit.
+Each accepted browser submission gets its own release and reply; the existing loop
+serialises those releases for the ticket. Legacy quiet-channel batching is unchanged.
 Declare the channel as `browser`, its default room as `ops`, and the unit as
 `conversation`. This lets consultants act as operators without a customer takeover
 hold. Model records and teaching stay disabled. The read-only model policy and
@@ -49,10 +51,23 @@ refused without dropping history. This cap is a structural bound, not proof that
 particular model accepts the context; installed account/model capacity must be
 qualified separately.
 
+Bind `validateBrowserReply` on `run` to the client's canonical response validator.
+The shared `BrowserReplyValidator` export in `runtime/reply-tool.ts` takes trusted
+conversation/release/submission/ticket/request-kind identities and the exact original
+text. Its synchronous result is the ordinary fault array; an empty array accepts.
+The client parses that text and invokes its existing validator, without a client
+schema in Carbon. A missing hook refuses browser output. Rejected original bytes
+and faults remain failed outbound capture revisions without a pending/sent fence.
+A corrected reply uses the next revision under the same message/release identity;
+consumers select the actual fence's qualified sent revision and retain failed
+attempts for inspection. No shared `draft_label` field is supplied.
+
 After potentially accepted model dispatch, absent reply is an uncertain effect.
 Browser recovery never blindly starts another turn for that release or ticket.
 It retains dispatch/native acceptance evidence, inspects supported thread/read on
 the existing session where available, and exposes uncertainty to operator reads.
+Thrown turn/read failures retain redacted original reasons, availability and native
+codes at those existing evidence seams alongside the dispatch identities.
 A native completed turn alone does not produce a consultant response. Settlement
 requires the existing durable reply or an explicitly qualified supported recovery
 path. No provider-execution-once claim follows from submission or reply fencing.

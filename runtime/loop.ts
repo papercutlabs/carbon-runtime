@@ -1,7 +1,8 @@
 type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?: unknown; seq: number };
-// shape: justified the release loop must coordinate store, harness, channels, reply, teaching and enabled records admission before each turn; a thirteenth import is the records service it now checks
+// shape: justified the existing release loop coordinates store, harness, channels, reply, teaching, records admission and native failure capture at the actual dispatch/read seams
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
+import { nativeFailureEvidence } from '../harness/codex/index.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
 type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string; stopping?: () => boolean; prepareBrowserTurn?: BrowserPreparation };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
@@ -25,7 +26,8 @@ type EnsureReplyOptions = TurnIdentity & { records?: MessageRecord[]; result: Tu
 //             owes: a reply written and never sent, a release opened and never
 //             answered, a send whose fate nobody knows.
 //   capture   list what is pending past the cursors, write it, move the cursors.
-//   release   gather every eligible record of a conversation into one turn,
+//   release   gather legacy eligible records into one turn; each browser
+//             submission keeps its own serial release and reply identity,
 //             write the release on each before the turn starts, run the turn,
 //             write the completion.
 //   deliver   send the outbound records the reply tool wrote, write back every
@@ -972,7 +974,7 @@ export class ReleaseLoop<S = Session> {
         parked.push(record.message_id);
         continue;
       }
-      const key = this.channel.release === 'mention'
+      const key = this.channel.kind === 'browser' ? `browser:${record.message_id}:${record.revision ?? 0}` : this.channel.release === 'mention'
         ? `mention:${record.message_id}:${record.revision ?? 0}`
         : `quiet:${JSON.stringify([record.conversation_id, unitId])}`;
       add(key, record, { reissue: false, releaseId: null, unitId });
@@ -980,6 +982,11 @@ export class ReleaseLoop<S = Session> {
 
     for (const group of groups) {
       if (this.stopping()) break;
+      if (this.channel.kind === 'browser' && this.store.recordsIn(group.records[0].conversation_id)
+        .some((other) => other.release && !other.release.completed_at && other.adapter_fields?.model_effect === 'uncertain')) {
+        held.push(...group.records.map((record) => record.message_id));
+        continue;
+      }
       let outcome;
       try {
         outcome = await this.releaseOne(group.records, group);
@@ -1163,7 +1170,8 @@ export class ReleaseLoop<S = Session> {
       result = await this.turnOf({ threadId, input, clientUserMessageId, onStarted: this.channel.kind === 'browser'
         ? (accepted) => this.noteBrowserEffect(releaseId, { phase: 'accepted', thread_id: accepted.threadId, native_turn_id: accepted.turnId }) : undefined });
     } catch (error) {
-      if (this.channel.kind === 'browser') this.noteBrowserEffect(releaseId, { phase: 'uncertain', thread_id: threadId });
+      if (this.channel.kind === 'browser') this.noteBrowserEffect(releaseId, { phase: 'uncertain', thread_id: threadId,
+        ...nativeFailureEvidence(error, (this.session as { credentialValues?: string[] }).credentialValues) });
       throw error;
     } finally {
       this.teach?.setRelease(null);
@@ -1259,8 +1267,10 @@ export class ReleaseLoop<S = Session> {
           thread_id: carried?.thread?.id ?? null, turns: (carried?.thread?.turns ?? []).map((turn) => ({ id: turn.id, status: turn.status })),
           disposition: 'inspection retained; no reply means no safe automatic reissue'
         } });
-      } catch {
-        this.noteBrowserEffect(record.release.turn_id, { phase: 'uncertain', native_read: { disposition: 'supported thread/read unavailable; settlement remains required' } });
+      } catch (error) {
+        this.noteBrowserEffect(record.release.turn_id, { phase: 'uncertain', native_read: {
+          ...nativeFailureEvidence(error, (this.session as { credentialValues?: string[] }).credentialValues),
+          disposition: 'supported thread/read unavailable; settlement remains required' } });
       }
     }
   }
@@ -1289,7 +1299,7 @@ export class ReleaseLoop<S = Session> {
   // the whole answer and the model's own message is not evidence of anything.
   hasOutbound(record: MessageRecord, releaseId: string) {
     return this.store.recordsIn(record.conversation_id)
-      .some((r) => r.direction === 'outbound' && r.delivery?.request_id === releaseId);
+      .some((r) => r.direction === 'outbound' && r.delivery?.request_id === releaseId && (this.channel.kind !== 'browser' || r.delivery.status !== 'failed'));
   }
 
   // The one follow-up, and the three ways it can end.

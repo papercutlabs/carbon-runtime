@@ -78,7 +78,7 @@ test('actual loop consumes fresh ticket, all retained attribution, copy-draft on
   let current = 'distinctive-ticket-before';
   let reads = 0;
   const harness = fakeHarness({ statuses: () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }], onTurn: (_s, params) => {
-    replyHandler({ store, agent, declaration: decl })({ conversation_id: browser.browserConversationId(account, 'CASE-101'),
+    replyHandler({ store, agent, declaration: decl, validateBrowserReply: () => [] })({ conversation_id: browser.browserConversationId(account, 'CASE-101'),
       request_id: params.clientUserMessageId, text: 'synthetic stored answer' });
     return 'completed';
   } });
@@ -231,13 +231,13 @@ test('shared Store capture wakes the real runtime drain without a periodic brows
   const codexHome = path.join(root, 'codex-home');
   for (const dir of [work, repo, codexHome]) fs.mkdirSync(dir);
   const harness = fakeHarness({ statuses: () => [{ name: 'carbon-reply', runtimeStatus: 'connected' }], onTurn: (_session, params) => {
-    replyHandler({ store, agent, declaration: decl })({ conversation_id: browser.browserConversationId(account, 'CASE-101'), request_id: params.clientUserMessageId, text: 'event-woken fixture answer' });
+    replyHandler({ store, agent, declaration: decl, validateBrowserReply: () => [] })({ conversation_id: browser.browserConversationId(account, 'CASE-101'), request_id: params.clientUserMessageId, text: 'event-woken fixture answer' });
     return 'completed';
   } });
   let passes = 0;
   const running = run({ declaration: decl, declarationPath: path.join(root, 'carbon.agent.json'), store, storeDir: store.dir,
     codexHome, checkout: repo, work, harnessRoot: root, binary: '/synthetic/never-spawned', replyPort: 0, harness,
-    passes: 2, sandboxDeny: gate, items: () => { passes++; return []; }, prepareBrowserTurn: async () => ({ data: { key: 'CASE-101' } }) });
+    passes: 2, sandboxDeny: gate, items: () => { passes++; return []; }, prepareBrowserTurn: async () => ({ data: { key: 'CASE-101' } }), validateBrowserReply: () => [] });
   const deadline = setTimeout(() => { process.emit('SIGTERM', 'SIGTERM'); }, 1500);
   const submitted = setTimeout(() => { b.submit('A', packet('1')); }, 30);
   t.after(() => { clearTimeout(deadline); clearTimeout(submitted); });

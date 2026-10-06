@@ -80,4 +80,4 @@ export {
 // picks a harness directory by this value and by nothing else.
 export const HARNESS_KIND = 'codex-app-server';
 
-export { redactNativeReason } from './reasons.ts';
+export { redactNativeReason, nativeFailureEvidence } from './reasons.ts';

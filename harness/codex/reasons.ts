@@ -13,3 +13,12 @@ export function redactNativeReason(reason: unknown, credentialValues: readonly s
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@');
   return text.slice(0, 8192);
 }
+
+export function nativeFailureEvidence(reason: unknown, credentialValues: readonly string[] = []) {
+  const value = reason as { rpcError?: unknown; native_code?: unknown; code?: unknown } | null;
+  const reporter = value && typeof value === 'object' && value.rpcError ? value.rpcError : reason;
+  const code = reporter && typeof reporter === 'object' && 'code' in reporter ? reporter.code : value?.native_code ?? value?.code;
+  const original = redactNativeReason(reporter, credentialValues);
+  return { original_reason: original, original_reason_available: original !== null,
+    native_code: typeof code === 'number' ? code : typeof code === 'string' ? redactNativeReason(code, credentialValues) : null };
+}

@@ -1,8 +1,12 @@
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Declaration } from './types.ts';
+import type { Fault } from '../stream/faults.ts';
+import type { BrowserPacket } from '../adapters/browser/index.ts';
+export type BrowserReplyValidator = (input: { conversationId: string; releaseId: string; submissionId: string;
+  ticketKey: string; requestKind: BrowserPacket['request_kind']; text: string }) => Fault[];
 type ReplyArgs = { conversation_id: string; request_id: string; text: string; attachments?: unknown[] | null;
   about_job?: string; about_move?: string };
-type ReplyOptions = { store: Store; agent: string; declaration?: Declaration | null; work?: string | null };
+type ReplyOptions = { store: Store; agent: string; declaration?: Declaration | null; work?: string | null; validateBrowserReply?: BrowserReplyValidator };
 // The `reply` tool: the one door out of a turn.
 //
 // It writes an outbound record as `pending` and returns. It does not send. The
@@ -176,6 +180,19 @@ function attachmentsFromPaths(store: Store, record: MessageRecord, paths: unknow
   }));
 }
 
+function browserReplyFaults(validator: BrowserReplyValidator | undefined, input: Parameters<BrowserReplyValidator>[0]) {
+  if (!validator) return [fault('BROWSER_REPLY_VALIDATOR_ABSENT', input.releaseId,
+    'browser reply has no client body validator', 'bind validateBrowserReply to the canonical client response validator')];
+  const refused = [fault('BROWSER_REPLY_VALIDATOR_FAILED', input.releaseId,
+    'the configured browser reply validator did not return a synchronous fault array', 'repair the canonical client validator callback before retrying this reply')];
+  try {
+    const faults = validator(input);
+    return Array.isArray(faults) ? faults : refused;
+  } catch {
+    return refused;
+  }
+}
+
 export function outboundRecord(store: Store, { agent, conversation_id, request_id, text, attachments = [], work = null, now = new Date() }: ReplyArgs & { agent: string; work?: string | null; now?: Date }) {
   const inbound = store.recordsIn(conversation_id).filter((r) => r.direction === 'inbound');
   if (inbound.length === 0) {
@@ -218,8 +235,10 @@ export function outboundRecord(store: Store, { agent, conversation_id, request_i
   if (newest.source === 'browser') {
     const source = inbound.filter((one) => one.release?.turn_id === request_id).at(-1);
     record.adapter_fields = { ticket_key: source?.adapter_fields?.ticket_key, submission_id: source?.platform_message_id ?? null,
-      request_kind: source?.adapter_fields?.request_kind ?? null,
-      draft_label: source?.adapter_fields?.request_kind === 'copy_draft' ? 'Draft for review and copy' : null };
+      request_kind: source?.adapter_fields?.request_kind ?? null };
+    record.reply_to = source?.message_id;
+    const previous = store.recordsIn(conversation_id).filter((one) => one.message_id === record.message_id);
+    if (previous.length) record.revision = Math.max(...previous.map((one) => one.revision ?? 0)) + 1;
   }
   record.attachments = attachmentsFromPaths(store, record, attachments, work);
   return record;
@@ -243,7 +262,7 @@ export function teachCheckConversation(declaration: Declaration | null | undefin
 // The declaration is what says whether this reply is held. Without one — which is
 // every caller that is not the runtime — nothing is held and the reply is written
 // as it always was.
-function replyWriter({ store, agent, declaration = null, work = null, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
+function replyWriter({ store, agent, declaration = null, work = null, validateBrowserReply, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
   const heldIn = teachCheckConversation(declaration);
   // createServer calls this with parseArguments leftovers (Record<string, unknown>)
   // and unknown context. Named fields are the original reads, not a new check.
@@ -263,6 +282,18 @@ function replyWriter({ store, agent, declaration = null, work = null, now = () =
       work,
       now: now()
     });
+    const existing = store.readRequest(args.request_id as string);
+    if (incoming?.source === 'browser' && (!existing || existing.status === 'failed')) {
+      const source = store.recordsIn(record.conversation_id).find((one) => one.direction === 'inbound' && one.release?.turn_id === args.request_id)!;
+      const failures = browserReplyFaults(validateBrowserReply, { conversationId: record.conversation_id,
+        releaseId: args.request_id as string, submissionId: source.platform_message_id,
+        ticketKey: source.adapter_fields!.ticket_key as string, requestKind: source.adapter_fields!.request_kind as BrowserPacket['request_kind'], text: record.body });
+      if (failures.length) {
+        store.capture({ ...record, disposition: 'parked', delivery: { ...record.delivery!, status: 'failed' },
+          adapter_fields: { ...record.adapter_fields, reply_validation_faults: failures } });
+        throw new StreamFault(failures);
+      }
+    }
     if (actionClaim) record.delivery!.action_claim = actionClaim;
     const held = heldIn !== null && args.conversation_id === heldIn;
     const written = store.reply(record, { status: held ? 'pending-teach-check' : 'pending' });
@@ -286,9 +317,9 @@ export function replyHandler(options: ReplyOptions & { now?: () => Date }) {
   return (args: Record<string, unknown>) => write(args);
 }
 
-export function recordsReplyHandler({ store, agent, declaration = null, work = null,
+export function recordsReplyHandler({ store, agent, declaration = null, work = null, validateBrowserReply,
   now = () => new Date(), actionUrl }: ReplyOptions & { now?: () => Date; actionUrl?: string }) {
-  const write = replyWriter({ store, agent, declaration, work, now });
+  const write = replyWriter({ store, agent, declaration, work, validateBrowserReply, now });
   return async (args: Record<string, unknown>) => {
     // Validate ownership and attachments before reserving a job action. This
     // preflight does not write attachment blobs if the action is refused.
@@ -331,17 +362,17 @@ export async function recordSentAction(store: Store, record: MessageRecord,
   store.annotate(record, { action_recorded_at: now().toISOString() });
 }
 
-export function createReplyServer({ store, agent, declaration = null, work = null }: ReplyOptions) {
+export function createReplyServer({ store, agent, declaration = null, work = null, validateBrowserReply }: ReplyOptions) {
   return createServer({
     manifest: MANIFEST,
     handlers: { reply: declaration?.records?.enabled === true
-      ? recordsReplyHandler({ store, agent, declaration, work })
-      : replyHandler({ store, agent, declaration, work }) }
+      ? recordsReplyHandler({ store, agent, declaration, work, validateBrowserReply })
+      : replyHandler({ store, agent, declaration, work, validateBrowserReply }) }
   });
 }
 
-export async function serveReplyTool({ store, agent, declaration = null, work = null, host = '127.0.0.1', port = REPLY_PORT }: ReplyOptions & { host?: string; port?: number }) {
-  const server = createReplyServer({ store, agent, declaration, work });
+export async function serveReplyTool({ store, agent, declaration = null, work = null, validateBrowserReply, host = '127.0.0.1', port = REPLY_PORT }: ReplyOptions & { host?: string; port?: number }) {
+  const server = createReplyServer({ store, agent, declaration, work, validateBrowserReply });
   const { server: http, url } = await server.serveHttp({ host, port });
   return { http, url, close: () => new Promise<unknown>((resolve) => http.close(resolve)) };
 }

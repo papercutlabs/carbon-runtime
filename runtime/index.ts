@@ -1,7 +1,8 @@
 // shape: justified this existing runtime composition point coordinates store, harness, channels, tools and the typed browser turn preparation contract
 import type { BrowserPreparation } from './browser.ts';
+import type { BrowserReplyValidator } from './reply-tool.ts';
 import type { Declaration, Channel, Log, Harness, Session, ChildExit } from './types.ts';
-type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation };
+type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator };
 
 // The runtime process: the one thing a unit starts.
 //
@@ -360,7 +361,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // untouched by it.
     // Core checks installed declarations for agent.id; this launch path forwards
     // the declared value without validating it again.
-    reply = await serveReplyTool({ store, agent: declaration.agent?.id!, declaration, work, port: replyPort });
+    reply = await serveReplyTool({ store, agent: declaration.agent?.id!, declaration, work, port: replyPort, validateBrowserReply: options.validateBrowserReply });
     log({ event: 'reply_tool.listening', url: reply.url });
 
     // The teaching tools, on the declaration's word and on nothing else. With
@@ -395,7 +396,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // The child dying is the end of this process. The pair is one unit; systemd
     // restarts both, and the store says what the restart owes.
     let childExit: ChildExit | null = null;
-    session.exit.then((exit) => { childExit = exit; });
+    session.exit.then((exit) => { childExit = exit; draining.wake?.(); });
 
     // Read once the harness is up. Asking returns at once, the read starts on a
     // later tick, and nothing waits for it.
