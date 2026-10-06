@@ -9,6 +9,7 @@ export type OnTurn = (session: FakeSession, params: TurnParams, turn: number) =>
 import { policyFor, holdsRelease } from '../harness/codex/index.ts';
 
 export class FakeSession {
+  credentialValues: string[] = [];
   declare threads: Map<string, string>;
   declare turns: TurnParams[];
   declare opens?: (ThreadOpening | (ThreadOpening & { threadId: string }))[];

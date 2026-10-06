@@ -215,6 +215,12 @@ export function outboundRecord(store: Store, { agent, conversation_id, request_i
     }
   };
   if (open) record.reply_to = open.message_id;
+  if (newest.source === 'browser') {
+    const source = inbound.filter((one) => one.release?.turn_id === request_id).at(-1);
+    record.adapter_fields = { ticket_key: source?.adapter_fields?.ticket_key, submission_id: source?.platform_message_id ?? null,
+      request_kind: source?.adapter_fields?.request_kind ?? null,
+      draft_label: source?.adapter_fields?.request_kind === 'copy_draft' ? 'Draft for review and copy' : null };
+  }
   record.attachments = attachmentsFromPaths(store, record, attachments, work);
   return record;
 }
@@ -242,6 +248,12 @@ function replyWriter({ store, agent, declaration = null, work = null, now = () =
   // createServer calls this with parseArguments leftovers (Record<string, unknown>)
   // and unknown context. Named fields are the original reads, not a new check.
   return (args: Record<string, unknown>, actionClaim?: { kind: 'claimed'; job: string; step: string; action_id: string }) => {
+    const incoming = store.recordsIn(args.conversation_id as string).find((record) => record.direction === 'inbound');
+    if (incoming?.source === 'browser' && (store.activeBrowserReply?.conversation_id !== args.conversation_id || store.activeBrowserReply?.release_id !== args.request_id)) {
+      throw new StreamFault([fault('BROWSER_REPLY_SCOPE_REFUSED', String(args.request_id),
+        'a browser reply must match the active authenticated ticket release; other tickets and stale releases are refused',
+        'use the conversation and release identity supplied to this turn')]);
+    }
     const record = outboundRecord(store, {
       agent,
       conversation_id: args.conversation_id as string,

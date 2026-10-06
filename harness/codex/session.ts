@@ -11,6 +11,7 @@
 // is a thing that happens.
 
 import fs from 'node:fs';
+import { redactNativeReason } from './reasons.ts';
 import { spawn } from 'node:child_process';
 import { fault } from '../../lib/faults.ts';
 import { Connection, RpcError } from './protocol.ts';
@@ -22,7 +23,7 @@ type Fault = { code: string; subject: string; problem: string; fix: string };
 type ThreadReply = { thread?: { id?: unknown }; model?: unknown; reasoningEffort?: unknown; cwd?: unknown; approvalPolicy?: unknown; sandbox?: unknown } | null;
 type ConnectOptions = {
   binary: string; codexHome: string; providerKeyPath?: string; providerKeyEnvName?: string;
-  extraEnv?: Record<string, string>; onEvent?: (event: HarnessEvent) => void;
+  extraEnv?: Record<string, string>; credentialValues?: string[]; onEvent?: (event: HarnessEvent) => void;
   onStderr?: (chunk: string) => void; onDropped?: (line: string) => void;
   onWire?: (direction: string, line: string) => void;
 };
@@ -60,6 +61,7 @@ export class Session {
   binary: string;
   codexHome: string;
   stderr: string[];
+  credentialValues: string[] = [];
   threadId: unknown;
   thread: ThreadReply;
   initializeResult: unknown;
@@ -118,7 +120,7 @@ export class Session {
 // Spawns the app-server and completes the handshake. Does not open a thread; that
 // is `openThread` or `resumeThread`, so a caller that only wants tool status pays
 // for nothing more.
-export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, onEvent, onStderr, onDropped, onWire }: ConnectOptions) {
+export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, credentialValues = [], onEvent, onStderr, onDropped, onWire }: ConnectOptions) {
   if (!fs.existsSync(codexHome)) {
     throw new HarnessFault(fault('HARNESS_CODEX_HOME_ABSENT', codexHome,
       'the CODEX_HOME directory does not exist, and the harness never creates it',
@@ -163,6 +165,8 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
   });
 
   const session = new Session({ child, connection, stream, binary, codexHome, stderr });
+  session.credentialValues = [...credentialValues, ...(providerKey ? [providerKey] : []),
+    ...Object.entries(extraEnv ?? {}).filter(([name]) => /TOKEN|SECRET|KEY|CREDENTIAL|PASSWORD|CANARY/.test(name)).map(([, value]) => value)];
   session.initializeResult = await connection.request('initialize', { clientInfo: CLIENT_INFO });
   connection.notify('initialized', {});
   return session;
@@ -258,8 +262,8 @@ export async function resumeThread(session: Session, { threadId, cwd, model, eff
 // login; the rate-limit windows, credits and the account id when the backend
 // supplies one. Nothing else in either answer is carried, so a token the wire
 // happens to hold has nowhere to go. An error is carried the same way: a fixed
-// code, a fixed summary and the JSON-RPC error number, and never the text the
-// app-server or the provider wrote, which can quote anything.
+// code, a fixed summary and the native code. The redacted original reporter
+// reason is captured once, without passing credential values or raw error data.
 
 export type AccountIdentity = { type: string | null; email: string | null; plan_type: string | null };
 export type RateLimitWindowRecord = { used_percent: number | null; window_minutes: number | null; resets_at: number | null };
@@ -269,7 +273,7 @@ export type RateLimitsRecord = {
   credits: { has_credits: boolean | null; unlimited: boolean | null; balance: string | null } | null;
   rate_limit_reached_type: string | null;
 };
-export type AccountReadError = { method: string; code: string; summary: string; rpc_code: number | null };
+export type AccountReadError = { method: string; code: string; summary: string; rpc_code: number | null; original_reason?: string | null; original_reason_available?: boolean; native_code?: string | number | null };
 export type AccountRead = {
   observed_at: string;
   codex_version: string | null;
@@ -279,10 +283,10 @@ export type AccountRead = {
   error: AccountReadError[] | null;
 };
 
-// Why a request failed, by kind. The summary is the whole of what is said, and
-// each is fixed text, so nothing the wire carried can reach it.
+// Why a request failed, by kind. Fixed summaries accompany the redacted original
+// reason; unavailable reporter reasons remain explicitly unavailable.
 const FAILURES = {
-  REJECTED: 'the app-server answered with an error; its text is not kept',
+  REJECTED: 'the app-server answered with an error; its redacted original reason is retained when available',
   TIMED_OUT: 'the app-server did not answer within the bound',
   NOT_SENT: 'the request failed as it was sent',
   STILL_PENDING: 'the last request of this kind is still unanswered, so none was sent'
@@ -295,9 +299,11 @@ const CODE_PREFIX: Record<string, string> = { 'account/read': 'ACCOUNT_READ', 'a
 
 class AccountRequestFailure extends Error {
   kind: FailureKind;
-  constructor(kind: FailureKind) {
+  original: unknown;
+  constructor(kind: FailureKind, original: unknown = null) {
     super(FAILURES[kind]);
     this.kind = kind;
+    this.original = original;
   }
 }
 
@@ -373,8 +379,8 @@ function ask(session: Session, method: string, params: unknown, timeoutMs: numbe
   let request: Promise<unknown>;
   try {
     request = Promise.resolve(session.request(method, params));
-  } catch {
-    return Promise.reject(new AccountRequestFailure('NOT_SENT'));
+  } catch (error) {
+    return Promise.reject(new AccountRequestFailure('NOT_SENT', error));
   }
   const held = busy;
   held.add(method);
@@ -385,15 +391,18 @@ function ask(session: Session, method: string, params: unknown, timeoutMs: numbe
 
 // What a failed request is recorded as: its method, a code and summary fixed by
 // the kind of failure, and the JSON-RPC error number when the app-server gave one.
-// The reason's own message is never read.
-function failure(method: string, reason: unknown): AccountReadError {
+// Original reporter wording is redacted here before reaching operator records.
+function failure(method: string, reason: unknown, credentialValues: readonly string[] = []): AccountReadError {
   const kind: FailureKind = reason instanceof AccountRequestFailure ? reason.kind : 'REJECTED';
   const number = reason instanceof RpcError ? field(reason.rpcError, 'code') : null;
+  const original = redactNativeReason(reason instanceof AccountRequestFailure ? reason.original : reason instanceof RpcError ? reason.rpcError : reason, credentialValues);
   return {
     method,
     code: `${CODE_PREFIX[method]}_${kind}`,
     summary: `${method}: ${FAILURES[kind]}`,
-    rpc_code: typeof number === 'number' && Number.isSafeInteger(number) ? number : null
+    rpc_code: typeof number === 'number' && Number.isSafeInteger(number) ? number : null,
+    original_reason: original, original_reason_available: original !== null,
+    native_code: typeof number === 'number' || typeof number === 'string' ? number : null
   };
 }
 
@@ -421,13 +430,19 @@ export async function readAccount(session: Session, { timeoutMs }: { timeoutMs: 
     read.account = accountFrom(field(account.value, 'account'));
     read.requires_openai_auth = flag(field(account.value, 'requiresOpenaiAuth'));
   } else {
-    errors.push(failure('account/read', account.reason));
+    errors.push(failure('account/read', account.reason, session.credentialValues));
   }
   if (limits.status === 'fulfilled') {
     read.rate_limits = rateLimitsFrom(field(limits.value, 'rateLimits'), field(limits.value, 'accountId'));
   } else {
-    errors.push(failure('account/rateLimits/read', limits.reason));
+    errors.push(failure('account/rateLimits/read', limits.reason, session.credentialValues));
   }
   if (errors.length > 0) read.error = errors;
   return read;
+}
+
+// Structural recovery reads use this same session; callers decide whether evidence
+// settles an effect. No new turn is started by a read.
+export function readThread(session: Session, { threadId, includeTurns }: { threadId: string; includeTurns: boolean }) {
+  return bounded(Promise.resolve(session.request('thread/read', { threadId, includeTurns })), 15000);
 }

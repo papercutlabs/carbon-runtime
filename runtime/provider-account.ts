@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { redactNativeReason } from '../harness/codex/index.ts';
 import path from 'node:path';
 import type { Harness, Log } from './types.ts';
 import type { AccountRead, AccountIdentity, AccountReadError, RateLimitsRecord } from '../harness/codex/index.ts';
@@ -19,7 +20,8 @@ import type { AccountRead, AccountIdentity, AccountReadError, RateLimitsRecord }
 // later tick, is bounded, and one runs at a time. It ends in the record whatever
 // happens: a read that failed writes `error` and keeps the values it had, each
 // dated by its own observed_at, so an old answer is never mistaken for a fresh
-// one. An error is a fixed code and summary, never text the provider wrote.
+// one. An error retains a fixed code/summary and the captured redacted original
+// reporter reason; unavailable reasons are explicitly marked.
 //
 // The rate limits belong to the account they were read with. When a read that
 // succeeded names another account, or none, the limits held are cleared with
@@ -49,7 +51,7 @@ const ACCOUNT_READ_GRACE_MS = 1_000;
 // What this process records of a read that went wrong outside the harness's two
 // requests. Fixed text, like the harness's own.
 const RECORDER_FAILURES = {
-  THREW: { method: 'readAccount', code: 'READ_ACCOUNT_THREW', summary: 'readAccount threw; its text is not kept', rpc_code: null },
+  THREW: { method: 'readAccount', code: 'READ_ACCOUNT_THREW', summary: 'readAccount threw; its redacted original reason is retained when available', rpc_code: null },
   UNSETTLED: { method: 'readAccount', code: 'READ_ACCOUNT_UNSETTLED', summary: 'readAccount did not return within the bound', rpc_code: null },
   UNCONFIRMED: {
     method: 'account/rateLimits/read', code: 'RATE_LIMITS_READ_UNCONFIRMED', rpc_code: null,
@@ -222,7 +224,8 @@ export class ProviderAccountRecorder<S> {
     try {
       read = await bounded(this.harness.readAccount!(this.session!, { timeoutMs: this.timeoutMs }), this.timeoutMs + ACCOUNT_READ_GRACE_MS); // request() checked both before starting.
     } catch (error) {
-      thrown = error instanceof Unsettled ? RECORDER_FAILURES.UNSETTLED : RECORDER_FAILURES.THREW;
+      thrown = error instanceof Unsettled ? { ...RECORDER_FAILURES.UNSETTLED, original_reason: null, original_reason_available: false }
+        : { ...RECORDER_FAILURES.THREW, original_reason: redactNativeReason(error, (this.session as { credentialValues?: string[] } | null)?.credentialValues ?? []), original_reason_available: redactNativeReason(error) !== null };
     }
     const updates = this.sinceRead;
     this.sinceRead = null;

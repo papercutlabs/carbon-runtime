@@ -29,7 +29,7 @@ export {
 // app-server the runtime already holds, with refreshToken false, and returns no
 // token; it is not a seventh operation, because nothing depends on it to run an
 // agent.
-export { readAccount, rateLimitsFrom } from './session.ts';
+export { readAccount, rateLimitsFrom, readThread } from './session.ts';
 export type { AccountRead, AccountIdentity, RateLimitsRecord, RateLimitWindowRecord, AccountReadError } from './session.ts';
 
 export {
@@ -79,3 +79,5 @@ export {
 // The kind of harness this directory is, as the declaration spells it. The runtime
 // picks a harness directory by this value and by nothing else.
 export const HARNESS_KIND = 'codex-app-server';
+
+export { redactNativeReason } from './reasons.ts';

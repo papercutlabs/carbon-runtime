@@ -19,6 +19,7 @@ export const REGISTRY = {
   // the adapter with no channel, so the release loop can be run and proved
   // without a network and without a credential
   fixture: 'adapters/fixture/index.ts',
+  browser: 'adapters/browser/index.ts',
   email: 'adapters/email/index.ts',
   whatsapp: 'adapters/whatsapp/index.ts',
   telegram: 'adapters/telegram/index.ts'

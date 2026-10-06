@@ -181,7 +181,7 @@ test('a channel whose adapter this build does not carry is one named fault at st
     assert.equal((error as RuntimeFault).faults[0].code, 'CHANNEL_KIND_UNREGISTERED'); // This case exercises a RuntimeFault refusal; its existing assertions inspect that fault.
     return true;
   });
-  assert.deepEqual(registeredKinds(), ['email', 'fixture', 'telegram', 'whatsapp']);
+  assert.deepEqual(registeredKinds(), ['browser', 'email', 'fixture', 'telegram', 'whatsapp']);
 });
 
 test('a tool server\'s environment is built from empty, and holds paths and never values', () => {

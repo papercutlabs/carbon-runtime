@@ -191,6 +191,29 @@ export function recordFileName(encodedMessageId: string, revision: number): stri
 
 export class Store<TRecord extends MessageRecord = MessageRecord> {
   declare dir: string;
+  activeBrowserReply: { conversation_id: string; release_id: string } | null = null;
+  // Rebuildable scalar projection of durable browser notifications, never bodies
+  // or a second history authority. A new Store reconstructs from disk.
+  browserProjectionVersion = 0;
+  browserProjectionUpdates = new Map<string, { conversation_id: string; message_id: string; revision: number; seq: number; cursor: number }>();
+  browserListeners = new Set<(event: { kind: 'capture' | 'state'; conversation_id: string; direction: string }) => void>();
+
+  subscribeBrowserChanges(listener: (event: { kind: 'capture' | 'state'; conversation_id: string; direction: string }) => void) {
+    this.browserListeners.add(listener);
+    return () => { this.browserListeners.delete(listener); };
+  }
+
+  publishBrowserChange(record: MessageRecord, kind: 'capture' | 'state', captureSeq?: number) {
+    if (record.source !== 'browser') return;
+    const revision = record.revision ?? 0;
+    const identity = JSON.stringify([record.conversation_id, record.message_id, revision]);
+    const previous = this.browserProjectionUpdates.get(identity);
+    const seq = captureSeq ?? previous?.seq ?? 0;
+    const cursor = Math.max(seq, Number(record.adapter_fields?.browser_event_seq ?? 0));
+    this.browserProjectionUpdates.set(identity, { conversation_id: record.conversation_id, message_id: record.message_id, revision, seq, cursor });
+    this.browserProjectionVersion++;
+    for (const listener of this.browserListeners) listener({ kind, conversation_id: record.conversation_id, direction: record.direction });
+  }
 
   constructor(dir: string) {
     this.dir = path.resolve(dir);
@@ -294,6 +317,7 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
       if (options.disposition !== undefined && options.disposition !== written.disposition) {
         written = this.setDisposition(written, options.disposition);
       }
+      if (!merged) this.publishBrowserChange(written, 'capture', seq);
       return { file: places.record, seq, merged, record: written };
     } finally {
       if (options.cursor) {
@@ -327,10 +351,12 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
       adapter_fields: {
         ...(on_disk.adapter_fields ?? {}),
         park_reason: reason ?? all.map((f) => `${f.code} ${f.subject}: ${f.problem}`).join('; '),
-        park_faults: all
+        park_faults: all,
+        ...(on_disk.source === 'browser' ? { browser_event_seq: this.nextSeq() } : {})
       }
     };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
+    this.publishBrowserChange(written, 'state');
     return written;
   }
 
@@ -341,8 +367,10 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
     const places = this.paths(record);
     // Store records were schema-validated when captured; JSON.parse itself carries no record type.
     const on_disk: MessageRecord = JSON.parse(fs.readFileSync(places.record, 'utf8'));
-    const written = { ...on_disk, adapter_fields: { ...(on_disk.adapter_fields ?? {}), ...fields } };
+    const written = { ...on_disk, adapter_fields: { ...(on_disk.adapter_fields ?? {}), ...fields,
+      ...(on_disk.source === 'browser' ? { browser_event_seq: this.nextSeq() } : {}) } };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
+    this.publishBrowserChange(written, 'state');
     return written;
   }
 
@@ -350,8 +378,9 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
     const places = this.paths(record);
     // Store records were schema-validated when captured; JSON.parse itself carries no record type.
     const on_disk: T = JSON.parse(fs.readFileSync(places.record, 'utf8'));
-    const written: T = { ...on_disk, disposition };
+    const written: T = { ...on_disk, disposition, ...(on_disk.source === 'browser' ? { adapter_fields: { ...(on_disk.adapter_fields ?? {}), browser_event_seq: this.nextSeq() } } : {}) };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
+    this.publishBrowserChange(written, 'state');
     return written;
   }
 
@@ -566,16 +595,20 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
     if (faults.length > 0) throw new StreamFault(faults);
 
     const on_disk = this.readAt(places.record);
-    const written = { ...on_disk, release: { released_at, thread_id, turn_id } };
+    const written = { ...on_disk, release: { released_at, thread_id, turn_id },
+      ...(on_disk.source === 'browser' ? { adapter_fields: { ...(on_disk.adapter_fields ?? {}), browser_event_seq: this.nextSeq() } } : {}) };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
+    this.publishBrowserChange(written, 'state');
     return written;
   }
 
   completeRelease(record: TRecord, completed_at: string): MessageRecord {
     const places = this.paths(record);
     const on_disk = this.readAt(places.record);
-    const written = { ...on_disk, release: { ...on_disk.release, completed_at } };
+    const written = { ...on_disk, release: { ...on_disk.release, completed_at },
+      ...(on_disk.source === 'browser' ? { adapter_fields: { ...(on_disk.adapter_fields ?? {}), model_effect: 'completed', browser_event_seq: this.nextSeq() } } : {}) };
     writeAtomic(places.record, JSON.stringify(written, null, 2) + '\n');
+    this.publishBrowserChange(written, 'state');
     return written;
   }
 
@@ -691,11 +724,13 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
     const record = this.read(request.conversation_id, request.message_id, request.revision ?? 0)!;
     const delivery = { ...record.delivery, status, ...extra };
     const places = this.paths(record);
-    writeAtomic(places.record, JSON.stringify({ ...record, delivery }, null, 2) + '\n');
+    const settled = { ...record, delivery, ...(record.source === 'browser' ? { adapter_fields: { ...(record.adapter_fields ?? {}), browser_event_seq: this.nextSeq() } } : {}) };
+    writeAtomic(places.record, JSON.stringify(settled, null, 2) + '\n');
     writeAtomic(this.requestFile(request_id), JSON.stringify({
       ...request, status, chunk_ids: extra.chunk_ids ?? request.chunk_ids ?? []
     }, null, 2) + '\n');
-    return { ...record, delivery };
+    this.publishBrowserChange(settled, 'state');
+    return settled;
   }
 
   // A held reply, let go. It becomes an ordinary pending reply and the next

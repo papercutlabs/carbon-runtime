@@ -8,6 +8,7 @@
 // policy inherits whatever the last turn set, which is exactly the failure the
 // explicit-arguments rule exists to prevent.
 
+import { redactNativeReason } from './reasons.ts';
 import { fault } from '../../lib/faults.ts';
 import { HarnessFault } from './session.ts';
 import type { Session } from './session.ts';
@@ -21,7 +22,7 @@ type TurnRecord = {
 type PolicyOptions = { writableRoots?: string[]; networkAccess?: boolean };
 type TurnOptions = {
   threadId?: string; input: string | unknown[]; effort?: string; sandboxPolicy?: unknown;
-  clientUserMessageId?: string; model?: string; timeoutMs?: number;
+  clientUserMessageId?: string; model?: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
 };
 
 // The workspace-write policy the plan names: the work directory writable, the
@@ -100,7 +101,7 @@ function awaitCompletion(session: Session, threadId: string, turnId: string, { t
 // after a restart carries the same value; whether the app-server deduplicates on it
 // is recorded in harness/codex/verifications.
 export async function turn(session: Session, {
-  threadId, input, effort, sandboxPolicy, clientUserMessageId, model, timeoutMs
+  threadId, input, effort, sandboxPolicy, clientUserMessageId, model, timeoutMs, onStarted
 }: TurnOptions) {
   if (!threadId) {
     throw new HarnessFault(fault('HARNESS_THREAD_ID_ABSENT', 'turn/start.threadId',
@@ -124,6 +125,7 @@ export async function turn(session: Session, {
       'the reply carried no turn id, so completion cannot be correlated',
       'record the reply and stop; the pinned protocol moved'));
   }
+  onStarted?.({ threadId, turnId });
   const completed = await awaitCompletion(session, threadId, turnId, { timeoutMs });
   const stream = session.stream.forTurn(threadId, turnId);
   const { items, items_detail } = itemsFrom(completed, stream);
@@ -136,7 +138,16 @@ export async function turn(session: Session, {
     started_at: completed.startedAt ?? null,
     completed_at: completed.completedAt ?? null,
     duration_ms: completed.durationMs ?? null,
-    error: completed.error ?? null,
+    error: completed.error === null || completed.error === undefined ? null : {
+      original_reason: redactNativeReason(completed.error, session.credentialValues),
+      original_reason_available: redactNativeReason(completed.error, session.credentialValues) !== null,
+      native_code: completed.error && typeof completed.error === 'object'
+        ? 'code' in completed.error ? completed.error.code
+          : 'codexErrorInfo' in completed.error ? redactNativeReason(JSON.stringify(completed.error.codexErrorInfo), session.credentialValues) : null
+        : null,
+      additional_details: completed.error && typeof completed.error === 'object' && 'additionalDetails' in completed.error
+        ? redactNativeReason(completed.error.additionalDetails, session.credentialValues) : null
+    },
     items,
     items_view: completed.itemsView ?? null,
     items_detail,

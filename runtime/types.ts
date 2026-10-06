@@ -64,7 +64,7 @@ export type ThreadOpening = {
 };
 export type TurnParams = {
   threadId: string; input: string; text?: string; effort?: string; model?: string;
-  sandboxPolicy?: unknown; clientUserMessageId: string; timeoutMs?: number;
+  sandboxPolicy?: unknown; clientUserMessageId: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
 };
 export type TurnResult = {
   thread_id?: unknown; turn_id?: unknown; status?: unknown;
@@ -82,6 +82,7 @@ export type Harness<S = Session> = {
   openThread(session: S, options: ThreadOpening): Promise<{ thread_id: string; [key: string]: unknown }>;
   resumeThread(session: S, options: ThreadOpening & { threadId: string }): Promise<unknown>;
   turn(session: S, options: TurnParams): Promise<TurnResult>;
+  readThread?(session: S, options: { threadId: string; includeTurns: boolean }): Promise<unknown>;
   listToolServerStatus(session: S, options: { threadId: string }): Promise<Status[]>;
   onToolServerStatus?(session: S, handler: () => void): unknown;
   holdsRelease(declaration: Declaration, statuses: Status[]): Fault[];
