@@ -196,7 +196,7 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
   // Rebuildable scalar projection of durable browser notifications, never bodies
   // or a second history authority. A new Store reconstructs from disk.
   browserProjectionVersion = 0;
-  browserEvidenceVersions = new Map<string,number>();
+  browserEvidenceVersions = new Map<string,{version:number;message_id:string;revision:number}>();
   browserProjectionUpdates = new Map<string, { conversation_id: string; message_id: string; revision: number; seq: number; cursor: number }>();
   browserListeners = new Set<(event: { kind: 'capture' | 'state'; conversation_id: string; direction: string; message_id: string; revision: number }) => void>();
 
@@ -207,7 +207,7 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
 
   publishBrowserChange(record: MessageRecord, kind: 'capture' | 'state', captureSeq?: number) {
     if (record.source !== 'browser') return;
-    if(kind==='capture'&&record.adapter_fields?.evidence_change)this.browserEvidenceVersions.set(record.conversation_id,(this.browserEvidenceVersions.get(record.conversation_id)??0)+1);
+    if(kind==='capture'&&record.adapter_fields?.evidence_change)this.browserEvidenceVersions.set(record.conversation_id,{version:(this.browserEvidenceVersions.get(record.conversation_id)?.version??0)+1,message_id:record.message_id,revision:record.revision??0});
     const revision = record.revision ?? 0;
     const identity = JSON.stringify([record.conversation_id, record.message_id, revision]);
     const previous = this.browserProjectionUpdates.get(identity);

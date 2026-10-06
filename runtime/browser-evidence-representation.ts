@@ -71,13 +71,13 @@ export function resolveEvidenceFragment(rep: EvidenceRepresentation, selector: E
   const start = Math.max(1, range.start - contextBefore), end = Math.min(total, range.end + contextAfter, start + limit - 1);
   if (end < range.end) refuse('contextBefore', 'requested context would exclude the selected ending within the explicit limit');
   return { kind: rep.kind, total, start, end, lines: rep.kind === 'text' ? rep.lines!.slice(start - 1, end).map((text, i) => ({ number: start + i, text })) : [],
-   rows: rep.kind === 'table' ? rep.rows!.slice(start - 1, end).map((cells, i) => ({ number: start + i, cells })) : [], columns: rep.columns ?? [], hasMore: end < total, nextSelector: end < total ? { kind, start: end + 1, end: Math.min(total, end + limit) } : null };
+   rows: rep.kind === 'table' ? rep.rows!.slice(start - 1, end).map((cells, i) => ({ number: start + i, cells:[...cells] })) : [], columns: [...(rep.columns ?? [])], hasMore: end < total, nextSelector: end < total ? { kind, start: end + 1, end: Math.min(total, end + limit) } : null };
  }
  if (rep.kind === 'json') {
   if (selector !== null && selector.kind !== 'field') refuse('selector.kind', 'structured data supports an exact JSON pointer');
   const field = selector?.kind === 'field' ? selector.pointer : '', value = pointer(rep.fields!, field), text = JSON.stringify(value, null, 2);
   if (Buffer.byteLength(text) > limit * 1024) refuse('selector.pointer', 'this structured field exceeds the explicit fragment byte bound; choose a narrower field');
-  return { kind: 'json', pointer: field, value, text, hasMore: false, nextSelector: null };
+  return { kind: 'json', pointer: field, value:structuredClone(value), text, hasMore: false, nextSelector: null };
  }
  if (rep.kind === 'image') {
   if (selector !== null) { if (selector.kind !== 'region') refuse('selector.kind', 'image supports a region on the full original');

@@ -11,3 +11,8 @@ test('actual varied immutable bytes resolve text/comment fields/quoted rows/full
  assert.throws(()=>resolveEvidenceFragment(text,{kind:'lines',start:40000,end:40001},0,0,10),/outside/);assert.throws(()=>resolveEvidenceFragment(json,{kind:'field',pointer:'/comments/9/body'},0,0,10),/no such/);assert.throws(()=>resolveEvidenceFragment(full,{kind:'region',x:.8,y:0,width:.5,height:.5},0,0,1),/normalized/);
  const active=indexEvidenceRepresentation(Buffer.from('<script>throw 1</script>'),'text/html','analysis.html');assert.equal(active.kind,'file');assert.match(active.limitation!,/download/);
 });
+
+test('selected result mutations cannot poison reused representation indexes',()=>{
+ const rep=indexEvidenceRepresentation(Buffer.from('id,value\nsource,7\n'),'text/csv','original.csv'),first=resolveEvidenceFragment(rep,{kind:'rows',start:1,end:1},0,0,1);first.rows![0].cells[1]='forged';first.columns![0]='forged';const next=resolveEvidenceFragment(rep,{kind:'rows',start:1,end:1},0,0,1);assert.deepEqual(next.rows![0].cells,['source','7']);assert.equal(next.columns![0],'id');
+ const json=indexEvidenceRepresentation(Buffer.from('{"record":{"value":7}}'),'application/json','original.json'),field=resolveEvidenceFragment(json,{kind:'field',pointer:'/record'},0,0,1);(field.value as {value:number}).value=99;assert.equal((resolveEvidenceFragment(json,{kind:'field',pointer:'/record'},0,0,1).value as {value:number}).value,7);
+});
