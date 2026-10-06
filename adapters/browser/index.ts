@@ -1,4 +1,4 @@
-import type { EvidenceReference } from '../../runtime/browser-evidence.ts';
+import type { EvidenceReference } from '../../lib/browser-evidence.ts';
 // Trusted server input for an attributed ticket conversation. The companion
 // authenticates the consultant; this adapter never treats a browser claim as a grant.
 import crypto from 'node:crypto';
@@ -37,6 +37,9 @@ function validateBrowserContent(packet: BrowserPacket) {
   if (packet.input_kind !== undefined && packet.request_kind !== undefined) refuse('request_kind', 'ordinary chat must not carry a legacy request kind');
   validateBrowserFileIds(packet);
   if(packet.references!==undefined&&(!Array.isArray(packet.references)||packet.references.length>100))refuse('references','references must be a bounded list');
+  validateBrowserBody(packet);
+}
+function validateBrowserBody(packet: BrowserPacket) {
   if (typeof packet.body !== 'string' || (packet.body.trim().length === 0 && packet.input_kind !== 'start' && !(packet.attachment_ids?.length) && !(packet.references?.length)) || Buffer.byteLength(packet.body) > 128 * 1024) refuse('body', 'message is empty or exceeds 128 KiB');
 }
 function validateBrowserFileIds(packet: BrowserPacket) {

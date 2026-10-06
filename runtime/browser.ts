@@ -87,15 +87,7 @@ export function createBrowserBridge({ store, agent, account, authorize }: { stor
     evidenceRead(grant:unknown,key:string,options:Parameters<typeof readEvidence>[2]) { return readEvidence(store,check(grant,key,'read'),options); },
     evidenceChanges(grant:unknown,key:string,{cursor=0,limit=100,waitMs=0,signal}:{cursor?:number;limit?:number;waitMs?:number;signal?:AbortSignal}={}) {
       const conversation=check(grant,key,'watch');
-      if(!Number.isSafeInteger(waitMs)||waitMs<0||waitMs>30000)refuse('EVIDENCE_WAIT_INVALID','waitMs','expected explicit bounded wait');
-      const read=()=>{check(grant,key,'watch');return readEvidenceChanges(store,conversation,cursor,limit);};
-      const initial=read();if(initial.changes.length||waitMs===0)return Promise.resolve(initial);
-      return new Promise<ReturnType<typeof readEvidenceChanges>>((resolve,reject)=>{let stop=()=>{},timer:ReturnType<typeof setTimeout>|undefined,done=false;
-        const cleanup=()=>{stop();if(timer)clearTimeout(timer);signal?.removeEventListener('abort',abort);};
-        const finish=(force=false)=>{if(done)return;try{const page=read();if(!force&&!page.changes.length)return;done=true;cleanup();resolve(page);}catch(e){done=true;cleanup();reject(e);}};
-        const abort=()=>{if(done)return;done=true;cleanup();reject(new Error('Evidence wait aborted'));};
-        stop=store.subscribeBrowserChanges(e=>{if(e.conversation_id===conversation)finish();});signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted){abort();return;}timer=setTimeout(()=>finish(true),waitMs);finish();
-      });
+      return watchEvidenceChanges(store,conversation,()=>{check(grant,key,'watch');return readEvidenceChanges(store,conversation,cursor,limit);},waitMs,signal);
     },
     evidenceFragment(grant:unknown,key:string,itemId:string,selector:Parameters<typeof readEvidenceFragment>[3],before:number,after:number,limit:number){return readEvidenceFragment(store,check(grant,key,'read'),itemId,selector,before,after,limit);},
     evidenceDownload(grant:unknown,key:string,sourceId:string){return downloadEvidence(store,check(grant,key,'read'),sourceId);},
@@ -138,4 +130,15 @@ function watchBrowserChanges(store: Store, conversationId: string, grant: unknow
     if (page.records.length > 0 || page.activity_cursor > (options.activityAfter ?? 0)) { finish(); return; }
     timer = setTimeout(() => finish(true), options.timeoutMs);
   });
+}
+
+function watchEvidenceChanges(store:Store,conversation:string,read:()=>ReturnType<typeof readEvidenceChanges>,waitMs:number,signal?:AbortSignal){
+      if(!Number.isSafeInteger(waitMs)||waitMs<0||waitMs>30000)refuse('EVIDENCE_WAIT_INVALID','waitMs','expected explicit bounded wait');
+      const initial=read();if(initial.changes.length||waitMs===0)return Promise.resolve(initial);
+      return new Promise<ReturnType<typeof readEvidenceChanges>>((resolve,reject)=>{let stop=()=>{},timer:ReturnType<typeof setTimeout>|undefined,done=false;
+        const cleanup=()=>{stop();if(timer)clearTimeout(timer);signal?.removeEventListener('abort',abort);};
+        const finish=(force=false)=>{if(done)return;try{const page=read();if(!force&&!page.changes.length)return;done=true;cleanup();resolve(page);}catch(e){done=true;cleanup();reject(e);}};
+        const abort=()=>{if(done)return;done=true;cleanup();reject(new Error('Evidence wait aborted'));};
+        stop=store.subscribeBrowserChanges(e=>{if(e.conversation_id===conversation)finish();});signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted){abort();return;}timer=setTimeout(()=>finish(true),waitMs);finish();
+      });
 }

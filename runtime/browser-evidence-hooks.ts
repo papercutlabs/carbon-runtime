@@ -16,12 +16,15 @@ export function writeBrowserHookConfig({codexHome,work,privateRoot,nodeBinary,he
 }
 // A native readback of enabled, exact-hash trusted definitions is a prerequisite,
 // not the proof of execution or model-visible post-compaction context.
+type HookDiscovery = {data?:{cwd?:unknown;errors?:unknown[];warnings?:unknown[];hooks?:{eventName?:unknown;matcher?:unknown;sourcePath?:unknown;currentHash?:unknown;enabled?:unknown;trustStatus?:unknown;handlerType?:unknown;command?:unknown}[]}[]}|null;
+type HookDefinition = NonNullable<NonNullable<NonNullable<HookDiscovery>['data']>[number]['hooks']>[number];
+function qualifiedDefinition(found:HookDefinition|undefined){return found?.enabled===true&&['trusted','managed'].includes(String(found.trustStatus))&&typeof found.currentHash==='string'&&found.currentHash.length>0;}
 export function qualifyBrowserHooks(response:unknown,{cwd,hooksFile,command}:{cwd:string;hooksFile:string;command:string}){
- const result=response as {data?:{cwd?:unknown;errors?:unknown[];warnings?:unknown[];hooks?:{eventName?:unknown;matcher?:unknown;sourcePath?:unknown;currentHash?:unknown;enabled?:unknown;trustStatus?:unknown;handlerType?:unknown;command?:unknown}[]}[]}|null;
+ const result=response as HookDiscovery;
  const entry=result?.data?.find(e=>e.cwd===cwd);if(!entry||entry.errors?.length)throw new RuntimeFault(fault('BROWSER_HOOK_DISCOVERY_FAILED',cwd,'actual hooks/list did not read this exact working directory without errors','repair the fixed hook configuration and retain native discovery before dispatch'));
  const hooks=entry.hooks??[];const accepted=[];
  for(const eventName of ['sessionStart','preCompact','postCompact']){const found=hooks.find(h=>h.eventName===eventName&&h.sourcePath===hooksFile&&h.handlerType==='command'&&h.command===command&&(eventName!=='sessionStart'||h.matcher==='^compact$'));
-  if(!found||found.enabled!==true||!['trusted','managed'].includes(String(found.trustStatus))||typeof found.currentHash!=='string'||!found.currentHash)throw new RuntimeFault(fault('BROWSER_HOOK_NOT_QUALIFIED',eventName,'exact configured lifecycle command is absent, disabled, untrusted, modified or lacks its current native hash','the operator must review/trust the exact fixed hook definition; do not bypass trust or fabricate execution proof'));
+  if(!qualifiedDefinition(found))throw new RuntimeFault(fault('BROWSER_HOOK_NOT_QUALIFIED',eventName,'exact configured lifecycle command is absent, disabled, untrusted, modified or lacks its current native hash','the operator must review/trust the exact fixed hook definition; do not bypass trust or fabricate execution proof'));
   accepted.push(found);
  }
  return {cwd,hooks:accepted,warnings:entry.warnings??[],qualification:'native-discovery-only; execution and immediate model continuation remain unproved'};
