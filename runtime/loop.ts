@@ -709,7 +709,7 @@ export class ReleaseLoop<S = Session> {
         }
       } catch (error) {
         let threadRead: unknown;
-        try { threadRead = await this.harness.readThread?.(this.session, { threadId: active.threadId, includeTurns: true }); } catch { /* unsupported read is not rejection proof */ }
+        try { threadRead = await this.harness.readThread?.(this.session, { threadId: active.threadId, includeTurns: true }); } catch { threadRead = null; /* an unavailable native read supplies no terminal rejection proof */ }
         const events = (this.session as { stream?: { forTurn(threadId: string, turnId: string): unknown[] } }).stream?.forTurn(active.threadId, active.turnId);
         const verdict = this.harness.classifySteerFailure?.(error, { threadId: active.threadId, expectedTurnId: active.turnId, threadRead, events });
         const reason = nativeFailureEvidence(error, (this.session as { credentialValues?: string[] }).credentialValues);

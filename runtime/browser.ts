@@ -20,6 +20,16 @@ export function browserHistory(store: Store, conversationId: string) {
   const order = new Map(indexed.filter((r) => r.conversation_id === conversationId).map((r) => [`${r.message_id}:${r.revision}`, r.seq]));
   return records.sort((a, b) => (order.get(`${a.message_id}:${a.revision}`) ?? Infinity) - (order.get(`${b.message_id}:${b.revision}`) ?? Infinity));
 }
+type BrowserWatchOptions = { after?: number; activityAfter?: number; limit?: number; timeoutMs: number; signal?: AbortSignal };
+type BrowserCheck = (grant: unknown, key: string, operation: Parameters<BrowserAuthorization>[2]) => string;
+type BrowserRead = (grant: unknown, key: string, options?: { after?: number; activityAfter?: number; limit?: number }) => BrowserPage;
+
+function sameBrowserSubmission(prior: MessageRecord, record: MessageRecord, packet: BrowserPacket) {
+  return prior.body === record.body && prior.sender_id === record.sender_id && prior.sender_name === record.sender_name
+    && prior.adapter_fields?.request_kind === packet.request_kind && prior.adapter_fields?.input_kind === packet.input_kind
+    && JSON.stringify(prior.adapter_fields?.attachment_ids ?? []) === JSON.stringify(packet.attachment_ids ?? []);
+}
+
 export function createBrowserBridge({ store, agent, account, authorize }: { store: Store; agent: string; account: string; authorize: BrowserAuthorization }) {
   if (typeof authorize !== 'function') refuse('BROWSER_AUTHORIZER_ABSENT', account, 'browser operations require a current server grant');
   function check(grant: unknown, key: string, operation: Parameters<BrowserAuthorization>[2]) {
@@ -43,9 +53,7 @@ export function createBrowserBridge({ store, agent, account, authorize }: { stor
       const { record, raw, cursor } = payload({ store, agent, account }, [packet]).entries[0];
       const prior = store.read(conversationId, record.message_id);
       if (prior) {
-        const same = prior.body === record.body && prior.sender_id === record.sender_id && prior.sender_name === record.sender_name
-          && prior.adapter_fields?.request_kind === packet.request_kind && prior.adapter_fields?.input_kind === packet.input_kind
-          && JSON.stringify(prior.adapter_fields?.attachment_ids ?? []) === JSON.stringify(packet.attachment_ids ?? []);
+        const same = sameBrowserSubmission(prior, record, packet);
         if (!same) refuse('BROWSER_SUBMISSION_CONFLICT', packet.submission_id, 'accepted identity was reused with changed body, actor or request kind');
         bindBrowserAttachments(store, { conversationId, actorId: packet.consultant.id, attachmentIds: packet.attachment_ids ?? [], messageId: prior.message_id });
         return { record: prior, duplicate: true };
@@ -68,38 +76,10 @@ export function createBrowserBridge({ store, agent, account, authorize }: { stor
       return result;
     },
     read,
-    watch(grant: unknown, key: string, options: { after?: number; activityAfter?: number; limit?: number; timeoutMs: number; signal?: AbortSignal }): Promise<BrowserPage> {
+    watch(grant: unknown, key: string, options: BrowserWatchOptions): Promise<BrowserPage> {
       const conversationId = check(grant, key, 'watch');
       if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 0 || options.timeoutMs > 30000) refuse('BROWSER_WAIT_INVALID', key, 'wait must be between zero and 30000 ms');
-      return new Promise((resolve, reject) => {
-        const watchers: fs.FSWatcher[] = [];
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        let settled = false;
-        const cleanup = () => { for (const watcher of watchers) watcher.close(); if (timer) clearTimeout(timer); options.signal?.removeEventListener('abort', abort); };
-        const finish = (force = false) => {
-          if (settled) return;
-          try {
-            check(grant, key, 'watch');
-            const page = read(grant, key, options);
-            if (!force && !page.records.length && page.activity_cursor <= (options.activityAfter ?? 0)) return;
-            settled = true; cleanup(); resolve(page);
-          } catch (error) { settled = true; cleanup(); reject(error); }
-        };
-        const abort = () => { if (settled) return; settled = true; cleanup(); reject(new RuntimeFault(fault('BROWSER_WAIT_ABORTED', key, 'consumer closed its event wait', 'open a new wait with the retained cursor'))); };
-        if (options.signal?.aborted) { abort(); return; }
-        options.signal?.addEventListener('abort', abort, { once: true });
-        // Install watchers before the second read to close read/watch races.
-        try {
-        for (const dir of [store.under('captures'), store.under('threads')]) {
-          watchers.push(fs.watch(dir, (_event, filename) => { if (filename && (String(filename) === encodeComponent(conversationId) || String(filename) === `${encodeComponent(conversationId)}.json`)) finish(); }));
-        }
-        const ticketDir = store.under('captures', encodeComponent(conversationId));
-        if (fs.existsSync(ticketDir)) watchers.push(fs.watch(ticketDir, () => finish()));
-        } catch (error) { settled = true; cleanup(); reject(error); return; }
-        const page = read(grant, key, options);
-        if (page.records.length > 0 || page.activity_cursor > (options.activityAfter ?? 0)) { finish(); return; }
-        timer = setTimeout(() => finish(true), options.timeoutMs);
-      });
+      return watchBrowserChanges(store, conversationId, grant, key, options, check, read);
     },
     operatorRead(grant: unknown, key: string) {
       const conversation_id = check(grant, key, 'operator');
@@ -108,4 +88,36 @@ export function createBrowserBridge({ store, agent, account, authorize }: { stor
         uncertain: records.filter((record) => record.adapter_fields?.model_effect === 'uncertain').map((record) => ({ message_id: record.message_id, release: record.release, evidence: record.adapter_fields?.model_effect_evidence })) };
     }
   };
+}
+
+function watchBrowserChanges(store: Store, conversationId: string, grant: unknown, key: string, options: BrowserWatchOptions, check: BrowserCheck, read: BrowserRead): Promise<BrowserPage> {
+  return new Promise((resolve, reject) => {
+    const watchers: fs.FSWatcher[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    const cleanup = () => { for (const watcher of watchers) watcher.close(); if (timer) clearTimeout(timer); options.signal?.removeEventListener('abort', abort); };
+    const finish = (force = false) => {
+      if (settled) return;
+      try {
+        check(grant, key, 'watch');
+        const page = read(grant, key, options);
+        if (!force && !page.records.length && page.activity_cursor <= (options.activityAfter ?? 0)) return;
+        settled = true; cleanup(); resolve(page);
+      } catch (error) { settled = true; cleanup(); reject(error); }
+    };
+    const abort = () => { if (settled) return; settled = true; cleanup(); reject(new RuntimeFault(fault('BROWSER_WAIT_ABORTED', key, 'consumer closed its event wait', 'open a new wait with the retained cursor'))); };
+    if (options.signal?.aborted) { abort(); return; }
+    options.signal?.addEventListener('abort', abort, { once: true });
+    // Install watchers before the second read to close read/watch races.
+    try {
+    for (const dir of [store.under('captures'), store.under('threads')]) {
+      watchers.push(fs.watch(dir, (_event, filename) => { if (filename && (String(filename) === encodeComponent(conversationId) || String(filename) === `${encodeComponent(conversationId)}.json`)) finish(); }));
+    }
+    const ticketDir = store.under('captures', encodeComponent(conversationId));
+    if (fs.existsSync(ticketDir)) watchers.push(fs.watch(ticketDir, () => finish()));
+    } catch (error) { settled = true; cleanup(); reject(error); return; }
+    const page = read(grant, key, options);
+    if (page.records.length > 0 || page.activity_cursor > (options.activityAfter ?? 0)) { finish(); return; }
+    timer = setTimeout(() => finish(true), options.timeoutMs);
+  });
 }

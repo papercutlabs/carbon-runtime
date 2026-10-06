@@ -30,16 +30,22 @@ export function browserMessageId(account: string, ticketKey: string, submissionI
   identifier(submissionId, 'submission_id');
   return `${browserConversationId(account, ticketKey)}:${submissionId}`;
 }
+function validateBrowserContent(packet: BrowserPacket) {
+  if (packet.input_kind === undefined && !['investigate', 'follow_up', 'copy_draft'].includes(packet.request_kind ?? '')) refuse('request_kind', 'unknown request kind');
+  if (packet.input_kind !== undefined && !['start', 'message'].includes(packet.input_kind)) refuse('input_kind', 'unknown input kind');
+  if (packet.input_kind !== undefined && packet.request_kind !== undefined) refuse('request_kind', 'ordinary chat must not carry a legacy request kind');
+  validateBrowserFileIds(packet);
+  if (typeof packet.body !== 'string' || (packet.body.trim().length === 0 && packet.input_kind !== 'start' && !(packet.attachment_ids?.length)) || Buffer.byteLength(packet.body) > 128 * 1024) refuse('body', 'message is empty or exceeds 128 KiB');
+}
+function validateBrowserFileIds(packet: BrowserPacket) {
+  if (packet.attachment_ids !== undefined && (!Array.isArray(packet.attachment_ids) || packet.attachment_ids.length > 100 || new Set(packet.attachment_ids).size !== packet.attachment_ids.length)) refuse('attachment_ids', 'attachment identities are malformed or duplicated');
+  for (const id of packet.attachment_ids ?? []) identifier(id, 'attachment_ids');
+}
 export function browserPacket(packet: BrowserPacket): BrowserPacket {
   browserMessageId(packet.account, packet.ticket_key, packet.submission_id);
   identifier(packet.consultant?.id, 'consultant.id');
   if (typeof packet.consultant?.name !== 'string' || packet.consultant.name.length === 0 || packet.consultant.name.length > 256) refuse('consultant.name', 'authenticated display name is absent or too long');
-  if (packet.input_kind === undefined && !['investigate', 'follow_up', 'copy_draft'].includes(packet.request_kind ?? '')) refuse('request_kind', 'unknown request kind');
-  if (packet.input_kind !== undefined && !['start', 'message'].includes(packet.input_kind)) refuse('input_kind', 'unknown input kind');
-  if (packet.input_kind !== undefined && packet.request_kind !== undefined) refuse('request_kind', 'ordinary chat must not carry a legacy request kind');
-  if (packet.attachment_ids !== undefined && (!Array.isArray(packet.attachment_ids) || packet.attachment_ids.length > 100 || new Set(packet.attachment_ids).size !== packet.attachment_ids.length)) refuse('attachment_ids', 'attachment identities are malformed or duplicated');
-  for (const id of packet.attachment_ids ?? []) identifier(id, 'attachment_ids');
-  if (typeof packet.body !== 'string' || (packet.body.trim().length === 0 && packet.input_kind !== 'start' && !(packet.attachment_ids?.length)) || Buffer.byteLength(packet.body) > 128 * 1024) refuse('body', 'message is empty or exceeds 128 KiB');
+  validateBrowserContent(packet);
   if (typeof packet.accepted_at !== 'string' || !Number.isFinite(Date.parse(packet.accepted_at))) refuse('accepted_at', 'server acceptance time is invalid');
   if (typeof packet.position !== 'string' || !/^[0-9]{20}$/.test(packet.position)) refuse('position', 'server cursor must be a twenty-digit ordinal');
   // Copy only declared fields; callers cannot smuggle overrides or credentials.

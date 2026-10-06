@@ -121,6 +121,62 @@ function insideWork(root: string, resolved: string) {
   return resolved === root || resolved.startsWith(prefix);
 }
 
+function validateBrowserOutputPath(given: string, work: unknown) {
+  validateBrowserFilename(path.basename(given));
+  if (given.split(path.sep).includes('..')) throw new StreamFault([fault('ATTACHMENT_TRAVERSAL_REFUSED', given,
+    'browser output paths may not contain traversal components', 'pass a direct path within the active ticket output directory')]);
+  assertNoSymlinks(path.resolve(work as string), given);
+}
+function readBrowserOutputBytes(resolved: string, given: string, work: unknown, stat: fs.Stats) {
+  const fd = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const opened = fs.fstatSync(fd);
+    assertNoSymlinks(path.resolve(work as string), given);
+    if (opened.dev !== stat.dev || opened.ino !== stat.ino || !opened.isFile() || fs.realpathSync(given) !== resolved)
+      throw new StreamFault([fault('ATTACHMENT_CHANGED_DURING_READ', given, 'browser output changed identity during file acceptance', 'finish writing the output before replying')]);
+    return fs.readFileSync(fd);
+  } finally { fs.closeSync(fd); }
+}
+
+function resolveOutputFile(given: string, root: string) {
+  let resolved;
+  try {
+    resolved = fs.realpathSync(given);
+  } catch {
+    throw new StreamFault([fault('ATTACHMENT_MISSING', given,
+      'no file exists at this path',
+      'write the file first, then pass its absolute path')]);
+  }
+  if (!insideWork(root, resolved)) {
+    throw new StreamFault([fault('ATTACHMENT_OUTSIDE_WORK', given,
+      'a reply attachment must resolve inside the turn workspace',
+      'pass a file this turn created under the work directory')]);
+  }
+  let stat;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    throw new StreamFault([fault('ATTACHMENT_MISSING', given,
+      'no file exists at this path',
+      'write the file first, then pass its absolute path')]);
+  }
+  if (!stat.isFile()) {
+    throw new StreamFault([fault('ATTACHMENT_NOT_A_FILE', given,
+      'this path is not a file',
+      'pass the absolute path of a file this turn created')]);
+  }
+  return { resolved, stat };
+}
+
+function readAttachmentFile(given: string, root: string, work: unknown, browser: boolean) {
+  if (browser) validateBrowserOutputPath(given, work);
+  const { resolved, stat } = resolveOutputFile(given, root);
+  const bytes = browser ? readBrowserOutputBytes(resolved, given, work, stat) : fs.readFileSync(resolved);
+  const mime = bytes.slice(0, 5).toString() === '%PDF-' || resolved.toLowerCase().endsWith('.pdf')
+    ? 'application/pdf' : 'application/octet-stream';
+  return { bytes, mime, filename: path.basename(resolved) };
+}
+
 function readAttachments(paths: unknown[] | null | undefined, work: unknown, browser = false) {
   const list = paths ?? [];
   if (!Array.isArray(list) || list.length > 100) throw new StreamFault([fault('ATTACHMENTS_INVALID', 'attachments',
@@ -136,64 +192,8 @@ function readAttachments(paths: unknown[] | null | undefined, work: unknown, bro
         'pass the absolute path of a file this turn created'));
       continue;
     }
-    if (browser) {
-      try { validateBrowserFilename(path.basename(given)); }
-      catch (error) { if (error instanceof StreamFault) { faults.push(...error.faults); continue; } throw error; }
-      if (given.split(path.sep).includes('..')) {
-        faults.push(fault('ATTACHMENT_TRAVERSAL_REFUSED', given, 'browser output paths may not contain traversal components', 'pass a direct path within the active ticket output directory'));
-        continue;
-      }
-      try { assertNoSymlinks(path.resolve(work as string), given); }
-      catch (error) { if (error instanceof StreamFault) { faults.push(...error.faults); continue; } throw error; }
-    }
-    let resolved;
-    try {
-      resolved = fs.realpathSync(given);
-    } catch {
-      faults.push(fault('ATTACHMENT_MISSING', given,
-        'no file exists at this path',
-        'write the file first, then pass its absolute path'));
-      continue;
-    }
-    if (!insideWork(root, resolved)) {
-      faults.push(fault('ATTACHMENT_OUTSIDE_WORK', given,
-        'a reply attachment must resolve inside the turn workspace',
-        'pass a file this turn created under the work directory'));
-      continue;
-    }
-    let stat;
-    try {
-      stat = fs.statSync(resolved);
-    } catch {
-      faults.push(fault('ATTACHMENT_MISSING', given,
-        'no file exists at this path',
-        'write the file first, then pass its absolute path'));
-      continue;
-    }
-    if (!stat.isFile()) {
-      faults.push(fault('ATTACHMENT_NOT_A_FILE', given,
-        'this path is not a file',
-        'pass the absolute path of a file this turn created'));
-      continue;
-    }
-    let bytes: Buffer;
-    if (browser) {
-      const fd = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-      try {
-        const opened = fs.fstatSync(fd);
-        assertNoSymlinks(path.resolve(work as string), given);
-        if (opened.dev !== stat.dev || opened.ino !== stat.ino || !opened.isFile()
-          || fs.realpathSync(given) !== resolved) {
-          faults.push(fault('ATTACHMENT_CHANGED_DURING_READ', given, 'browser output changed identity during file acceptance', 'finish writing the output before replying'));
-          continue;
-        }
-        bytes = fs.readFileSync(fd);
-      } finally { fs.closeSync(fd); }
-    } else bytes = fs.readFileSync(resolved);
-    const mime = bytes.slice(0, 5).toString() === '%PDF-' || resolved.toLowerCase().endsWith('.pdf')
-      ? 'application/pdf'
-      : 'application/octet-stream';
-    ready.push({ bytes, mime, filename: path.basename(resolved) });
+    try { ready.push(readAttachmentFile(given, root, work, browser)); }
+    catch (error) { if (error instanceof StreamFault) { faults.push(...error.faults); continue; } throw error; }
   }
   if (faults.length > 0) throw new StreamFault(faults);
   return ready;
@@ -313,6 +313,20 @@ export function teachCheckConversation(declaration: Declaration | null | undefin
 // The declaration is what says whether this reply is held. Without one — which is
 // every caller that is not the runtime — nothing is held and the reply is written
 // as it always was.
+function validateBrowserReplyRecord(store: Store, record: MessageRecord, args: Record<string, unknown>, validateBrowserReply?: BrowserReplyValidator) {
+  const source = store.recordsIn(record.conversation_id).filter((one) => one.direction === 'inbound' && one.release?.turn_id === args.request_id).at(-1)!;
+  const failures = browserReplyFaults(validateBrowserReply, { conversationId: record.conversation_id,
+    releaseId: args.request_id as string, submissionId: source.platform_message_id,
+    ticketKey: source.adapter_fields!.ticket_key as string,
+    ...(source.adapter_fields!.request_kind ? { requestKind: source.adapter_fields!.request_kind as BrowserPacket['request_kind'] } : {}),
+    text: record.body, metadata: record.adapter_fields?.response_metadata as Record<string, unknown> | undefined, attachments: record.attachments as Attachment[] });
+  if (failures.length) {
+    store.capture({ ...record, disposition: 'parked', delivery: { ...record.delivery!, status: 'failed' },
+      adapter_fields: { ...record.adapter_fields, reply_validation_faults: failures } });
+    throw new StreamFault(failures);
+  }
+}
+
 function replyWriter({ store, agent, declaration = null, work = null, validateBrowserReply, now = () => new Date() }: ReplyOptions & { now?: () => Date }) {
   const heldIn = teachCheckConversation(declaration);
   // createServer calls this with parseArguments leftovers (Record<string, unknown>)
@@ -335,19 +349,7 @@ function replyWriter({ store, agent, declaration = null, work = null, validateBr
       now: now()
     });
     const existing = store.readRequest(args.request_id as string);
-    if (incoming?.source === 'browser' && (!existing || existing.status === 'failed')) {
-      const source = store.recordsIn(record.conversation_id).filter((one) => one.direction === 'inbound' && one.release?.turn_id === args.request_id).at(-1)!;
-      const failures = browserReplyFaults(validateBrowserReply, { conversationId: record.conversation_id,
-        releaseId: args.request_id as string, submissionId: source.platform_message_id,
-        ticketKey: source.adapter_fields!.ticket_key as string,
-        ...(source.adapter_fields!.request_kind ? { requestKind: source.adapter_fields!.request_kind as BrowserPacket['request_kind'] } : {}),
-        text: record.body, metadata: record.adapter_fields?.response_metadata as Record<string, unknown> | undefined, attachments: record.attachments as Attachment[] });
-      if (failures.length) {
-        store.capture({ ...record, disposition: 'parked', delivery: { ...record.delivery!, status: 'failed' },
-          adapter_fields: { ...record.adapter_fields, reply_validation_faults: failures } });
-        throw new StreamFault(failures);
-      }
-    }
+    if (incoming?.source === 'browser' && (!existing || existing.status === 'failed')) validateBrowserReplyRecord(store, record, args, validateBrowserReply);
     if (actionClaim) record.delivery!.action_claim = actionClaim;
     const held = heldIn !== null && args.conversation_id === heldIn;
     const written = store.reply(record, { status: held ? 'pending-teach-check' : 'pending' });

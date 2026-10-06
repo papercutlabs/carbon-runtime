@@ -26,17 +26,23 @@ function metadata(file: Attachment & { attachment_id: string }): BrowserAttachme
   return { attachment_id: file.attachment_id, filename: file.filename ?? 'attachment', mime: file.mime, bytes: file.bytes, sha256: file.sha256,
     actor_id: staged.actor?.id ?? null, bound_message_id: staged.bound_message_id ?? null, kind: staged.actor ? 'input' : 'artifact' };
 }
-export function stageBrowserAttachment(store: Store, input: { conversationId: string; actor: { id: string; name: string };
-  uploadId: string; filename: string; mime: string; bytes: Uint8Array; maxBytes: number }): BrowserAttachmentMetadata & { duplicate: boolean } {
-  const { conversationId, actor, uploadId, filename, mime, bytes, maxBytes } = input;
-  const faults = [...componentFaults('conversation_id', conversationId), ...componentFaults('upload_id', uploadId)];
-  if (faults.length) throw new StreamFault(faults);
-  validateBrowserFilename(filename);
+type StageInput = { conversationId: string; actor: { id: string; name: string }; uploadId: string; filename: string; mime: string; bytes: Uint8Array; maxBytes: number };
+function validateStagingActor(actor: StageInput['actor']) {
   if (!actor || typeof actor.id !== 'string' || !actor.id.length || actor.id.length > 1024 || typeof actor.name !== 'string'
     || !actor.name.length || actor.name.length > 1024) refuse('BROWSER_FILE_ACTOR_INVALID', 'actor', 'a staged file needs its authenticated sender');
+}
+function validateStagingFields({ actor, mime, bytes, maxBytes }: StageInput) {
+  validateStagingActor(actor);
   if (typeof mime !== 'string' || !mime.length || mime.length > 255 || /[\x00-\x20\x7f]/.test(mime)) refuse('BROWSER_FILE_MIME_INVALID', 'mime', 'a file media type must be a bounded string without whitespace or controls');
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || !(bytes instanceof Uint8Array) || bytes.length > maxBytes)
     refuse('BROWSER_FILE_SIZE_REFUSED', 'bytes', 'file bytes exceed the declared positive deployment limit or are malformed');
+}
+export function stageBrowserAttachment(store: Store, input: StageInput): BrowserAttachmentMetadata & { duplicate: boolean } {
+  const { conversationId, actor, uploadId, filename, mime, bytes } = input;
+  const faults = [...componentFaults('conversation_id', conversationId), ...componentFaults('upload_id', uploadId)];
+  if (faults.length) throw new StreamFault(faults);
+  validateBrowserFilename(filename);
+  validateStagingFields(input);
   const attachment_id = `file-${digest(JSON.stringify([conversationId, uploadId]))}`;
   const files = fileMap(store, conversationId);
   const previous = files[attachment_id];
@@ -65,6 +71,9 @@ function readBytes(store: Store, attachment: Attachment): Uint8Array {
     refuse('BROWSER_FILE_INTEGRITY_FAILED', attachment.sha256, 'stored attachment bytes do not match their retained size and digest');
   return bytes;
 }
+function acceptedBrowserOutput(record: { source: string; direction: string; delivery?: { status: string }; disposition: string }) {
+  return record.source === 'browser' && record.direction === 'outbound' && record.delivery?.status !== 'failed' && record.disposition !== 'parked';
+}
 function attachmentIn(store: Store, conversationId: string, attachmentId: string): Attachment & { attachment_id: string; bound_message_id?: string | null } {
   const faults = [...componentFaults('conversation_id', conversationId), ...componentFaults('attachment_id', attachmentId)];
   if (faults.length) throw new StreamFault(faults);
@@ -81,7 +90,7 @@ function attachmentIn(store: Store, conversationId: string, attachmentId: string
     return staged;
   }
   for (const record of store.recordsIn(conversationId)) {
-    if (record.source !== 'browser' || record.direction !== 'outbound' || record.delivery?.status === 'failed' || record.disposition === 'parked') continue;
+    if (!acceptedBrowserOutput(record)) continue;
     const found = record.attachments.find((one) => one && typeof one === 'object' && (one as { attachment_id?: unknown }).attachment_id === attachmentId);
     if (found) return { ...found as Attachment & { attachment_id: string }, bound_message_id: record.message_id };
   }
@@ -117,6 +126,10 @@ export function resolveBrowserAttachments(store: Store, { conversationId, actorI
     return { file: file.file, mime: file.mime, bytes: file.bytes, sha256: file.sha256, filename: file.filename, attachment_id: file.attachment_id };
   });
 }
+function capturedFileReferences(record: ReturnType<Store['read']>, actorId: string, attachmentIds: string[]) {
+  return record !== null && record.direction === 'inbound' && record.sender_id === actorId
+    && attachmentIds.every((id) => record.attachments.some((file) => (file as Attachment).attachment_id === id));
+}
 export function bindBrowserAttachments(store: Store, { conversationId, actorId, attachmentIds, messageId }: { conversationId: string; actorId: string; attachmentIds: string[]; messageId: string }) {
   if (Array.isArray(attachmentIds) && attachmentIds.length === 0) return;
   if (!Array.isArray(attachmentIds) || attachmentIds.length > 100 || new Set(attachmentIds).size !== attachmentIds.length)
@@ -125,7 +138,7 @@ export function bindBrowserAttachments(store: Store, { conversationId, actorId, 
   for (const id of attachmentIds) if (!files[id] || files[id].actor.id !== actorId)
     refuse('BROWSER_FILE_ACTOR_REFUSED', id, 'a file binding must match its retained sender');
   const record = store.read(conversationId, messageId);
-  if (!record || record.direction !== 'inbound' || record.sender_id !== actorId || !attachmentIds.every((id) => record.attachments.some((file) => (file as Attachment).attachment_id === id)))
+  if (!capturedFileReferences(record, actorId, attachmentIds))
     refuse('BROWSER_FILE_BINDING_REFUSED', messageId, 'files bind only after their sender\'s input and exact attachment references are durably captured');
   if (attachmentIds.every((id) => files[id].bound_message_id)) return;
   for (const id of attachmentIds) files[id] = { ...files[id], bound_message_id: files[id].bound_message_id ?? messageId };

@@ -18,8 +18,8 @@ type RunOptions<S extends Session> = { declaration: Declaration; declarationPath
 // It has no daemon of its own beyond that, no database, no orchestration, and no
 // reload path: a change to what the agent does is a commit and an install.
 
-import { placeGuidance } from './guidance.ts';
-export { placeGuidance, GUIDANCE_NAMES } from './guidance.ts';
+import { placeGuidance, GUIDANCE_NAMES } from './guidance.ts';
+export { placeGuidance, GUIDANCE_NAMES };
 import fs from 'node:fs';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';

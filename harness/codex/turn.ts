@@ -273,26 +273,31 @@ export async function steer(session: Session, { threadId, expectedTurnId, input,
 // A validation rejection and exact terminal turn evidence together settle the
 // ended-turn race. Transport loss, generic server errors, missing reads and prose
 // never establish that the accepted input was not delivered.
+function nativeRpcCode(error: unknown) {
+  if (!(error instanceof RpcError) || error.rpcError === null || typeof error.rpcError !== 'object' || !('code' in error.rpcError)) return null;
+  return typeof error.rpcError.code === 'number' ? error.rpcError.code : null;
+}
+function terminalTurnStatus(value: unknown, expectedTurnId: string) {
+  if (value === null || typeof value !== 'object' || !('id' in value) || value.id !== expectedTurnId || !('status' in value)) return null;
+  return typeof value.status === 'string' && ['completed', 'interrupted', 'failed'].includes(value.status) ? value.status : null;
+}
+function readThreadTurns(threadRead: unknown, threadId: string) {
+  const thread = threadRead !== null && typeof threadRead === 'object' && 'thread' in threadRead ? threadRead.thread : null;
+  return thread !== null && typeof thread === 'object' && 'id' in thread && thread.id === threadId && 'turns' in thread && Array.isArray(thread.turns) ? thread.turns : [];
+}
 export function classifySteerFailure(error: unknown, { threadId, expectedTurnId, threadRead, events = [] }: {
   threadId: string; expectedTurnId: string; threadRead?: unknown; events?: HarnessEvent[];
 }) {
-  const rejection = error instanceof RpcError && error.method === 'turn/steer'
-    && error.rpcError !== null && typeof error.rpcError === 'object'
-    && 'code' in error.rpcError && error.rpcError.code === -32600;
-  const terminal = new Set(['completed', 'interrupted', 'failed']);
+  const rpc = nativeRpcCode(error);
+  const rejection = error instanceof RpcError && error.method === 'turn/steer' && rpc === -32600;
   let status: string | null = null;
   for (const event of events) {
-    const turn = event.params?.turn;
-    if (event.kind === 'turn.completed' && event.threadId === threadId && event.turnId === expectedTurnId
-      && turn?.id === expectedTurnId && typeof turn.status === 'string' && terminal.has(turn.status)) status = turn.status;
+    if (event.kind === 'turn.completed' && event.threadId === threadId && event.turnId === expectedTurnId)
+      status = terminalTurnStatus(event.params?.turn, expectedTurnId) ?? status;
   }
-  const thread = threadRead !== null && typeof threadRead === 'object' && 'thread' in threadRead ? threadRead.thread : null;
-  if (thread !== null && typeof thread === 'object' && 'id' in thread && thread.id === threadId && 'turns' in thread && Array.isArray(thread.turns)) {
-    const turn = thread.turns.find((value: unknown) => value !== null && typeof value === 'object'
-      && 'id' in value && value.id === expectedTurnId && 'status' in value && typeof value.status === 'string' && terminal.has(value.status));
-    if (turn) status = turn.status;
-  }
-  const rpc = error instanceof RpcError && error.rpcError !== null && typeof error.rpcError === 'object' && 'code' in error.rpcError ? error.rpcError.code : null;
+  const turn = readThreadTurns(threadRead, threadId).find((value: unknown) => terminalTurnStatus(value, expectedTurnId) !== null);
+  status = terminalTurnStatus(turn, expectedTurnId) ?? status;
+
   return { delivery: rejection && status !== null ? 'definitely_not_delivered' as const : 'uncertain' as const,
     expected_turn_status: status, rpc_code: typeof rpc === 'number' ? rpc : null };
 }

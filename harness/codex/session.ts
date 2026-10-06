@@ -167,6 +167,59 @@ async function openPrivateSocket(child: ChildProcessWithoutNullStreams, endpoint
     'read the retained native stderr and correct the selected endpoint or binary'));
 }
 
+async function privateTransport(child: ChildProcessWithoutNullStreams, endpoint: string, attach: NonNullable<ConnectOptions['attachPrivateEndpoint']>, binary: string, codexHome: string, startupExit: Promise<void>) {
+  let socket: WebSocket | null = null;
+  let attachment: PrivateEndpointAttachment | null = null;
+  let input = child.stdout;
+  let output = child.stdin;
+  try {
+    socket = await openPrivateSocket(child, endpoint);
+    attachment = await attach({ endpoint, pid: child.pid!, binary, codexHome });
+    if (!attachment || typeof attachment.close !== 'function') throw new Error('the private endpoint owner supplied no close hook');
+    const incoming = new PassThrough();
+    const openedSocket = socket;
+    input = incoming;
+    output = new Writable({ write(chunk, _encoding, callback) {
+      try { openedSocket.send(String(chunk).trimEnd()); callback(); } catch (error) { callback(error as Error); }
+    } });
+    socket.addEventListener('message', (message) => {
+      if (typeof message.data === 'string') incoming.write(message.data + '\n');
+    });
+    socket.addEventListener('close', () => { incoming.destroy(); child.kill('SIGTERM'); });
+    output.on('error', () => { incoming.destroy(); child.kill('SIGTERM'); });
+  } catch (error) {
+    socket?.close();
+    child.kill('SIGTERM');
+    await startupExit;
+    await attachment?.close();
+    throw error;
+  }
+  return { socket, attachment, input, output };
+}
+
+function attachPrivateLifecycle(session: Session, socket: WebSocket, attachment: PrivateEndpointAttachment) {
+  const connectedSocket = socket;
+  const owner = attachment;
+  let release: Promise<void> | null = null;
+  session.privateClose = () => {
+    if (!release) release = Promise.resolve().then(async () => { connectedSocket.close(); await owner.close(); });
+    return release;
+  };
+  session.exit.then(() => { void session.privateClose!().catch(error => { session.transportFailure = error; }); });
+  owner.failed?.then(reason => {
+    session.transportFailure = reason;
+    void session.stop().catch(error => { session.transportFailure = error; });
+  }, reason => {
+    session.transportFailure = reason;
+    void session.stop().catch(error => { session.transportFailure = error; });
+  });
+}
+
+function redactionValues(credentialValues: string[], providerKey: string | undefined, extraEnv?: Record<string, string>) {
+  return [...credentialValues, ...(providerKey ? [providerKey] : []),
+    ...Object.entries(extraEnv ?? {}).filter(([name]) => /TOKEN|SECRET|KEY|CREDENTIAL|PASSWORD|CANARY/.test(name)).map(([, value]) => value)];
+}
+
 // Spawns the app-server and completes the handshake. Does not open a thread; that
 // is `openThread` or `resumeThread`, so a caller that only wants tool status pays
 // for nothing more.
@@ -211,39 +264,13 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
     if (onStderr) onStderr(chunk);
   });
 
-  let socket: WebSocket | null = null;
-  let attachment: PrivateEndpointAttachment | null = null;
-  let input = child.stdout;
-  let output = child.stdin;
-  if (endpoint) {
-    try {
-      socket = await openPrivateSocket(child, endpoint);
-      attachment = await attachPrivateEndpoint!({ endpoint, pid: child.pid!, binary, codexHome });
-      if (!attachment || typeof attachment.close !== 'function') throw new Error('the private endpoint owner supplied no close hook');
-      const incoming = new PassThrough();
-      const openedSocket = socket;
-      input = incoming;
-      output = new Writable({ write(chunk, _encoding, callback) {
-        try { openedSocket.send(String(chunk).trimEnd()); callback(); } catch (error) { callback(error as Error); }
-      } });
-      socket.addEventListener('message', (message) => {
-        if (typeof message.data === 'string') incoming.write(message.data + '\n');
-      });
-      socket.addEventListener('close', () => { incoming.destroy(); child.kill('SIGTERM'); });
-      output.on('error', () => { incoming.destroy(); child.kill('SIGTERM'); });
-    } catch (error) {
-      socket?.close();
-      child.kill('SIGTERM');
-      await startupExit;
-      await attachment?.close();
-      throw error;
-    }
-  }
+  const transport = endpoint ? await privateTransport(child, endpoint, attachPrivateEndpoint!, binary, codexHome, startupExit)
+    : { input: child.stdout, output: child.stdin, socket: null, attachment: null };
 
   const stream = new EventStream(onEvent);
   const connection = new Connection({
-    input,
-    output,
+    input: transport.input,
+    output: transport.output,
     // The stream keeps raw optional notification fields; it does not treat this wire value as validated.
     onNotification: (method, params) => stream.accept(method, params as NotificationParams),
     onUnparsable: (line) => { if (onDropped) onDropped(line); },
@@ -252,25 +279,8 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
 
   const session = new Session({ child, connection, stream, binary, codexHome, stderr });
   session.experimentalApi = experimentalApi;
-  if (socket && attachment) {
-    const connectedSocket = socket;
-    const owner = attachment;
-    let release: Promise<void> | null = null;
-    session.privateClose = () => {
-      if (!release) release = Promise.resolve().then(async () => { connectedSocket.close(); await owner.close(); });
-      return release;
-    };
-    session.exit.then(() => { void session.privateClose!().catch(error => { session.transportFailure = error; }); });
-    owner.failed?.then(reason => {
-      session.transportFailure = reason;
-      void session.stop().catch(error => { session.transportFailure = error; });
-    }, reason => {
-      session.transportFailure = reason;
-      void session.stop().catch(error => { session.transportFailure = error; });
-    });
-  }
-  session.credentialValues = [...credentialValues, ...(providerKey ? [providerKey] : []),
-    ...Object.entries(extraEnv ?? {}).filter(([name]) => /TOKEN|SECRET|KEY|CREDENTIAL|PASSWORD|CANARY/.test(name)).map(([, value]) => value)];
+  if (transport.socket && transport.attachment) attachPrivateLifecycle(session, transport.socket, transport.attachment);
+  session.credentialValues = redactionValues(credentialValues, providerKey, extraEnv);
   try {
     session.initializeResult = await connection.request('initialize', { clientInfo: CLIENT_INFO,
       ...(experimentalApi ? { capabilities: { experimentalApi: true } } : {}) });
@@ -300,6 +310,10 @@ function confirmPermissionProfile(reply: ThreadReply, permissions?: string) {
     'stop before a turn; qualify the selected binary and CODEX_HOME profile configuration'));
 }
 
+function configurationWithEffort(config?: Record<string, unknown>, effort?: string) {
+  return config || effort ? { ...config, ...(effort ? { model_reasoning_effort: effort } : {}) } : undefined;
+}
+
 export async function openThread(session: Session, { cwd, model, effort, sandbox, permissions, unitId, config, developerInstructions }: ThreadOpening) {
   permissionSelection(session, permissions, sandbox);
   const params: { cwd: string; model?: string; sandbox?: string; permissions?: string; approvalPolicy: string; ephemeral: boolean; config?: Record<string, unknown>; developerInstructions?: string } = {
@@ -311,7 +325,8 @@ export async function openThread(session: Session, { cwd, model, effort, sandbox
   if (sandbox) params.sandbox = sandbox;
   if (permissions) params.permissions = permissions;
   if (developerInstructions !== undefined) params.developerInstructions = developerInstructions;
-  if (config || effort) params.config = { ...config, ...(effort ? { model_reasoning_effort: effort } : {}) };
+  const configuration = configurationWithEffort(config, effort);
+  if (configuration) params.config = configuration;
   // Optional wire fields are inspected below; missing or mismatched values still fault.
   const started = await session.request('thread/start', params) as ThreadReply;
   session.thread = started;
@@ -358,7 +373,8 @@ export async function resumeThread(session: Session, { threadId, cwd, model, eff
   if (sandbox) params.sandbox = sandbox;
   if (permissions) params.permissions = permissions;
   if (developerInstructions !== undefined) params.developerInstructions = developerInstructions;
-  if (config || effort) params.config = { ...config, ...(effort ? { model_reasoning_effort: effort } : {}) };
+  const configuration = configurationWithEffort(config, effort);
+  if (configuration) params.config = configuration;
   // The returned record remains wire data; callers receive it whole after the existing id fallback.
   const resumed = await session.request('thread/resume', params) as ThreadReply;
   confirmPermissionProfile(resumed, permissions);
