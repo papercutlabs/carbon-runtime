@@ -101,6 +101,7 @@ test('structural commentary alone persists activity without final reply/fence or
     return { thread_id: params.threadId, status: 'completed', turn_id: 'native-one', client_user_message_id: params.clientUserMessageId, completed_at: new Date().toISOString(), error: null, items: [], agent_message: null, token_usage: null, events: [] }; 
   };
   await loop.pass([]);
+  assert.equal(store.readThread(conversation)!.browser_work_updates, undefined);
   const reopened = createBrowserBridge({ store: Store.open(store.dir), agent: 'synthetic-agent', account: 'synthetic', authorize: () => true }).read('fixture', key);
   assert.equal(reopened.activity!.state, 'completed'); assert.equal(reopened.activity!.update!.text, 'Checking the two cutoff values.');
   const text = JSON.stringify(reopened.activity); assert.ok(!text.includes('private thought')); assert.ok(!text.includes('secret unknown phase')); assert.ok(!text.includes('not progress'));
@@ -166,4 +167,62 @@ test('restart after durable steering intent holds the exact input and visibly pr
   const read = store.read(conversation, pending.record.message_id)!;
   assert.equal(read.body, 'retained exact input');assert.equal((read.adapter_fields!.browser_delivery as {phase:string}).phase, 'uncertain');
   assert.equal(readBrowserActivity(store, conversation).activity!.state, 'uncertain');
+});
+
+test('written reply cuts off definitely undispatched input into the next same-conversation ending', async (t) => {
+  const { store, submit, harness, writer, loop, conversation } = setup(t);
+  submit('start', '', 'mira', 'start'); submit('late', 'distinct late observation');
+  let steers = 0;
+  (harness as typeof harness & { steer: () => Promise<{turnId:string}> }).steer = async () => { steers++; return { turnId: 'native-one' }; };
+  harness.turn = async (_s, params) => {
+    harness.session.turns.push(params); const first = harness.session.turns.length === 1;
+    params.onStarted!({ threadId: params.threadId, turnId: first ? 'native-one' : 'native-two' });
+    writer({ conversation_id: conversation, request_id: store.activeBrowserReply!.release_id, text: first ? 'ending before late input dispatch' : 'ending for distinct late observation' });
+    await loop.browserDelivery;
+    if (first) {
+      const late = store.recordsIn(conversation).find((r) => r.platform_message_id === 'late')!;
+      assert.equal(late.release, undefined);
+      assert.equal((late.adapter_fields!.browser_delivery as {phase:string}).phase, 'next_turn');
+    }
+    return { thread_id: params.threadId, status: 'completed', turn_id: first ? 'native-one' : 'native-two', client_user_message_id: params.clientUserMessageId, completed_at: new Date().toISOString(), error: null, items: [], agent_message: null, token_usage: null, events: [] };
+  };
+  await loop.pass([]);
+  assert.equal(steers, 0); assert.equal(harness.session.turns.length, 2);
+  const rows = store.recordsIn(conversation), answers = rows.filter((r) => r.direction === 'outbound');
+  assert.equal(answers.length, 2);
+  const first = answers.find((r) => (r.adapter_fields!.submission_ids as string[]).includes('start'))!;
+  const next = answers.find((r) => (r.adapter_fields!.submission_ids as string[]).includes('late'))!;
+  assert.deepEqual(first.adapter_fields!.submission_ids, ['start']); assert.deepEqual(next.adapter_fields!.submission_ids, ['late']);
+  const late = rows.find((r) => r.platform_message_id === 'late')!;
+  assert.ok(late.release!.completed_at);
+  assert.equal((late.adapter_fields!.browser_delivery as {response_id:string}).response_id, next.message_id);
+});
+
+test('steer acknowledgement after reply cutoff preserves excluded input uncertainty without replay', async (t) => {
+  const { store, submit, harness, writer, loop, conversation } = setup(t);
+  submit('start', '', 'mira', 'start');
+  let steers = 0;
+  (harness as typeof harness & { steer: (_s: unknown, p: {expectedTurnId:string}) => Promise<{turnId:string}> }).steer = async (_s, p) => {
+    steers++;
+    writer({ conversation_id: conversation, request_id: store.activeBrowserReply!.release_id, text: 'ending already accepted while steer acknowledgement is pending' });
+    return { turnId: p.expectedTurnId };
+  };
+  harness.turn = async (_s, params) => {
+    harness.session.turns.push(params); params.onStarted!({ threadId: params.threadId, turnId: 'native-one' });
+    submit('in-flight', 'distinct accepted in-flight observation'); await loop.browserDelivery;
+    return { thread_id: params.threadId, status: 'completed', turn_id: 'native-one', client_user_message_id: params.clientUserMessageId, completed_at: new Date().toISOString(), error: null, items: [], agent_message: null, token_usage: null, events: [] };
+  };
+  await loop.pass([]);
+  const rows = store.recordsIn(conversation), answer = rows.find((r) => r.direction === 'outbound')!;
+  assert.deepEqual(answer.adapter_fields!.submission_ids, ['start']);
+  const late = rows.find((r) => r.platform_message_id === 'in-flight')!;
+  assert.equal(late.release!.completed_at, undefined);
+  const delivery = late.adapter_fields!.browser_delivery as {phase:string;response_id:unknown;acknowledgement:{turnId:string};excluded_response_id:string};
+  assert.equal(delivery.phase, 'uncertain'); assert.equal(delivery.response_id, null);
+  assert.equal(delivery.excluded_response_id, answer.message_id); assert.equal(delivery.acknowledgement.turnId, 'native-one');
+  assert.equal(readBrowserActivity(store, conversation).activity!.state, 'uncertain');
+  assert.equal((readBrowserActivity(store, conversation).activity!.reason as {code:string}).code, 'BROWSER_REPLY_INPUT_NOT_INCLUDED');
+  loop.recovering = loop.recover(); submit('later', 'do not replay possibly consumed input'); await loop.pass([]);
+  assert.equal(harness.session.turns.length, 1); assert.equal(steers, 1);
+  assert.equal(store.read(conversation, late.message_id)!.release!.completed_at, undefined);
 });

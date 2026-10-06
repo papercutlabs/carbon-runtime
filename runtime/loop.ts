@@ -652,6 +652,20 @@ export class ReleaseLoop<S = Session> {
     });
   }
 
+  writtenBrowserReply(releaseId: string) {
+    const fence = this.store.readRequest(releaseId);
+    return fence ? this.store.read(fence.conversation_id, fence.message_id, fence.revision) : null;
+  }
+
+  retainExcludedBrowserInput(record: MessageRecord, reply: MessageRecord) {
+    const reason = fault('BROWSER_REPLY_INPUT_NOT_INCLUDED', record.platform_message_id,
+      'native input delivery overlaps a written reply whose accepted submission membership excludes this input',
+      'inspect the native/input receipts before deciding whether a continuation is due; do not replay blindly');
+    this.store.annotate(record, { model_effect: 'uncertain', browser_delivery: { ...record.adapter_fields?.browser_delivery as object,
+      phase: 'uncertain', response_id: null, excluded_response_id: reply.message_id, reason } });
+    return reason;
+  }
+
   async deliverBrowserInputs() {
     const active = this.browserActive;
     if (!active?.turnId || active.ended) return;
@@ -674,8 +688,8 @@ export class ReleaseLoop<S = Session> {
         + JSON.stringify({ submission_id: record.platform_message_id, sender: { id: record.sender_id, name: record.sender_name }, text: record.body,
           evidence_files: files, workspace: { evidence: active.workspace.evidence, analysis: active.workspace.analysis, output: active.workspace.output } });
       try {
-        if (active.ended) {
-          this.store.annotate(record, { browser_delivery: { ...attempt, phase: 'next_turn', reason: 'native completion observed before steering dispatch' } });
+        if (active.ended || this.writtenBrowserReply(active.releaseId)) {
+          this.store.annotate(record, { browser_delivery: { ...attempt, phase: 'next_turn', reason: active.ended ? 'native completion observed before steering dispatch' : 'reply already written before steering dispatch' } });
           continue;
         }
         const response = await this.harness.steer(this.session, { threadId: active.threadId, expectedTurnId: active.turnId,
@@ -685,8 +699,14 @@ export class ReleaseLoop<S = Session> {
         this.store.release(this.store.read(record.conversation_id, id, record.revision)!, { released_at: new Date(this.now()).toISOString(),
           thread_id: active.threadId, turn_id: active.releaseId, now: this.now(), hold_applies: false });
         this.store.annotate(this.store.read(record.conversation_id, id, record.revision)!, { browser_delivery: { ...attempt, phase: 'delivered', acknowledgement: { turnId: active.turnId } } });
-        this.noteBrowserEffect(active.releaseId, { phase: 'accepted', thread_id: active.threadId, native_turn_id: active.turnId });
-        this.publishBrowserActivity(active, 'running');
+        const reply = this.writtenBrowserReply(active.releaseId);
+        if (reply && !(reply.adapter_fields?.submission_ids as unknown[] | undefined)?.includes(record.platform_message_id)) {
+          const reason = this.retainExcludedBrowserInput(this.store.read(record.conversation_id, id, record.revision)!, reply);
+          this.publishBrowserActivity(active, 'uncertain', reason);
+        } else {
+          this.noteBrowserEffect(active.releaseId, { phase: 'accepted', thread_id: active.threadId, native_turn_id: active.turnId });
+          this.publishBrowserActivity(active, 'running');
+        }
       } catch (error) {
         let threadRead: unknown;
         try { threadRead = await this.harness.readThread?.(this.session, { threadId: active.threadId, includeTurns: true }); } catch { /* unsupported read is not rejection proof */ }
@@ -708,7 +728,11 @@ export class ReleaseLoop<S = Session> {
   publishBrowserActivity(active: BrowserActive, state: BrowserActivity['state'], reason: unknown = null) {
     const prior = readBrowserActivity(this.store, active.conversationId).activity;
     const records = this.store.recordsIn(active.conversationId).filter((one) => one.direction === 'inbound' && one.release?.turn_id === active.releaseId);
-    if (records.some((record) => (record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain')) state = 'uncertain';
+    const uncertain = records.find((record) => (record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain');
+    if (uncertain) {
+      state = 'uncertain';
+      reason ??= (uncertain.adapter_fields?.browser_delivery as { reason?: unknown } | undefined)?.reason ?? prior?.reason;
+    }
     writeBrowserActivity(this.store, active.conversationId, { state, release_id: active.releaseId, native_turn_id: active.turnId,
       submission_ids: records.map((one) => one.platform_message_id), update: prior?.release_id === active.releaseId ? prior.update : null, reason });
   }
@@ -731,10 +755,7 @@ export class ReleaseLoop<S = Session> {
     }
     active.updates.set(id, item);
     if (item.phase !== 'commentary' || !item.text.length) return;
-    const thread: Record<string, unknown> = this.store.readThread(active.conversationId) ?? {};
     const update = { item_id: id, text: item.text, observed_at: new Date(this.now()).toISOString() };
-    const updates = (thread.browser_work_updates ?? {}) as Record<string, unknown>;
-    this.store.writeThread(active.conversationId, { ...thread, browser_work_updates: { ...updates, [`${active.turnId}:${id}`]: { ...update, native_turn_id: active.turnId, release_id: active.releaseId, phase: 'commentary' } } });
     const current = readBrowserActivity(this.store, active.conversationId).activity;
     if (current) writeBrowserActivity(this.store, active.conversationId, { ...current, update });
   }
@@ -1294,8 +1315,15 @@ export class ReleaseLoop<S = Session> {
     // And a spoken turn in the management conversation is not a recorded one. The
     // reply written there is held where it is until this is answered.
     const teach = await this.ensureTeachCheck(record, { unitId, threadId, releaseId });
-    for (const one of records) {
+    const acceptedReply = this.channel.kind === 'browser' ? this.writtenBrowserReply(releaseId) : null;
+    for (let index = 0; index < records.length; index++) {
+      let one = records[index];
       if ((one.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain') continue;
+      if (acceptedReply && one.adapter_fields?.input_kind && !(acceptedReply.adapter_fields?.submission_ids as unknown[] | undefined)?.includes(one.platform_message_id)) {
+        this.retainExcludedBrowserInput(one, acceptedReply);
+        records[index] = this.store.read(one.conversation_id, one.message_id, one.revision)!;
+        continue;
+      }
       this.store.completeRelease(one, completedAt);
       if (this.channel.kind === 'browser') this.store.annotate(this.store.read(one.conversation_id, one.message_id, one.revision)!, { browser_delivery: { ...(one.adapter_fields?.browser_delivery as object ?? {}), phase: reply.outcome === 'parked-no-reply' ? 'failed' : 'completed', response_id: this.store.readRequest(releaseId)?.message_id ?? null } });
     }

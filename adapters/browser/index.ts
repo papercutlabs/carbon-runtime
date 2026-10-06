@@ -45,8 +45,7 @@ export function browserPacket(packet: BrowserPacket): BrowserPacket {
   // Copy only declared fields; callers cannot smuggle overrides or credentials.
   return { account: packet.account, ticket_key: packet.ticket_key, submission_id: packet.submission_id,
     consultant: { id: packet.consultant.id, name: packet.consultant.name },
-    ...(packet.request_kind === undefined ? {} : { ...(packet.request_kind === undefined ? {} : { request_kind: packet.request_kind }),
-        ...(packet.input_kind === undefined ? {} : { input_kind: packet.input_kind }), attachment_ids: packet.attachment_ids ?? [] }),
+    ...(packet.request_kind === undefined ? {} : { request_kind: packet.request_kind }),
     ...(packet.input_kind === undefined ? {} : { input_kind: packet.input_kind }),
     ...(packet.attachment_ids === undefined ? {} : { attachment_ids: [...packet.attachment_ids] }),
     body: packet.body, accepted_at: packet.accepted_at, position: packet.position };
