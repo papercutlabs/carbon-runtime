@@ -39,6 +39,7 @@ import { managementConversationOf } from './channel.ts';
 import { unitIdFor } from './unit.ts';
 import { beginBoundAction, finishMappedAction } from '../tools/lib/action-check.ts';
 import { assertNoSymlinks, validateBrowserFilename } from './browser-files.ts';
+import { evidenceAgentRoutes } from './browser-evidence-routes.ts';
 import { EVIDENCE_TOOLS, evidenceToolHandlers } from './browser-evidence-tools.ts';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
@@ -421,9 +422,10 @@ export async function recordSentAction(store: Store, record: MessageRecord,
 }
 
 export function createReplyServer({ store, agent, declaration = null, work = null, validateBrowserReply }: ReplyOptions) {
+  const evidenceEnabled=declaration?.channels?.some(c=>c.kind==='browser')||Boolean(store.activeBrowserReply);
   return createServer({
-    manifest: MANIFEST,
-    handlers: { ...evidenceToolHandlers(store, agent), reply: declaration?.records?.enabled === true
+    manifest: evidenceEnabled ? MANIFEST : {...MANIFEST,tools:MANIFEST.tools.filter(t=>t.name==='reply')},
+    handlers: { ...(evidenceEnabled?evidenceToolHandlers(store, agent):{}), reply: declaration?.records?.enabled === true
       ? recordsReplyHandler({ store, agent, declaration, work, validateBrowserReply })
       : replyHandler({ store, agent, declaration, work, validateBrowserReply }) }
   });
@@ -431,6 +433,8 @@ export function createReplyServer({ store, agent, declaration = null, work = nul
 
 export async function serveReplyTool({ store, agent, declaration = null, work = null, validateBrowserReply, host = '127.0.0.1', port = REPLY_PORT }: ReplyOptions & { host?: string; port?: number }) {
   const server = createReplyServer({ store, agent, declaration, work, validateBrowserReply });
-  const { server: http, url } = await server.serveHttp({ host, port });
-  return { http, url, close: () => new Promise<unknown>((resolve) => http.close(resolve)) };
+  const evidenceApiToken=crypto.randomBytes(32).toString('base64url');
+  const api=evidenceAgentRoutes(store,agent,{apiToken:evidenceApiToken});
+  const { server: http, url } = await server.serveHttp({ host, port, api:api.handler });
+  return { http, url, evidenceApiToken, close: () => new Promise<unknown>((resolve) => http.close(resolve)) };
 }

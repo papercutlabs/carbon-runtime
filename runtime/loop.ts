@@ -1,3 +1,4 @@
+import { qualifyBrowserHooks } from './browser-evidence-hooks.ts';
 import { writeEvidenceSummary, modelEvidenceReferences, type EvidenceReference } from './browser-evidence.ts';
 type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?: unknown; seq: number };
 // shape: justified the existing release loop coordinates store, harness, channels, reply, teaching, records admission and native failure capture at the actual dispatch/read seams
@@ -5,7 +6,7 @@ import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import { nativeFailureEvidence } from '../harness/codex/index.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string; stopping?: () => boolean; prepareBrowserTurn?: BrowserPreparation; browserThreadOptions?: BrowserThreadOptions };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string; stopping?: () => boolean; prepareBrowserTurn?: BrowserPreparation; browserThreadOptions?: BrowserThreadOptions; browserEvidenceHooks?: {hooksFile:string;command:string} };
 export type BrowserThreadOptions = (input: { conversationId: string; workspace: BrowserWorkspace }) => { permissions: string; config?: Record<string, unknown> };
 type BrowserActive = { conversationId: string; releaseId: string; threadId: string; turnId: string | null; ended: boolean; permissions?: string; workspace: BrowserWorkspace; updates: Map<string, { phase: unknown; text: string }> };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
@@ -550,6 +551,7 @@ export class ReleaseLoop<S = Session> {
   declare recordsActionUrl: string | undefined;
   declare stopping: () => boolean;
   declare browserThreadOptions: BrowserThreadOptions | undefined;
+  declare browserEvidenceHooks: {hooksFile:string;command:string}|undefined;
   browserActive: BrowserActive | null = null;
   browserDelivery: Promise<void> = Promise.resolve();
   browserPending = new Map<string, MessageRecord>();
@@ -558,7 +560,7 @@ export class ReleaseLoop<S = Session> {
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
     agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
-    afterTurn = () => {}, probe = async () => false, recordsActionUrl, stopping = () => false, prepareBrowserTurn, browserThreadOptions
+    afterTurn = () => {}, probe = async () => false, recordsActionUrl, stopping = () => false, prepareBrowserTurn, browserThreadOptions, browserEvidenceHooks
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -567,7 +569,7 @@ export class ReleaseLoop<S = Session> {
     }
     this.declaration = declaration;
     this.prepareBrowserTurn = prepareBrowserTurn;
-    this.browserThreadOptions = browserThreadOptions;
+    this.browserThreadOptions = browserThreadOptions;this.browserEvidenceHooks=browserEvidenceHooks;
     if (channel.kind === 'browser') {
       const wrong = declaration.unit_of_work?.kind !== 'conversation' || channel.default_conversation_kind !== 'ops'
         || declaration.records?.enabled === true || declaration.teaching?.enabled === true
@@ -741,6 +743,11 @@ export class ReleaseLoop<S = Session> {
   }
 
   acceptBrowserEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }) {
+    if(['hook.started','hook.completed'].includes(String(event.kind))){
+      const unit=[...this.threads.entries()].find(([,id])=>id===event.threadId)?.[0];
+      if(unit&&this.browserEvidenceHooks){const params=event.params as {run?:{sourcePath?:unknown}}|null;if(params?.run?.sourcePath===this.browserEvidenceHooks.hooksFile)this.log({event:'browser.hook',unit_id:unit,thread_id:event.threadId,turn_id:event.turnId,kind:event.kind,run:params.run});}
+      return;
+    }
     const active = this.browserActive;
     if (!active || event.threadId !== active.threadId || event.turnId !== active.turnId) return;
     if (event.kind === 'turn.completed') active.ended = true;
@@ -785,6 +792,7 @@ export class ReleaseLoop<S = Session> {
       ? browserWorkspace({ work: this.work, conversationId: unitId, checkout: this.checkout }) : null;
     if (workspace) placeGuidance({ work: workspace.analysis, checkout: this.checkout, log: this.log });
     if (workspace) writeEvidenceSummary(this.store, unitId, workspace);
+    if(workspace&&this.browserEvidenceHooks){if(!this.harness.listHooks)throw new RuntimeFault(fault('BROWSER_HOOK_DISCOVERY_ABSENT',unitId,'selected harness exposes no supported hooks/list','bind the qualified native hook observer before model dispatch'));const native=await this.harness.listHooks(this.session,{cwds:[workspace.analysis]});const qualified=qualifyBrowserHooks(native,{cwd:workspace.analysis,...this.browserEvidenceHooks});this.log({event:'browser.hooks.discovery',unit_id:unitId,qualification:qualified});}
     const permission = workspace ? this.browserThreadOptions!({ conversationId: unitId, workspace }) : null;
     if (permission) this.browserPermissions.set(unitId, permission);
     const opening = {

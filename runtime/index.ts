@@ -2,7 +2,7 @@
 import type { BrowserPreparation } from './browser.ts';
 import type { BrowserReplyValidator } from './reply-tool.ts';
 import type { Declaration, Channel, Log, Harness, Session, ChildExit } from './types.ts';
-type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator; browserThreadOptions?: BrowserThreadOptions };
+type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator; browserThreadOptions?: BrowserThreadOptions; browserEvidenceHooks?: {hooksFile:string;command:string} };
 
 // The runtime process: the one thing a unit starts.
 //
@@ -377,7 +377,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
         afterTurn: () => { providerAccount.request('turn'); },
-        prepareBrowserTurn: options.prepareBrowserTurn, browserThreadOptions: options.browserThreadOptions,
+        prepareBrowserTurn: options.prepareBrowserTurn, browserThreadOptions: options.browserThreadOptions, browserEvidenceHooks:options.browserEvidenceHooks,
         // A drain finishes the release in progress and starts no other.
         stopping: () => draining.signal !== null,
         // The provider proxy's port probe (PA-259). Without one the loop holds release.

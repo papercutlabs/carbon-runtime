@@ -1,6 +1,6 @@
 import { Store, StreamFault } from '../stream/store.ts';
 import { fault } from '../stream/faults.ts';
-import { presentEvidence, readEvidence, readEvidenceChanges, readEvidenceFragment, writeEvidenceSummary, EVIDENCE_DELTA_SCHEMA, EVIDENCE_SELECTOR_SCHEMA, fromWireSelector } from './browser-evidence.ts';
+import { presentEvidence, readEvidence, readEvidenceChanges, readEvidenceFragment, writeEvidenceSummary, EVIDENCE_DELTA_SCHEMA, EVIDENCE_SELECTOR_SCHEMA, fromWireSelector, publicEvidenceFragment } from './browser-evidence.ts';
 import type { EvidenceSelector } from './browser-evidence-representation.ts';
 const returns={what:'Exact retained evidence result; named faults refuse invalid input without changing membership.',fields:[{name:'result',what:'Retained evidence publication/page/fragment with original identity and version.'}]};
 const tool=(name:string,description:string,properties:Record<string,unknown>,readOnlyHint:boolean)=>({name,description,readOnlyHint,writes:false,arguments:{type:'object',additionalProperties:false,required:Object.keys(properties),properties},returns});
@@ -18,6 +18,6 @@ export function evidenceToolHandlers(store:Store,agent:string){
  evidence_present:(args:Record<string,unknown>)=>{const a=active(),inbound=store.recordsIn(a.conversation_id).find(r=>r.direction==='inbound'&&r.release?.turn_id===a.release_id);if(!inbound)throw Error('Active browser release lacks retained input');const result=presentEvidence(store,{agent,account:inbound.account,conversationId:a.conversation_id,releaseId:a.release_id,turnId:a.native_turn_id!,workspace:a.workspace!,delta:args});writeEvidenceSummary(store,a.conversation_id,a.workspace!);return {data:{result},text:'Evidence change retained; the final reply fence is unchanged.'};},
  evidence_read:(args:Record<string,unknown>)=>({data:{result:readEvidence(store,active().conversation_id,args as {anchor:string|null;cursor:number;limit:number})}}),
  evidence_changes:(args:Record<string,unknown>)=>({data:{result:readEvidenceChanges(store,active().conversation_id,args.cursor as number,args.limit as number)}}),
- evidence_fragment_read:(args:Record<string,unknown>)=>({data:{result:readEvidenceFragment(store,active().conversation_id,args.itemId as string,fromWireSelector(args.selector),args.contextBefore as number,args.contextAfter as number,args.limit as number)}})
+ evidence_fragment_read:(args:Record<string,unknown>)=>({data:{result:publicEvidenceFragment(readEvidenceFragment(store,active().conversation_id,args.itemId as string,fromWireSelector(args.selector),args.contextBefore as number,args.contextAfter as number,args.limit as number))}})
  };
 }

@@ -74,6 +74,7 @@ export type TurnResult = {
 export type ChildExit = { code: number | null; signal: string | null };
 export type Session = { stop?(): Promise<unknown>; exit: Promise<ChildExit> };
 export type Harness<S = Session> = {
+  listHooks?(session:S,options:{cwds:string[]}):Promise<unknown>;
   connect(options: {
     binary: string; codexHome: string; providerKeyPath?: string;
     providerKeyEnvName?: string; experimentalApi?: boolean; onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;
