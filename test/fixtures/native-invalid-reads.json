@@ -1,0 +1,7 @@
+{
+  "capture": "Recorded stock codex-cli 0.159.2 invalid-read-only responses from an isolated empty home; no provider or login",
+  "refusals": [
+    { "method": "thread/read", "nativeCode": -32600, "originalReason": "Invalid request: invalid type: integer `5`, expected a string", "originalAvailable": true },
+    { "method": "account/read", "nativeCode": -32600, "originalReason": "Invalid request: invalid type: string \"invalid\", expected a boolean", "originalAvailable": true }
+  ]
+}

@@ -1,5 +1,8 @@
+// shape: justified this existing runtime composition point coordinates store, harness, channels, tools and the typed browser turn preparation contract
+import type { BrowserPreparation } from './browser.ts';
+import type { BrowserReplyValidator } from './reply-tool.ts';
 import type { Declaration, Channel, Log, Harness, Session, ChildExit } from './types.ts';
-type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate };
+type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator };
 
 // The runtime process: the one thing a unit starts.
 //
@@ -206,8 +209,9 @@ export function harnessBinary(declaration: Declaration, { harnessRoot, binary }:
 // early, and is handed null again once it has ended either way.
 function sleep(ms: number, wake: (end: (() => void) | null) => void) {
   return new Promise<void>((resolve) => {
-    const end = () => { clearTimeout(timer); wake(null); resolve(); };
-    const timer = setTimeout(end, ms);
+    let ended = false;
+    const end = () => { if (ended) return; ended = true; if (timer) clearTimeout(timer); wake(null); resolve(); };
+    const timer = Number.isFinite(ms) ? setTimeout(end, ms) : null;
     wake(end);
   });
 }
@@ -233,7 +237,9 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     sandboxDeny = { file: SANDBOX_DENY_FILE, root: path.dirname(path.resolve(codexHome)), ownerUid: 0 }
   } = options;
 
-  const store = Store.open(storeDir);
+  const store = options.store ?? Store.open(storeDir);
+  if (store.dir !== path.resolve(storeDir)) throw new RuntimeFault(fault('BROWSER_STORE_MISMATCH', storeDir, 'injected Store does not name the declared store directory', 'pass the same owned Store to runtime and browser bridge'));
+  if (declaration.channels?.some((channel) => channel.kind === 'browser')) sandboxDeny.browser = true;
   refuseIfLatched(store);
 
   const channels = declaration.channels ?? [];
@@ -261,6 +267,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
   }
   if (intervalFaults.length > 0) throw new RuntimeFault(intervalFaults);
 
+  let unsubscribeBrowser: (() => void) | null = null;
   const locks: ReturnType<typeof takeLock>[] = [];
   const toolServers: ReturnType<typeof startToolServers> = [];
   let reply: Awaited<ReturnType<typeof serveReplyTool>> | null = null;
@@ -273,6 +280,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     storeDir, codexHome, harness, codexVersion: version === undefined || version === null ? null : String(version), log, now
   });
   const stop = async () => {
+    unsubscribeBrowser?.();
     providerAccount.close();
     if (reply) await reply.close();
     if (teach) await teach.close();
@@ -353,7 +361,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // untouched by it.
     // Core checks installed declarations for agent.id; this launch path forwards
     // the declared value without validating it again.
-    reply = await serveReplyTool({ store, agent: declaration.agent?.id!, declaration, work, port: replyPort });
+    reply = await serveReplyTool({ store, agent: declaration.agent?.id!, declaration, work, port: replyPort, validateBrowserReply: options.validateBrowserReply });
     log({ event: 'reply_tool.listening', url: reply.url });
 
     // The teaching tools, on the declaration's word and on nothing else. With
@@ -388,18 +396,20 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // The child dying is the end of this process. The pair is one unit; systemd
     // restarts both, and the store says what the restart owes.
     let childExit: ChildExit | null = null;
-    session.exit.then((exit) => { childExit = exit; });
+    session.exit.then((exit) => { childExit = exit; draining.wake?.(); });
 
     // Read once the harness is up. Asking returns at once, the read starts on a
     // later tick, and nothing waits for it.
     providerAccount.attach(session);
     providerAccount.request('connect');
 
+    let wakeBrowserDrain: ((loop: ReleaseLoop<S>) => void) | null = null;
     const loops = loaded.map(({ channel, adapter, interval_ms }) => {
       const loop = new ReleaseLoop({
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
         afterTurn: () => { providerAccount.request('turn'); },
+        prepareBrowserTurn: options.prepareBrowserTurn,
         // A drain finishes the release in progress and starts no other.
         stopping: () => draining.signal !== null,
         // The provider proxy's port probe (PA-259). Without one the loop holds release.
@@ -409,7 +419,10 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       loop.intervalMs = interval_ms!;
       if (harness.onToolServerStatus) {
         // The harness connection assigned session before this status callback is registered.
-        harness.onToolServerStatus(session!, () => { loop.toolStatusStale = true; });
+        harness.onToolServerStatus(session!, () => {
+          loop.toolStatusStale = true;
+          if (loop.channel.kind === 'browser') wakeBrowserDrain?.(loop);
+        });
       }
       return loop;
     });
@@ -423,12 +436,31 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // when its own interval has passed and the process sleeps until whichever is
     // due first.
     const dueAt = new Map(loops.map((loop) => [loop, 0]));
+    const browserGeneration = new Map(loops.map((loop) => [loop, 0]));
+    wakeBrowserDrain = (loop) => {
+      browserGeneration.set(loop, browserGeneration.get(loop)! + 1);
+      dueAt.set(loop, 0);
+      draining.wake?.();
+    };
+    // Browser input is already captured through the shared Store. New inbound
+    // capture wakes this drain; it never runs an empty periodic channel poll.
+    unsubscribeBrowser = store.subscribeBrowserChanges((event) => {
+      if (event.kind !== 'capture' || event.direction !== 'inbound') return;
+      for (const loop of loops) {
+        if (loop.channel.kind !== 'browser') continue;
+        if (!event.conversation_id.startsWith(`${loop.channel.account}:ticket:`)) continue;
+        browserGeneration.set(loop, browserGeneration.get(loop)! + 1);
+        dueAt.set(loop, 0);
+      }
+      draining.wake?.();
+    });
     let done = 0;
     while (done < passes) {
       if (childExit || draining.signal) break;
       for (const loop of loops) {
         if (draining.signal) break;
         if (dueAt.get(loop)! > now()) continue; // dueAt contains every loop and entries are never removed.
+        const generation = browserGeneration.get(loop)!;
         try {
           await loop.pass(items(loop.channel));
         } catch (error) {
@@ -436,7 +468,9 @@ export async function run<S extends Session>(options: RunOptions<S>) {
           childExit = childExit ?? { code: null, signal: 'unknown' };
           break;
         }
-        dueAt.set(loop, now() + loop.intervalMs!); // Every scheduled loop received its checked interval before this sweep.
+        dueAt.set(loop, loop.channel.kind === 'browser'
+          ? browserGeneration.get(loop)! === generation ? Infinity : 0
+          : now() + loop.intervalMs!); // Every scheduled loop received its checked interval before this sweep.
         if (childExit) break;
       }
       done += 1;

@@ -109,9 +109,9 @@ async function eventually(file: string, check: (record: ProviderAccountRecord) =
   assert.fail(`the record never reached the expected state: ${JSON.stringify(last)}`);
 }
 
-const THREW = { method: 'readAccount', code: 'READ_ACCOUNT_THREW', summary: 'readAccount threw; its text is not kept', rpc_code: null };
-const LIMITS_REJECTED = { method: 'account/rateLimits/read', code: 'RATE_LIMITS_READ_REJECTED', summary: 'account/rateLimits/read: the app-server answered with an error; its text is not kept', rpc_code: -32001 };
-const ACCOUNT_REJECTED = { method: 'account/read', code: 'ACCOUNT_READ_REJECTED', summary: 'account/read: the app-server answered with an error; its text is not kept', rpc_code: -32603 };
+const THREW = { method: 'readAccount', code: 'READ_ACCOUNT_THREW', summary: 'readAccount threw; its redacted original reason is retained when available', rpc_code: null, original_reason: 'the harness threw', original_reason_available: true };
+const LIMITS_REJECTED = { method: 'account/rateLimits/read', code: 'RATE_LIMITS_READ_REJECTED', summary: 'account/rateLimits/read: the app-server answered with an error; its redacted original reason is retained when available', rpc_code: -32001, original_reason: 'failed to fetch codex rate limits: [REDACTED]', original_reason_available: true, native_code: -32001 };
+const ACCOUNT_REJECTED = { method: 'account/read', code: 'ACCOUNT_READ_REJECTED', summary: 'account/read: the app-server answered with an error; its redacted original reason is retained when available', rpc_code: -32603, original_reason: 'account read failed: [REDACTED]', original_reason_available: true, native_code: -32603 };
 
 function okRead(n: number, overrides: Partial<AccountRead> = {}): AccountRead {
   return {
@@ -240,7 +240,7 @@ test('a read that never returns is bounded, and recorded as error', async (t) =>
   await recorder.settled();
   assert.ok(Date.now() - started < 5000);
   const record = readRecord(b.recordFile);
-  assert.deepEqual(record.error?.reads, [{ method: 'readAccount', code: 'READ_ACCOUNT_UNSETTLED', summary: 'readAccount did not return within the bound', rpc_code: null }]);
+  assert.deepEqual(record.error?.reads, [{ method: 'readAccount', code: 'READ_ACCOUNT_UNSETTLED', summary: 'readAccount did not return within the bound', rpc_code: null, original_reason: null, original_reason_available: false }]);
   assert.equal(record.account, null);
   assert.equal(record.login_file_modified_at, b.written.toISOString());
 });
@@ -352,7 +352,7 @@ test('a read that fails or never returns neither fails nor holds a turn', async 
   const failed = await runWith(t, failing);
   assert.equal(failed.code, EXIT.OK);
   assert.ok(failing.session.turns.length >= 1, 'no turn was taken');
-  await eventually(failed.recordFile, (record) => JSON.stringify(record.error?.reads) === JSON.stringify([THREW]));
+  await eventually(failed.recordFile, (record) => JSON.stringify(record.error?.reads) === JSON.stringify([{ ...THREW, original_reason: 'synthetic read failure' }]));
 
   keepAlive(t);
   let asked = 0;
@@ -368,7 +368,7 @@ test('a read that fails or never returns neither fails nor holds a turn', async 
 
 // ---- the review's corrections -------------------------------------------------
 
-test('no error text the app-server or the harness wrote reaches the record or the log', async (t) => {
+test('redacted native error reasons reach the record while credentials stay out of records and logs', async (t) => {
   // Both JSON-RPC errors from the stub quote the canary, and the account one the
   // login file: what a provider puts in an error is not carbon's to keep.
   const b = box(t, 'account-error-text');
@@ -386,11 +386,12 @@ test('no error text the app-server or the harness wrote reaches the record or th
 
   // A harness that throws with a secret in its message is recorded by a fixed code.
   const throwing = scripted(async () => { throw new Error(`${CANARY} in a thrown message`); });
+  throwing.session.credentialValues = [CANARY];
   const other = new ProviderAccountRecorder({ storeDir: b.storeDir, codexHome: b.codexHome, harness: throwing, timeoutMs: 1000, log: (line) => lines.push(line) });
   other.attach(throwing.session);
   other.request('turn');
   await other.settled();
-  assert.deepEqual(readRecord(b.recordFile).error?.reads, [THREW]);
+  assert.deepEqual(readRecord(b.recordFile).error?.reads, [{ ...THREW, original_reason: '[REDACTED] in a thrown message' }]);
   assert.ok(!fs.readFileSync(b.recordFile, 'utf8').includes(CANARY));
   assert.ok(!JSON.stringify(lines).includes(CANARY), 'error text reached the log');
 });

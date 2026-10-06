@@ -30,7 +30,8 @@ export const REQUESTS = {
   // `account/read` is always sent with refreshToken false: a second process on
   // the login would be a second refresh writer, and a refresh asked for here
   // would be this process writing the login on a reader's behalf.
-  account: ['account/read', 'account/rateLimits/read']
+  account: ['account/read', 'account/rateLimits/read'],
+  recovery: ['thread/read']
 };
 
 // Notifications carbon listens for. Anything else the app-server sends is logged
