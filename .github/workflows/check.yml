@@ -28,11 +28,17 @@ jobs:
             const pkg = require("./package.json");
             const declared = pkg.dependencies ?? {};
             const names = Object.keys(declared);
-            if (JSON.stringify(names.sort()) !== JSON.stringify(["@whiskeysockets/baileys", "postgres"].sort())) {
-              throw new Error("this release names the WhatsApp library and PostgreSQL client");
+            if (JSON.stringify(names.sort()) !== JSON.stringify(["@whiskeysockets/baileys", "postgres", "@pcl/routes"].sort())) {
+              throw new Error("this release names the WhatsApp library, PostgreSQL client and vendored typed routes");
             }
-            for (const name of names) if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(declared[name])) {
+            for (const name of names) {
+              if (name === "@pcl/routes") {
+                if (declared[name] !== "file:vendor/pcl-routes-0.1.0.tgz") throw new Error("typed routes must name the exact vendored package");
+                continue;
+              }
+              if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(declared[name])) {
               throw new Error(`${name} is not pinned to an exact version`);
+              }
             }
             const dev = pkg.devDependencies ?? {};
             if (Object.keys(dev).length !== 1 || Object.keys(dev)[0] !== "typescript"
