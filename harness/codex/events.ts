@@ -90,6 +90,7 @@ export class EventStream {
   onEvent: (event: HarnessEvent) => void;
   dropped: Map<string, number>;
   events: HarnessEvent[];
+  private listeners = new Set<(event: HarnessEvent) => void>();
 
   constructor(onEvent?: (event: HarnessEvent) => void) {
     this.onEvent = onEvent ?? (() => {});
@@ -105,7 +106,14 @@ export class EventStream {
     }
     this.events.push(event);
     this.onEvent(event);
+    for (const listener of [...this.listeners]) listener(event);
     return event;
+  }
+
+  // Independent observers never replace the connection's existing handler.
+  subscribe(listener: (event: HarnessEvent) => void) {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
   }
 
   // Every event carbon recorded for one turn, in arrival order, selected by the two
@@ -118,4 +126,9 @@ export class EventStream {
     return [...this.dropped.entries()].sort((a, b) => a[0].localeCompare(b[0]))
       .map(([method, count]) => ({ method, count }));
   }
+}
+
+// This is part of the public events operation, using the existing session stream.
+export function subscribeEvents(session: { stream: EventStream }, listener: (event: HarnessEvent) => void) {
+  return session.stream.subscribe(listener);
 }

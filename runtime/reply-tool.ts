@@ -224,8 +224,8 @@ function responseMetadata(value: unknown): Record<string, unknown> | undefined {
     return Object.entries(one).every(([key, child]) => key.length <= 255 && valid(child, depth + 1));
   }
   if (!value || Array.isArray(value) || typeof value !== 'object' || !valid(value, 0)
-    || Object.hasOwn(value, 'attachments') || Buffer.byteLength(JSON.stringify(value)) > 65536)
-    throw new StreamFault([fault('BROWSER_REPLY_METADATA_INVALID', 'metadata', 'response metadata must be a bounded JSON object and cannot override attachment custody', 'supply valid optional metadata and use attachments for output files')]);
+    || Object.hasOwn(value, 'attachments') || Object.hasOwn(value, 'text') || Buffer.byteLength(JSON.stringify(value)) > 65536)
+    throw new StreamFault([fault('BROWSER_REPLY_METADATA_INVALID', 'metadata', 'response metadata must be a bounded JSON object and cannot override text or attachment custody', 'supply valid optional metadata and use attachments for output files')]);
   return JSON.parse(JSON.stringify(value));
 }
 

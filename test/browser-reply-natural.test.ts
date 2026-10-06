@@ -78,7 +78,7 @@ test('browser output rejects analysis/evidence/store paths, traversal and intern
 test('malformed metadata and client refusal cannot claim final acceptance or publish downloadable rejected files', (t) => {
   const { store, args, workspace } = fixture(t);
   const writer = replyHandler({ store, agent: 'agent', validateBrowserReply: () => [] });
-  for (const metadata of [null, [], { attachments: [] }, { value: Infinity }, { big: 'x'.repeat(65537) }]) {
+  for (const metadata of [null, [], { attachments: [] }, { text: 'override' }, { value: Infinity }, { big: 'x'.repeat(65537) }]) {
     assert.throws(() => writer({ ...args, metadata }), /BROWSER_REPLY_METADATA_INVALID/); assert.equal(store.readRequest('release'), null);
   }
   const file = path.join(workspace.output, 'rejected.txt'); fs.writeFileSync(file, 'rejected bytes');

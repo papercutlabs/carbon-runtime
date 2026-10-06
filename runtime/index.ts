@@ -2,7 +2,7 @@
 import type { BrowserPreparation } from './browser.ts';
 import type { BrowserReplyValidator } from './reply-tool.ts';
 import type { Declaration, Channel, Log, Harness, Session, ChildExit } from './types.ts';
-type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator };
+type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator; browserThreadOptions?: BrowserThreadOptions };
 
 // The runtime process: the one thing a unit starts.
 //
@@ -18,6 +18,8 @@ type RunOptions<S extends Session> = { declaration: Declaration; declarationPath
 // It has no daemon of its own beyond that, no database, no orchestration, and no
 // reload path: a change to what the agent does is a commit and an install.
 
+import { placeGuidance } from './guidance.ts';
+export { placeGuidance, GUIDANCE_NAMES } from './guidance.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Store } from '../stream/store.ts';
@@ -28,7 +30,7 @@ import { loadAdapter } from './registry.ts';
 import { startToolServers, stopToolServers, awaitToolServers, answers } from './tool-servers.ts';
 import { serveReplyTool, REPLY_PORT } from './reply-tool.ts';
 import { serveTeachTool, TEACH_PORT } from './teach-tool.ts';
-import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny, ProviderAccountRecorder } from './loop.ts';
+import { ReleaseLoop, SANDBOX_DENY_FILE, checkSandboxDeny, ProviderAccountRecorder, type BrowserThreadOptions } from './loop.ts';
 import type { SandboxDenyGate } from './loop.ts';
 import { pollIntervalFor } from './poll.ts';
 import { resolveChannel } from './channel.ts';
@@ -64,7 +66,7 @@ export function placesUnder(agentDir: string) {
 // Verified against the pinned binary on 11 September (runtime/proofs/
 // 20260911-thread-cwd.md): with `cwd` set to a directory holding neither, the
 // rendered prompt carries no guidance and lists no skill.
-export const GUIDANCE_NAMES = ['AGENTS.md', '.agents'];
+
 
 // Places the checkout's guidance in the work directory, and returns the names it
 // placed.
@@ -90,43 +92,6 @@ export const GUIDANCE_NAMES = ['AGENTS.md', '.agents'];
 // `dereference` follows only the path it was given, so this walks it by hand. The
 // depth cap is what a symlink pointing at its own parent would otherwise do to
 // this process.
-const MAX_GUIDANCE_DEPTH = 64;
-
-function copyResolved(from: string, to: string, name: string, depth = 0) {
-  if (depth > MAX_GUIDANCE_DEPTH) {
-    throw new RuntimeFault(fault('GUIDANCE_TOO_DEEP', from,
-      `${name} in the checkout nests more than ${MAX_GUIDANCE_DEPTH} directories deep, which is what a symlink pointing back at its own parent looks like`,
-      'straighten the directory out in the client repository, and install again'));
-  }
-  const stat = fs.statSync(from);
-  if (!stat.isDirectory()) {
-    fs.copyFileSync(from, to);
-    return;
-  }
-  fs.mkdirSync(to, { recursive: true });
-  for (const entry of fs.readdirSync(from)) {
-    copyResolved(path.join(from, entry), path.join(to, entry), name, depth + 1);
-  }
-}
-
-export function placeGuidance({ work, checkout, log = () => {} }: { work: string; checkout: string; log?: Log }) {
-  if (!fs.existsSync(work)) {
-    throw new RuntimeFault(fault('WORK_DIR_ABSENT', work,
-      'the work directory is the directory a thread is opened on, and there is nothing at this path',
-      'run carbon install, which places the work directory, or pass --work at a path that exists'));
-  }
-  const placed = [];
-  for (const name of GUIDANCE_NAMES) {
-    const at = path.join(work, name);
-    const target = path.join(checkout, name);
-    fs.rmSync(at, { recursive: true, force: true });
-    if (!fs.existsSync(target)) continue;
-    copyResolved(target, at, name);
-    placed.push(name);
-  }
-  log({ event: 'guidance.placed', work, checkout, names: placed });
-  return placed;
-}
 
 export function readDeclaration(file: string): unknown {
   if (!fs.existsSync(file)) {
@@ -381,14 +346,17 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     const key = providerKey(declaration);
     // HC-14 (PA-259): no harness starts on a box whose deny file is not exactly placed.
     checkSandboxDeny(sandboxDeny, 'before the harness started');
+    const browserLoops: ReleaseLoop<S>[] = [];
     session = await harness.connect({
       binary: harnessBinary(declaration, { harnessRoot, binary }),
       codexHome,
+      ...(options.browserThreadOptions ? { experimentalApi: true } : {}),
       providerKeyPath: key?.path,
       providerKeyEnvName: key?.env,
       onEvent: (event) => {
         log({ event: 'harness', kind: event.kind, thread_id: event.threadId, turn_id: event.turnId });
         providerAccount.accept(event);
+        for (const loop of browserLoops) loop.acceptBrowserEvent(event);
       },
       onStderr: () => {}
     });
@@ -409,12 +377,13 @@ export async function run<S extends Session>(options: RunOptions<S>) {
         declaration, channel, store, storeDir, adapter, harness, session: session!, sandboxDeny,  // connect completed before this callback captures the session; closure narrowing cannot establish that ordering.
         agent: declaration.agent?.id!, checkout, work, teach, log, now, // The caller supplies the declared id; the existing Store boundary retains responsibility for rejecting invalid values.
         afterTurn: () => { providerAccount.request('turn'); },
-        prepareBrowserTurn: options.prepareBrowserTurn,
+        prepareBrowserTurn: options.prepareBrowserTurn, browserThreadOptions: options.browserThreadOptions,
         // A drain finishes the release in progress and starts no other.
         stopping: () => draining.signal !== null,
         // The provider proxy's port probe (PA-259). Without one the loop holds release.
         probe: answers
       });
+      if (channel.kind === 'browser') browserLoops.push(loop);
       // Interval faults were refused before any loop was created.
       loop.intervalMs = interval_ms!;
       if (harness.onToolServerStatus) {
@@ -449,6 +418,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       for (const loop of loops) {
         if (loop.channel.kind !== 'browser') continue;
         if (!event.conversation_id.startsWith(`${loop.channel.account}:ticket:`)) continue;
+        const accepted = store.read(event.conversation_id, event.message_id, event.revision);
+        if (accepted) loop.acceptBrowserInput(accepted);
         browserGeneration.set(loop, browserGeneration.get(loop)! + 1);
         dueAt.set(loop, 0);
       }
