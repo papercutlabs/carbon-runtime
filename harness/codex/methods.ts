@@ -25,6 +25,7 @@ export const REQUESTS = {
   // this reads back what the harness itself found in the working directory it was
   // given, by its own conventions, and carbon neither renders nor names it.
   skills: ['skills/list'],
+  hooks: ['hooks/list','thread/compact/start'],
   // Which provider account the harness is signed in to, and how much of its
   // allowance is left, asked of the one app-server the runtime already holds.
   // `account/read` is always sent with refreshToken false: a second process on
@@ -54,6 +55,8 @@ export const NOTIFICATIONS = [
   // of its rate limits. Neither is a turn event; the runtime records both.
   'account/updated',
   'account/rateLimits/updated',
+  'hook/started',
+  'hook/completed',
   'error'
 ];
 

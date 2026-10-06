@@ -1,0 +1,3407 @@
+{
+  "schema": "carbon.evidence-interface.v2",
+  "selector": {
+    "anyOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "start",
+          "end",
+          "pointer",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "lines",
+              "rows",
+              "field",
+              "region"
+            ]
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pointer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "null"
+      }
+    ]
+  },
+  "reference": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "itemId",
+      "sourceId",
+      "representationId",
+      "representationVersion",
+      "sha256",
+      "selector"
+    ],
+    "properties": {
+      "itemId": {
+        "type": "string",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      },
+      "sourceId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "representationId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "representationVersion": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "selector": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "start",
+              "end",
+              "pointer",
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "lines",
+                  "rows",
+                  "field",
+                  "region"
+                ]
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pointer": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "x": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "y": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "width": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "height": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    }
+  },
+  "delta": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "changeId",
+      "add",
+      "remove",
+      "note"
+    ],
+    "properties": {
+      "changeId": {
+        "type": "string",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      },
+      "add": {
+        "type": "array",
+        "maxItems": 100,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "itemId",
+            "label",
+            "path",
+            "selector",
+            "note",
+            "basis",
+            "assumptions",
+            "producerPath"
+          ],
+          "properties": {
+            "itemId": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "selector": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "start",
+                    "end",
+                    "pointer",
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "lines",
+                        "rows",
+                        "field",
+                        "region"
+                      ]
+                    },
+                    "start": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "end": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "pointer": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 4096
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "x": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "y": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "width": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "maximum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "height": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "maximum": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "basis": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "itemId",
+                  "sourceId",
+                  "representationId",
+                  "representationVersion",
+                  "sha256",
+                  "selector"
+                ],
+                "properties": {
+                  "itemId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                  },
+                  "sourceId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "representationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "representationVersion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "selector": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "start",
+                          "end",
+                          "pointer",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "lines",
+                              "rows",
+                              "field",
+                              "region"
+                            ]
+                          },
+                          "start": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "end": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "pointer": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 4096
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "x": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "y": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "width": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "exclusiveMinimum": 0,
+                                "maximum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "height": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "exclusiveMinimum": 0,
+                                "maximum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "assumptions": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "producerPath": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "remove": {
+        "type": "array",
+        "maxItems": 100,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "itemId",
+            "reason"
+          ],
+          "properties": {
+            "itemId": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        }
+      },
+      "note": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 4096
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    }
+  },
+  "page": {
+    "additionalProperties": false,
+    "properties": {
+      "anchor": {
+        "description": "Fixed snapshot anchor, null only when empty.",
+        "maxLength": 8192,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "conversationId": {
+        "description": "Canonical conversation.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "cursor": {
+        "description": "Last returned persisted Carbon ordinal.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "hasMore": {
+        "description": "More retained messages exist after this page.",
+        "type": "boolean"
+      },
+      "items": {
+        "description": "Persisted items in the named checked scope.",
+        "items": {
+          "additionalProperties": false,
+          "description": "Persisted item in the named checked scope.",
+          "properties": {
+            "changeId": {
+              "description": "Explicit publishing change UUID.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "digest": {
+              "description": "Original exact byte SHA256.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "id": {
+              "description": "Immutable item UUID.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "label": {
+              "description": "Public model-chosen label.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "note": {
+              "description": "Public contextual note.",
+              "maxLength": 8192,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin": {
+              "description": "Persisted origin in the named checked scope.",
+              "enum": [
+                "original",
+                "analysis"
+              ],
+              "type": "string"
+            },
+            "representationId": {
+              "description": "Versioned representation identity.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "representationVersion": {
+              "description": "Representation algorithm version.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "selector": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "description": "Persisted end in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "const": "lines",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "start": {
+                          "description": "Persisted start in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "description": "Persisted end in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "const": "rows",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "start": {
+                          "description": "Persisted start in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "field",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "pointer": {
+                          "description": "Persisted pointer in the named checked scope.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "pointer"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "height": {
+                          "description": "Persisted height in the named checked scope.",
+                          "type": "number"
+                        },
+                        "kind": {
+                          "const": "region",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "width": {
+                          "description": "Persisted width in the named checked scope.",
+                          "type": "number"
+                        },
+                        "x": {
+                          "description": "Persisted x in the named checked scope.",
+                          "type": "number"
+                        },
+                        "y": {
+                          "description": "Persisted y in the named checked scope.",
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "x",
+                        "y",
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Persisted selector in the named checked scope."
+            },
+            "sourceId": {
+              "description": "Conversation-bound immutable byte custody identity.",
+              "maxLength": 8192,
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "origin",
+            "sourceId",
+            "representationId",
+            "representationVersion",
+            "digest",
+            "note",
+            "selector",
+            "changeId"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "revision": {
+        "description": "Persisted feedback revision, previous revisions retained.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "total": {
+        "description": "Persisted total in the named checked scope.",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "conversationId",
+      "revision",
+      "anchor",
+      "items",
+      "cursor",
+      "hasMore",
+      "total"
+    ],
+    "type": "object"
+  },
+  "changes": {
+    "additionalProperties": false,
+    "properties": {
+      "changes": {
+        "description": "Persisted changes in the named checked scope.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "added": {
+              "description": "Persisted added in the named checked scope.",
+              "items": {
+                "additionalProperties": false,
+                "description": "Persisted item in the named checked scope.",
+                "properties": {
+                  "changeId": {
+                    "description": "Explicit publishing change UUID.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  "digest": {
+                    "description": "Original exact byte SHA256.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  "id": {
+                    "description": "Immutable item UUID.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  "label": {
+                    "description": "Public model-chosen label.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  "note": {
+                    "description": "Public contextual note.",
+                    "maxLength": 8192,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "origin": {
+                    "description": "Persisted origin in the named checked scope.",
+                    "enum": [
+                      "original",
+                      "analysis"
+                    ],
+                    "type": "string"
+                  },
+                  "representationId": {
+                    "description": "Versioned representation identity.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  "representationVersion": {
+                    "description": "Representation algorithm version.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  "selector": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "lines",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "rows",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "field",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "description": "Persisted pointer in the named checked scope.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "pointer"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "height": {
+                                "description": "Persisted height in the named checked scope.",
+                                "type": "number"
+                              },
+                              "kind": {
+                                "const": "region",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "width": {
+                                "description": "Persisted width in the named checked scope.",
+                                "type": "number"
+                              },
+                              "x": {
+                                "description": "Persisted x in the named checked scope.",
+                                "type": "number"
+                              },
+                              "y": {
+                                "description": "Persisted y in the named checked scope.",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x",
+                              "y",
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Persisted selector in the named checked scope."
+                  },
+                  "sourceId": {
+                    "description": "Conversation-bound immutable byte custody identity.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "origin",
+                  "sourceId",
+                  "representationId",
+                  "representationVersion",
+                  "digest",
+                  "note",
+                  "selector",
+                  "changeId"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "author": {
+              "additionalProperties": false,
+              "description": "Persisted author in the named checked scope.",
+              "properties": {
+                "displayName": {
+                  "description": "Publisher display name.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Authenticated publisher.",
+                  "maxLength": 8192,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "displayName"
+              ],
+              "type": "object"
+            },
+            "changeId": {
+              "description": "Immutable change UUID.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "createdAt": {
+              "description": "Server capture timestamp.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "messageId": {
+              "description": "Public ordinary conversation anchor.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "note": {
+              "description": "Public change explanation.",
+              "maxLength": 8192,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "releaseId": {
+              "description": "Actual active Carbon release.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "removed": {
+              "description": "Persisted removed in the named checked scope.",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "itemId": {
+                    "description": "Explicit removed immutable identity.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  "reason": {
+                    "description": "Public removal reason.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "itemId",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "description": "Persisted feedback revision, previous revisions retained.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "turnId": {
+              "description": "Actual native turn.",
+              "maxLength": 8192,
+              "type": "string"
+            }
+          },
+          "required": [
+            "changeId",
+            "messageId",
+            "revision",
+            "createdAt",
+            "author",
+            "releaseId",
+            "turnId",
+            "added",
+            "removed",
+            "note"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "conversationId": {
+        "description": "Canonical conversation.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "cursor": {
+        "description": "Last returned persisted Carbon ordinal.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "hasMore": {
+        "description": "More retained messages exist after this page.",
+        "type": "boolean"
+      },
+      "revision": {
+        "description": "Persisted feedback revision, previous revisions retained.",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "conversationId",
+      "revision",
+      "changes",
+      "cursor",
+      "hasMore"
+    ],
+    "type": "object"
+  },
+  "fragment": {
+    "additionalProperties": false,
+    "properties": {
+      "assumptions": {
+        "description": "Persisted assumptions in the named checked scope.",
+        "items": {
+          "description": "Stated analysis assumption.",
+          "maxLength": 8192,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "basis": {
+        "description": "Persisted basis in the named checked scope.",
+        "items": {
+          "additionalProperties": false,
+          "description": "Persisted reference in the named checked scope.",
+          "properties": {
+            "itemId": {
+              "description": "Persisted itemId in the named checked scope.",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "type": "string"
+            },
+            "representationId": {
+              "description": "Persisted representationId in the named checked scope.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "representationVersion": {
+              "description": "Persisted representationVersion in the named checked scope.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "selector": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "description": "Persisted end in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "const": "lines",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "start": {
+                          "description": "Persisted start in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "description": "Persisted end in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "const": "rows",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "start": {
+                          "description": "Persisted start in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "field",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "pointer": {
+                          "description": "Persisted pointer in the named checked scope.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "pointer"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "height": {
+                          "description": "Persisted height in the named checked scope.",
+                          "type": "number"
+                        },
+                        "kind": {
+                          "const": "region",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "width": {
+                          "description": "Persisted width in the named checked scope.",
+                          "type": "number"
+                        },
+                        "x": {
+                          "description": "Persisted x in the named checked scope.",
+                          "type": "number"
+                        },
+                        "y": {
+                          "description": "Persisted y in the named checked scope.",
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "x",
+                        "y",
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Persisted selector in the named checked scope."
+            },
+            "sha256": {
+              "description": "Persisted sha256 in the named checked scope.",
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "sourceId": {
+              "description": "Persisted sourceId in the named checked scope.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "itemId",
+            "sourceId",
+            "representationId",
+            "representationVersion",
+            "sha256",
+            "selector"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "content": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "description": "Persisted columns in the named checked scope.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "end": {
+                "description": "Persisted end in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "description": "More retained messages exist after this page.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "text",
+                "description": "Persisted kind in the named checked scope.",
+                "type": "string"
+              },
+              "lines": {
+                "description": "Persisted lines in the named checked scope.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "number": {
+                      "description": "Persisted number in the named checked scope.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "text": {
+                      "description": "Persisted text in the named checked scope.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "number",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "nextSelector": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              },
+              "rows": {
+                "description": "Persisted rows in the named checked scope.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cells": {
+                      "description": "Persisted cells in the named checked scope.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "number": {
+                      "description": "Persisted number in the named checked scope.",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "number",
+                    "cells"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "start": {
+                "description": "Persisted start in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "description": "Persisted total in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "total",
+              "start",
+              "end",
+              "lines",
+              "rows",
+              "columns",
+              "hasMore",
+              "nextSelector"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "description": "Persisted columns in the named checked scope.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "end": {
+                "description": "Persisted end in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "description": "More retained messages exist after this page.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "table",
+                "description": "Persisted kind in the named checked scope.",
+                "type": "string"
+              },
+              "lines": {
+                "description": "Persisted lines in the named checked scope.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "number": {
+                      "description": "Persisted number in the named checked scope.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "text": {
+                      "description": "Persisted text in the named checked scope.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "number",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "nextSelector": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              },
+              "rows": {
+                "description": "Persisted rows in the named checked scope.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cells": {
+                      "description": "Persisted cells in the named checked scope.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "number": {
+                      "description": "Persisted number in the named checked scope.",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "number",
+                    "cells"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "start": {
+                "description": "Persisted start in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "description": "Persisted total in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "total",
+              "start",
+              "end",
+              "lines",
+              "rows",
+              "columns",
+              "hasMore",
+              "nextSelector"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "description": "More retained messages exist after this page.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "json",
+                "description": "Persisted kind in the named checked scope.",
+                "type": "string"
+              },
+              "nextSelector": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              },
+              "pointer": {
+                "description": "Persisted pointer in the named checked scope.",
+                "type": "string"
+              },
+              "text": {
+                "description": "Persisted text in the named checked scope.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "pointer",
+              "text",
+              "hasMore",
+              "nextSelector"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "description": "More retained messages exist after this page.",
+                "type": "boolean"
+              },
+              "height": {
+                "description": "Persisted height in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "image",
+                "description": "Persisted kind in the named checked scope.",
+                "type": "string"
+              },
+              "nextSelector": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              },
+              "region": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              },
+              "width": {
+                "description": "Persisted width in the named checked scope.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "width",
+              "height",
+              "region",
+              "hasMore",
+              "nextSelector"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "description": "More retained messages exist after this page.",
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "file",
+                "description": "Persisted kind in the named checked scope.",
+                "type": "string"
+              },
+              "limitation": {
+                "description": "Explicit unsupported display reason.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nextSelector": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              }
+            },
+            "required": [
+              "kind",
+              "limitation",
+              "hasMore",
+              "nextSelector"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "unavailable",
+                "description": "Persisted kind in the named checked scope.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Retained-byte availability limitation.",
+                "maxLength": 8192,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Persisted content in the named checked scope."
+      },
+      "conversationId": {
+        "description": "Canonical conversation.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "download": {
+        "additionalProperties": false,
+        "description": "Persisted download in the named checked scope.",
+        "properties": {
+          "conversationId": {
+            "description": "Exact bound conversation.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "path": {
+            "const": "/api/evidence/download",
+            "description": "Persisted path in the named checked scope.",
+            "type": "string"
+          },
+          "sourceId": {
+            "description": "Immutable accepted source identity.",
+            "maxLength": 8192,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "conversationId",
+          "sourceId"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "item": {
+        "additionalProperties": false,
+        "description": "Persisted item in the named checked scope.",
+        "properties": {
+          "changeId": {
+            "description": "Explicit publishing change UUID.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "digest": {
+            "description": "Original exact byte SHA256.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "id": {
+            "description": "Immutable item UUID.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "label": {
+            "description": "Public model-chosen label.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "note": {
+            "description": "Public contextual note.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "Persisted origin in the named checked scope.",
+            "enum": [
+              "original",
+              "analysis"
+            ],
+            "type": "string"
+          },
+          "representationId": {
+            "description": "Versioned representation identity.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "representationVersion": {
+            "description": "Representation algorithm version.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "selector": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "description": "Persisted end in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "const": "lines",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "start": {
+                        "description": "Persisted start in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "description": "Persisted end in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "const": "rows",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "start": {
+                        "description": "Persisted start in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "field",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "pointer": {
+                        "description": "Persisted pointer in the named checked scope.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "pointer"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "height": {
+                        "description": "Persisted height in the named checked scope.",
+                        "type": "number"
+                      },
+                      "kind": {
+                        "const": "region",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "width": {
+                        "description": "Persisted width in the named checked scope.",
+                        "type": "number"
+                      },
+                      "x": {
+                        "description": "Persisted x in the named checked scope.",
+                        "type": "number"
+                      },
+                      "y": {
+                        "description": "Persisted y in the named checked scope.",
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "x",
+                      "y",
+                      "width",
+                      "height"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Persisted selector in the named checked scope."
+          },
+          "sourceId": {
+            "description": "Conversation-bound immutable byte custody identity.",
+            "maxLength": 8192,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "origin",
+          "sourceId",
+          "representationId",
+          "representationVersion",
+          "digest",
+          "note",
+          "selector",
+          "changeId"
+        ],
+        "type": "object"
+      },
+      "producer": {
+        "additionalProperties": false,
+        "description": "Persisted producer in the named checked scope.",
+        "properties": {
+          "conversationId": {
+            "description": "Exact bound conversation.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "path": {
+            "const": "/api/evidence/download",
+            "description": "Persisted path in the named checked scope.",
+            "type": "string"
+          },
+          "sourceId": {
+            "description": "Immutable accepted source identity.",
+            "maxLength": 8192,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "conversationId",
+          "sourceId"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "provenance": {
+        "additionalProperties": false,
+        "description": "Persisted provenance in the named checked scope.",
+        "properties": {
+          "completeness": {
+            "description": "Original source receipt completeness.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conversion": {
+            "description": "Original source receipt conversion.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fetchedAt": {
+            "description": "Original source receipt fetchedAt.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locator": {
+            "description": "Original source receipt locator.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "Original source receipt revision.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha256": {
+            "description": "Original source receipt sha256.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "Original source receipt source.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source",
+          "locator",
+          "fetchedAt",
+          "revision",
+          "sha256",
+          "completeness",
+          "conversion"
+        ],
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "reference": {
+        "additionalProperties": false,
+        "description": "Persisted reference in the named checked scope.",
+        "properties": {
+          "itemId": {
+            "description": "Persisted itemId in the named checked scope.",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          },
+          "representationId": {
+            "description": "Persisted representationId in the named checked scope.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "representationVersion": {
+            "description": "Persisted representationVersion in the named checked scope.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "selector": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "description": "Persisted end in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "const": "lines",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "start": {
+                        "description": "Persisted start in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "description": "Persisted end in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "const": "rows",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "start": {
+                        "description": "Persisted start in the named checked scope.",
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "field",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "pointer": {
+                        "description": "Persisted pointer in the named checked scope.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "pointer"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "height": {
+                        "description": "Persisted height in the named checked scope.",
+                        "type": "number"
+                      },
+                      "kind": {
+                        "const": "region",
+                        "description": "Persisted kind in the named checked scope.",
+                        "type": "string"
+                      },
+                      "width": {
+                        "description": "Persisted width in the named checked scope.",
+                        "type": "number"
+                      },
+                      "x": {
+                        "description": "Persisted x in the named checked scope.",
+                        "type": "number"
+                      },
+                      "y": {
+                        "description": "Persisted y in the named checked scope.",
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "x",
+                      "y",
+                      "width",
+                      "height"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Persisted selector in the named checked scope."
+          },
+          "sha256": {
+            "description": "Persisted sha256 in the named checked scope.",
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "sourceId": {
+            "description": "Persisted sourceId in the named checked scope.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemId",
+          "sourceId",
+          "representationId",
+          "representationVersion",
+          "sha256",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "description": "Persisted status in the named checked scope.",
+        "enum": [
+          "available",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "upstreamHref": {
+        "description": "Safe original upstream URL where supplied; no local paths or credentials.",
+        "maxLength": 8192,
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "conversationId",
+      "item",
+      "reference",
+      "status",
+      "content",
+      "download",
+      "upstreamHref",
+      "provenance",
+      "basis",
+      "assumptions",
+      "producer"
+    ],
+    "type": "object"
+  },
+  "item": {
+    "additionalProperties": false,
+    "description": "Persisted item in the named checked scope.",
+    "properties": {
+      "changeId": {
+        "description": "Explicit publishing change UUID.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "digest": {
+        "description": "Original exact byte SHA256.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "id": {
+        "description": "Immutable item UUID.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "label": {
+        "description": "Public model-chosen label.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "note": {
+        "description": "Public contextual note.",
+        "maxLength": 8192,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "origin": {
+        "description": "Persisted origin in the named checked scope.",
+        "enum": [
+          "original",
+          "analysis"
+        ],
+        "type": "string"
+      },
+      "representationId": {
+        "description": "Versioned representation identity.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "representationVersion": {
+        "description": "Representation algorithm version.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "selector": {
+        "anyOf": [
+          {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "description": "Persisted end in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "lines",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "start": {
+                    "description": "Persisted start in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "start",
+                  "end"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "description": "Persisted end in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "rows",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "start": {
+                    "description": "Persisted start in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "start",
+                  "end"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "field",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "pointer": {
+                    "description": "Persisted pointer in the named checked scope.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pointer"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "height": {
+                    "description": "Persisted height in the named checked scope.",
+                    "type": "number"
+                  },
+                  "kind": {
+                    "const": "region",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "width": {
+                    "description": "Persisted width in the named checked scope.",
+                    "type": "number"
+                  },
+                  "x": {
+                    "description": "Persisted x in the named checked scope.",
+                    "type": "number"
+                  },
+                  "y": {
+                    "description": "Persisted y in the named checked scope.",
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "x",
+                  "y",
+                  "width",
+                  "height"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Persisted selector in the named checked scope."
+      },
+      "sourceId": {
+        "description": "Conversation-bound immutable byte custody identity.",
+        "maxLength": 8192,
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "label",
+      "origin",
+      "sourceId",
+      "representationId",
+      "representationVersion",
+      "digest",
+      "note",
+      "selector",
+      "changeId"
+    ],
+    "type": "object"
+  },
+  "present": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "added",
+      "author",
+      "changeId",
+      "createdAt",
+      "messageId",
+      "note",
+      "releaseId",
+      "removed",
+      "revision",
+      "turnId",
+      "duplicate"
+    ],
+    "properties": {
+      "added": {
+        "description": "Persisted added in the named checked scope.",
+        "items": {
+          "additionalProperties": false,
+          "description": "Persisted item in the named checked scope.",
+          "properties": {
+            "changeId": {
+              "description": "Explicit publishing change UUID.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "digest": {
+              "description": "Original exact byte SHA256.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "id": {
+              "description": "Immutable item UUID.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "label": {
+              "description": "Public model-chosen label.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "note": {
+              "description": "Public contextual note.",
+              "maxLength": 8192,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin": {
+              "description": "Persisted origin in the named checked scope.",
+              "enum": [
+                "original",
+                "analysis"
+              ],
+              "type": "string"
+            },
+            "representationId": {
+              "description": "Versioned representation identity.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "representationVersion": {
+              "description": "Representation algorithm version.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "selector": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "description": "Persisted end in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "const": "lines",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "start": {
+                          "description": "Persisted start in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end": {
+                          "description": "Persisted end in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "const": "rows",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "start": {
+                          "description": "Persisted start in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "field",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "pointer": {
+                          "description": "Persisted pointer in the named checked scope.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "pointer"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "height": {
+                          "description": "Persisted height in the named checked scope.",
+                          "type": "number"
+                        },
+                        "kind": {
+                          "const": "region",
+                          "description": "Persisted kind in the named checked scope.",
+                          "type": "string"
+                        },
+                        "width": {
+                          "description": "Persisted width in the named checked scope.",
+                          "type": "number"
+                        },
+                        "x": {
+                          "description": "Persisted x in the named checked scope.",
+                          "type": "number"
+                        },
+                        "y": {
+                          "description": "Persisted y in the named checked scope.",
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "x",
+                        "y",
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Persisted selector in the named checked scope."
+            },
+            "sourceId": {
+              "description": "Conversation-bound immutable byte custody identity.",
+              "maxLength": 8192,
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "origin",
+            "sourceId",
+            "representationId",
+            "representationVersion",
+            "digest",
+            "note",
+            "selector",
+            "changeId"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "author": {
+        "additionalProperties": false,
+        "description": "Persisted author in the named checked scope.",
+        "properties": {
+          "displayName": {
+            "description": "Publisher display name.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "id": {
+            "description": "Authenticated publisher.",
+            "maxLength": 8192,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "changeId": {
+        "description": "Immutable change UUID.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "createdAt": {
+        "description": "Server capture timestamp.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "messageId": {
+        "description": "Public ordinary conversation anchor.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "note": {
+        "description": "Public change explanation.",
+        "maxLength": 8192,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "releaseId": {
+        "description": "Actual active Carbon release.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "removed": {
+        "description": "Persisted removed in the named checked scope.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "itemId": {
+              "description": "Explicit removed immutable identity.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "reason": {
+              "description": "Public removal reason.",
+              "maxLength": 8192,
+              "type": "string"
+            }
+          },
+          "required": [
+            "itemId",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "revision": {
+        "description": "Persisted feedback revision, previous revisions retained.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "turnId": {
+        "description": "Actual native turn.",
+        "maxLength": 8192,
+        "type": "string"
+      },
+      "duplicate": {
+        "type": "boolean",
+        "description": "Exact previously retained change identity/payload was reused."
+      }
+    }
+  }
+}

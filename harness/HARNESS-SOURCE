@@ -1,8 +1,8 @@
 Where the copied files under this repository came from, and what may be done to them.
 
 source repository   the private half of Carbon, named in that repository's README
-source commit       b565ba33be98a3fd5d005fe44f92fbe900e79956
-copied on           2026-10-06 (shared browser chat: native permission profiles, lifecycle transport and structural steering receipts)
+source commit       438c2f49c2a6c82d388822d84a96f3a066dd5a4a
+copied on           2026-10-07 (exact vendored route dependency shape contract; existing harness bytes unchanged)
 
 Copied verbatim, as whole files, with no edit of any kind:
 

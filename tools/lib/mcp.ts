@@ -62,7 +62,7 @@ type CreateServerOptions = {
 type Produced = { data?: unknown; text?: unknown };
 type Handle = (message: unknown) => Promise<unknown>;
 type StdioOptions = { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream };
-type HttpOptions = { host?: string; port?: number; path?: string; health?: () => unknown };
+type HttpOptions = { host?: string; port?: number; path?: string; health?: () => unknown; api?: (request:Request)=>Promise<Response> };
 
 // handlers is {<tool name>: async (args, context) => object | {data, text}}.
 export function createServer({ manifest, handlers, context = {} }: CreateServerOptions) {
@@ -203,7 +203,7 @@ export function serveStdio(handle: Handle, { input = process.stdin, output = pro
 // and the response comes back as JSON. There is no SSE stream and no session
 // resumption, because a client tool server has nothing to stream. The bind
 // address is loopback and a request from anywhere else never arrives.
-export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/mcp', health }: HttpOptions = {}) {
+export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/mcp', health, api }: HttpOptions = {}) {
   if (!LOOPBACK.has(host)) {
     throw new Error(`a tool server binds loopback only, and ${host} is not loopback`);
   }
@@ -224,11 +224,12 @@ export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/m
     if (url.pathname === '/health' && health && request.method === 'GET') {
       return send(response, 200, health());
     }
-    if (url.pathname !== path) return send(response, 404, { error: 'no such path' });
-    if (request.method === 'GET') {
+    const isApi=api&&url.pathname.startsWith('/api/');
+    if (!isApi&&url.pathname !== path) return send(response, 404, { error: 'no such path' });
+    if (!isApi&&request.method === 'GET') {
       return send(response, 405, { error: 'this server carries POST only; there is no event stream' });
     }
-    if (request.method !== 'POST') return send(response, 405, { error: 'POST only' });
+    if (!isApi&&request.method !== 'POST') return send(response, 405, { error: 'POST only' });
 
     let body = '';
     let tooBig = false;
@@ -239,6 +240,7 @@ export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/m
     });
     request.on('end', async () => {
       if (tooBig) return;
+      if(isApi){try{const headers=new Headers();for(const [k,v]of Object.entries(request.headers))if(typeof v==='string')headers.set(k,v);const method=request.method??'GET';const output=await api!(new Request(url,{method,headers,...(['GET','HEAD'].includes(method)?{}:{body})}));response.writeHead(output.status,Object.fromEntries(output.headers));response.end(Buffer.from(await output.arrayBuffer()));}catch{send(response,500,{error:'typed evidence operation failed before readback'});}return;}
       let message = null;
       try { message = JSON.parse(body); } catch {
         return send(response, 400, error(null, -32700, 'the body is not JSON'));
@@ -250,7 +252,7 @@ export function serveHttp(handle: Handle, { host = '127.0.0.1', port, path = '/m
   });
 
   return new Promise<{ server: http.Server; url: string }>((resolve) => {
-    server.listen(port, host, () => resolve({ server, url: `http://${host}:${port}${path}` }));
+    server.listen(port, host, () => resolve({ server, url: `http://${host}:${(server.address() as {port:number}).port}${path}` }));
   });
 }
 

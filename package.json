@@ -1,6 +1,6 @@
 {
   "name": "carbon-runtime",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "The part of Carbon that runs on a box: the store library, the adapters, the reply tool and the process a unit starts.",
   "type": "module",
   "license": "UNLICENSED",
@@ -26,11 +26,13 @@
     "check:telegram": "node bin/carbon-stream check --adapter adapters/telegram --fixtures adapters/telegram/fixtures",
     "check:import": "node bin/carbon-stream check --adapter import/carbon-capture-whatsapp --fixtures import/fixtures",
     "check:ledger": "node bin/carbon-stream check --adapter import/carbon-ledger-sqlite --fixtures import/ledger-fixtures",
-    "release": "node tools/release.ts"
+    "release": "node tools/release.ts",
+    "generate:evidence": "node tools/generate-browser-evidence.ts"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc14",
-    "postgres": "3.4.9"
+    "postgres": "3.4.9",
+    "@pcl/routes": "file:vendor/pcl-routes-0.1.0.tgz"
   },
   "devDependencies": {
     "typescript": "7.0.2"

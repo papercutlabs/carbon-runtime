@@ -312,13 +312,16 @@ workflow, no tools. It publishes nothing.
 
 ## The runtime dependency
 
-Node 22, ES modules, and two runtime dependencies: `@whiskeysockets/baileys`
-for WhatsApp and `postgres` for the agent's on-box PostgreSQL records. Both are
+Node 22, ES modules, and three runtime dependencies: `@whiskeysockets/baileys`
+for WhatsApp, `postgres` for the agent's on-box PostgreSQL records, and `@pcl/routes`
+for the existing generated evidence HTTP/CLI/MCP interface. The routes package is
+the retained `vendor/pcl-routes-0.1.0.tgz` archive, with its exact version and digest
+checked by the release workflow; it needs no registry during installation. The other two are
 pinned in `package.json` and `package-lock.json`. TypeScript is the sole development dependency. The checks use it to
 typecheck; the release tarball does not carry it. The Telegram adapter is the
 counter-example that shows what the runtime rule is for: its channel is JSON
 over HTTPS with no handshake and no session, `fetch` is in Node, and a client
 library would be another runtime dependency in exchange for nothing, so it has
-none. The workflow checks that the two named runtime libraries remain exactly pinned and
+none. The workflow checks that the two registry libraries remain exactly pinned and routes uses the exact vendored archive and
 that TypeScript remains the sole exactly pinned development dependency.
 Why that version, and what it does not fix, is in `adapters/whatsapp/README.md`.

@@ -63,7 +63,7 @@ export type ThreadOpening = {
   cwd: string; model?: string; effort?: string; sandbox?: string; unitId: string; permissions?: string; config?: Record<string, unknown>;
 };
 export type TurnParams = {
-  threadId: string; input: string; text?: string; effort?: string; model?: string;
+  threadId: string; input: string | unknown[]; text?: string; effort?: string; model?: string;
   sandboxPolicy?: unknown; permissions?: string; clientUserMessageId: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
 };
 export type TurnResult = {
@@ -74,6 +74,7 @@ export type TurnResult = {
 export type ChildExit = { code: number | null; signal: string | null };
 export type Session = { stop?(): Promise<unknown>; exit: Promise<ChildExit> };
 export type Harness<S = Session> = {
+  listHooks?(session:S,options:{cwds:string[]}):Promise<unknown>;
   connect(options: {
     binary: string; codexHome: string; providerKeyPath?: string;
     providerKeyEnvName?: string; experimentalApi?: boolean; onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;

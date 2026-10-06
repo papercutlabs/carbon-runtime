@@ -49,7 +49,7 @@ const SHIPPED = [
   // import. `tools/lib` ships and the rest of `tools/` does not: the MCP
   // scaffold is code the reply tool runs, and the identifier scan and the
   // release builder are not.
-  'runtime', 'harness', 'lib', 'records', 'tools/lib'
+  'runtime', 'harness', 'lib', 'records', 'tools/lib', 'generated/browser-evidence', 'vendor/pcl-routes-0.1.0.tgz'
 ];
 
 function main(argv: string[]): number {

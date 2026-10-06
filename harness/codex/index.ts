@@ -85,3 +85,5 @@ export {
 export const HARNESS_KIND = 'codex-app-server';
 
 export { redactNativeReason, nativeFailureEvidence } from './reasons.ts';
+
+export { listHooks, compactThread } from './hooks.ts';

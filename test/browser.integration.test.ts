@@ -89,7 +89,7 @@ test('actual loop consumes fresh ticket, all retained attribution, copy-draft on
   let loop = make();
   const result = await loop.pass([]);
   assert.equal(result.released.length, 1);
-  assert.match(harness.session.turns[0].input, /distinctive-ticket-before/);
+  assert.match(textInput(harness.session.turns[0].input), /distinctive-ticket-before/);
   assert.equal(b.read('B', 'CASE-101').records.at(-1)?.record.direction, 'outbound');
   b.submit('B', packet('2', 'CASE-101', 'B', 'copy_draft'));
   current = 'distinctive-ticket-after';
@@ -97,10 +97,10 @@ test('actual loop consumes fresh ticket, all retained attribution, copy-draft on
   loop.recovering = loop.recover();
   await loop.pass([]);
   const next = harness.session.turns[1];
-  assert.match(next.input, /distinctive-ticket-after/);
-  assert.match(next.input, /A distinctive request 1/);
-  assert.match(next.input, /synthetic stored answer/);
-  assert.match(next.input, /copy_draft/);
+  assert.match(textInput(next.input), /distinctive-ticket-after/);
+  assert.match(textInput(next.input), /A distinctive request 1/);
+  assert.match(textInput(next.input), /synthetic stored answer/);
+  assert.match(textInput(next.input), /copy_draft/);
   assert.equal(reads, 2);
   assert.equal(harness.session.resumed?.length, 1);
   assert.deepEqual(next.sandboxPolicy, { type: 'readOnly', networkAccess: false });
@@ -286,3 +286,5 @@ test('qualified browser thread refuses leftover other-ticket workspace material 
   assert.equal(harness.session.opens?.length ?? 0, 0);
   assert.equal(harness.session.turns.length, 0);
 });
+
+function textInput(value:string|unknown[]):string {assert.equal(typeof value,'string','legacy fixture requires a textual input');return value as string;}

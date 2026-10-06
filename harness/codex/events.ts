@@ -1,5 +1,5 @@
 // One subscription, mapped to a small Carbon vocabulary. Everything the runtime
-// upstream of the harness reacts to is one of these twelve kinds; every other
+// upstream of the harness reacts to is one of these fourteen kinds; every other
 // app-server notification is logged by its method name and dropped, so a Codex
 // version that adds forty notifications adds nothing to reason about here.
 //
@@ -19,6 +19,8 @@ export const VOCABULARY = [
   'tool_server.status',
   'account.updated',
   'account.rate_limits',
+  'hook.started',
+  'hook.completed',
   'harness.error'
 ];
 
@@ -42,6 +44,8 @@ const MAP = new Map([
   // null clear a value; `rateLimitsFrom` in session.ts is the one reading of it.
   ['account/updated', 'account.updated'],
   ['account/rateLimits/updated', 'account.rate_limits'],
+  ['hook/started','hook.started'],
+  ['hook/completed','hook.completed'],
   ['error', 'harness.error']
 ]);
 

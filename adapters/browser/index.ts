@@ -1,3 +1,4 @@
+import type { EvidenceReference } from '../../lib/browser-evidence.ts';
 // Trusted server input for an attributed ticket conversation. The companion
 // authenticates the consultant; this adapter never treats a browser claim as a grant.
 import crypto from 'node:crypto';
@@ -9,7 +10,7 @@ export type BrowserPacket = {
   account: string; ticket_key: string; submission_id: string;
   consultant: { id: string; name: string };
   request_kind?: 'investigate' | 'follow_up' | 'copy_draft';
-  input_kind?: 'start' | 'message'; attachment_ids?: string[];
+  input_kind?: 'start' | 'message'; attachment_ids?: string[]; references?: EvidenceReference[];
   body: string; accepted_at: string; position: string;
 };
 type Context = { store: Store; agent: string; account: string; items?: BrowserPacket[] };
@@ -35,7 +36,11 @@ function validateBrowserContent(packet: BrowserPacket) {
   if (packet.input_kind !== undefined && !['start', 'message'].includes(packet.input_kind)) refuse('input_kind', 'unknown input kind');
   if (packet.input_kind !== undefined && packet.request_kind !== undefined) refuse('request_kind', 'ordinary chat must not carry a legacy request kind');
   validateBrowserFileIds(packet);
-  if (typeof packet.body !== 'string' || (packet.body.trim().length === 0 && packet.input_kind !== 'start' && !(packet.attachment_ids?.length)) || Buffer.byteLength(packet.body) > 128 * 1024) refuse('body', 'message is empty or exceeds 128 KiB');
+  if(packet.references!==undefined&&(!Array.isArray(packet.references)||packet.references.length>100))refuse('references','references must be a bounded list');
+  validateBrowserBody(packet);
+}
+function validateBrowserBody(packet: BrowserPacket) {
+  if (typeof packet.body !== 'string' || (packet.body.trim().length === 0 && packet.input_kind !== 'start' && !(packet.attachment_ids?.length) && !(packet.references?.length)) || Buffer.byteLength(packet.body) > 128 * 1024) refuse('body', 'message is empty or exceeds 128 KiB');
 }
 function validateBrowserFileIds(packet: BrowserPacket) {
   if (packet.attachment_ids !== undefined && (!Array.isArray(packet.attachment_ids) || packet.attachment_ids.length > 100 || new Set(packet.attachment_ids).size !== packet.attachment_ids.length)) refuse('attachment_ids', 'attachment identities are malformed or duplicated');
@@ -54,6 +59,7 @@ export function browserPacket(packet: BrowserPacket): BrowserPacket {
     ...(packet.request_kind === undefined ? {} : { request_kind: packet.request_kind }),
     ...(packet.input_kind === undefined ? {} : { input_kind: packet.input_kind }),
     ...(packet.attachment_ids === undefined ? {} : { attachment_ids: [...packet.attachment_ids] }),
+    ...(packet.references === undefined ? {} : { references: structuredClone(packet.references) }),
     body: packet.body, accepted_at: packet.accepted_at, position: packet.position };
 }
 export function listPending(context: Context) {
@@ -79,7 +85,7 @@ export function payload(context: Context, packets: BrowserPacket[]) {
       sender_id: packet.consultant.id, sender_name: packet.consultant.name, received_at: packet.accepted_at,
       body: packet.body, attachments: [], historical: false, disposition: 'captured',
       adapter_fields: { ticket_key: packet.ticket_key, submission_id: packet.submission_id, ...(packet.request_kind === undefined ? {} : { request_kind: packet.request_kind }),
-        ...(packet.input_kind === undefined ? {} : { input_kind: packet.input_kind }), attachment_ids: packet.attachment_ids ?? [] }
+        ...(packet.input_kind === undefined ? {} : { input_kind: packet.input_kind }), attachment_ids: packet.attachment_ids ?? [], references: packet.references ?? [] }
     };
     return { record, raw: JSON.stringify(packet), cursor: { kind: 'message' as const, position: packet.position }, attachments: [] };
   });

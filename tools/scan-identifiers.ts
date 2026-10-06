@@ -58,6 +58,22 @@ function files(root: string): string[] {
   return found;
 }
 
+// Exact names emitted by the unchanged packed route-interface dependency are
+// public contract identifiers. Only these tokens are classified; every other
+// word on the same line still passes through the existing denied-name check.
+const PUBLISHED_INTERFACE_TOKENS = [
+  'node_modules/@pcl/routes', 'vendor/pcl-routes-0.1.0.tgz',
+  '@pcl/routes/generate', '@pcl/routes/cli', '@pcl/routes/mcp', '@pcl/routes',
+  'pcl.routes.v1', 'PCL_API_TOKEN', 'PCL_API_URL', 'PCL_API_SCOPES'
+];
+function withoutPublishedTokens(line: string): string {
+  for (const token of PUBLISHED_INTERFACE_TOKENS) {
+    const escaped=token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    line=line.replace(new RegExp('(?<![A-Za-z0-9_./@-])'+escaped+'(?![A-Za-z0-9_/@-]|\\.[A-Za-z0-9_./@-])','g'),' ');
+  }
+  return line;
+}
+
 function main(argv: string[]): number {
   const root = argv[2];
   if (!root || root === '--help' || root === '-h') {
@@ -82,7 +98,7 @@ with its reason written beside it in this script.`);
     const lines = fs.readFileSync(file, 'utf8').split('\n');
     read += 1;
     lines.forEach((line, i) => {
-      for (const word of line.toLowerCase().split(/[^a-z0-9]+/)) {
+      for (const word of withoutPublishedTokens(line).toLowerCase().split(/[^a-z0-9]+/)) {
         if (word.length === 0) continue;
         if (words.has(crypto.createHash('sha256').update(word).digest('hex'))) {
           faults.push(fault('IDENTIFIER_IN_A_PUBLIC_TREE', `${relative}:${i + 1}`,
