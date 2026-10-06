@@ -4,7 +4,9 @@ import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import { nativeFailureEvidence } from '../harness/codex/index.ts';
 import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string; stopping?: () => boolean; prepareBrowserTurn?: BrowserPreparation };
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string; stopping?: () => boolean; prepareBrowserTurn?: BrowserPreparation; browserThreadOptions?: BrowserThreadOptions };
+export type BrowserThreadOptions = (input: { conversationId: string; workspace: BrowserWorkspace }) => { permissions: string; config?: Record<string, unknown> };
+type BrowserActive = { conversationId: string; releaseId: string; threadId: string; turnId: string | null; ended: boolean; permissions?: string; workspace: BrowserWorkspace; updates: Map<string, { phase: unknown; text: string }> };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
@@ -26,8 +28,8 @@ type EnsureReplyOptions = TurnIdentity & { records?: MessageRecord[]; result: Tu
 //             owes: a reply written and never sent, a release opened and never
 //             answered, a send whose fate nobody knows.
 //   capture   list what is pending past the cursors, write it, move the cursors.
-//   release   gather legacy eligible records into one turn; each browser
-//             submission keeps its own serial release and reply identity,
+//   release   gather legacy eligible records into one turn; legacy browser requests keep individual releases; ordinary browser
+//             inputs accepted during a turn are steered into its ending,
 //             write the release on each before the turn starts, run the turn,
 //             write the completion.
 //   deliver   send the outbound records the reply tool wrote, write back every
@@ -36,7 +38,10 @@ type EnsureReplyOptions = TurnIdentity & { records?: MessageRecord[]; result: Tu
 // Nothing here knows what a channel is. The adapter is the channel and the
 // declaration is the policy.
 
+import { placeGuidance } from './guidance.ts';
 import crypto from 'node:crypto';
+import { readBrowserActivity, writeBrowserActivity, type BrowserActivity } from './browser-activity.ts';
+import { browserWorkspace, materializeBrowserAttachments, createBrowserEvidenceWriter, type BrowserWorkspace } from './browser-files.ts';
 import { browserHistory, type BrowserPreparation } from './browser.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -208,6 +213,7 @@ export function releaseIdFor(recordOrRecords: RenderRecords) {
 // start and its end. The first real message on a box was answered exactly that
 // way: a completed turn, a good answer, and nothing that ever left the machine.
 export function replyInstruction(record: RenderRecord, releaseId: string) {
+  if (record.source === 'browser' && record.adapter_fields?.input_kind) return `Keep public work updates brief and useful; describe checks or blocks without private reasoning. Reply by calling the reply tool once with ordinary text, optional metadata and output paths, conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}. Drafts are labelled for review and copy; nothing is sent to a client.`;
   return `Reply by calling the reply tool once, with conversation_id ${JSON.stringify(record.conversation_id)} and request_id ${JSON.stringify(releaseId)}. Nothing you write outside that tool call reaches anyone.`;
 }
 
@@ -542,11 +548,16 @@ export class ReleaseLoop<S = Session> {
   declare collectedSynced: boolean;
   declare recordsActionUrl: string | undefined;
   declare stopping: () => boolean;
+  declare browserThreadOptions: BrowserThreadOptions | undefined;
+  browserActive: BrowserActive | null = null;
+  browserDelivery: Promise<void> = Promise.resolve();
+  browserPending = new Map<string, MessageRecord>();
+  browserPermissions = new Map<string, { permissions: string; config?: Record<string, unknown> }>();
 
   constructor({
     declaration, channel, store, storeDir, adapter, harness, session,
     agent, checkout, work, teach = null, log = () => {}, now = () => Date.now(), sandboxDeny = null,
-    afterTurn = () => {}, probe = async () => false, recordsActionUrl, stopping = () => false, prepareBrowserTurn
+    afterTurn = () => {}, probe = async () => false, recordsActionUrl, stopping = () => false, prepareBrowserTurn, browserThreadOptions
   }: LoopOptions<S>) {
     if (!work) {
       throw new RuntimeFault(fault('WORK_DIR_UNNAMED', 'ReleaseLoop.work',
@@ -555,13 +566,16 @@ export class ReleaseLoop<S = Session> {
     }
     this.declaration = declaration;
     this.prepareBrowserTurn = prepareBrowserTurn;
+    this.browserThreadOptions = browserThreadOptions;
     if (channel.kind === 'browser') {
       const wrong = declaration.unit_of_work?.kind !== 'conversation' || channel.default_conversation_kind !== 'ops'
         || declaration.records?.enabled === true || declaration.teaching?.enabled === true
-        || declaration.sandbox?.mode !== 'read-only' || declaration.sandbox?.network !== false;
+        || !['read-only', 'workspace-write'].includes(declaration.sandbox?.mode ?? '') || declaration.sandbox?.network !== false;
       if (wrong) throw new RuntimeFault(fault('BROWSER_BOUNDARY_UNQUALIFIED', channel.account,
-        'browser turns require conversation units, ops rooms, read-only closed-network sandbox and disabled model records/teaching',
+        'browser turns require conversation units, ops rooms, a closed-network sandbox and disabled model records/teaching',
         'correct the browser declaration and qualify installed shell/SQL negative controls'));
+      if (declaration.sandbox?.mode === 'workspace-write' && !browserThreadOptions) throw new RuntimeFault(fault('BROWSER_READ_PROFILE_ABSENT', channel.account,
+        'browser analysis requires a trusted per-ticket native read permission profile', 'bind browserThreadOptions and qualify its actual native read/write/deny enforcement'));
       if (this.sandboxDeny && !this.sandboxDeny.browser) throw new RuntimeFault(fault('BROWSER_SANDBOX_DENY_UNQUALIFIED', this.sandboxDeny.file,
         'browser isolation must deny authoritative store and native sessions', 'place browser-qualified requirements through the host contract'));
     }
@@ -620,6 +634,132 @@ export class ReleaseLoop<S = Session> {
     };
   }
 
+  listenBrowserInputs() {
+    return this.store.subscribeBrowserChanges((event) => {
+      if (event.kind !== 'capture' || event.direction !== 'inbound' || this.channel.kind !== 'browser') return;
+      const record = this.store.read(event.conversation_id, event.message_id, event.revision);
+      if (record && record.account === this.channel.account) this.acceptBrowserInput(record);
+    });
+  }
+
+  // One chain delivers already captured ordinary input beside the awaited turn.
+  // The callback never chooses a native target: this process owns that identity.
+  acceptBrowserInput(record: MessageRecord) {
+    if (this.channel.kind !== 'browser' || record.adapter_fields?.input_kind !== 'message' || record.release) return;
+    this.browserPending.set(record.message_id, record);
+    this.browserDelivery = this.browserDelivery.then(() => this.deliverBrowserInputs()).catch((error) => {
+      this.log({ event: 'browser.delivery.failed', ...nativeFailureEvidence(error) });
+    });
+  }
+
+  writtenBrowserReply(releaseId: string) {
+    const fence = this.store.readRequest(releaseId);
+    return fence ? this.store.read(fence.conversation_id, fence.message_id, fence.revision) : null;
+  }
+
+  retainExcludedBrowserInput(record: MessageRecord, reply: MessageRecord) {
+    const reason = fault('BROWSER_REPLY_INPUT_NOT_INCLUDED', record.platform_message_id,
+      'native input delivery overlaps a written reply whose accepted submission membership excludes this input',
+      'inspect the native/input receipts before deciding whether a continuation is due; do not replay blindly');
+    this.store.annotate(record, { model_effect: 'uncertain', browser_delivery: { ...record.adapter_fields?.browser_delivery as object,
+      phase: 'uncertain', response_id: null, excluded_response_id: reply.message_id, reason } });
+    return reason;
+  }
+
+  async deliverBrowserInputs() {
+    const active = this.browserActive;
+    if (!active?.turnId || active.ended) return;
+    for (const [id, captured] of this.browserPending) {
+      if (captured.conversation_id !== active.conversationId) continue;
+      this.browserPending.delete(id);
+      const record = this.store.read(captured.conversation_id, id, captured.revision)!;
+      if (record.release || (record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain') continue;
+      if (!this.harness.steer) {
+        // Absence is known before any request. Ordinary idle release remains due.
+        this.store.annotate(record, { browser_delivery: { phase: 'next_turn', reason: 'the selected harness has no supported steering operation' } });
+        continue;
+      }
+      const attempt = { attempt_id: crypto.randomUUID(), release_id: active.releaseId, native_turn_id: active.turnId,
+        thread_id: active.threadId, phase: 'dispatching', observed_at: new Date(this.now()).toISOString() };
+      this.store.annotate(record, { browser_delivery: attempt });
+      const files = materializeBrowserAttachments(this.store, { conversationId: record.conversation_id,
+        attachments: record.attachments as Attachment[], workspace: active.workspace });
+      const input = 'Keep public work updates brief and useful without private reasoning. This is an attributed ordinary message for the ongoing investigation.\n'
+        + JSON.stringify({ submission_id: record.platform_message_id, sender: { id: record.sender_id, name: record.sender_name }, text: record.body,
+          evidence_files: files, workspace: { evidence: active.workspace.evidence, analysis: active.workspace.analysis, output: active.workspace.output } });
+      try {
+        if (active.ended || this.writtenBrowserReply(active.releaseId)) {
+          this.store.annotate(record, { browser_delivery: { ...attempt, phase: 'next_turn', reason: active.ended ? 'native completion observed before steering dispatch' : 'reply already written before steering dispatch' } });
+          continue;
+        }
+        const response = await this.harness.steer(this.session, { threadId: active.threadId, expectedTurnId: active.turnId,
+          input, clientUserMessageId: `input-${record.message_id}-${record.revision}` });
+        if (!response || typeof response !== 'object' || (response as { turnId?: unknown }).turnId !== active.turnId)
+          throw new RuntimeFault(fault('BROWSER_STEER_ACK_UNKNOWN', record.message_id, 'native steering acknowledgement did not name the expected turn', 'inspect native/shared receipts before any replay'));
+        this.store.release(this.store.read(record.conversation_id, id, record.revision)!, { released_at: new Date(this.now()).toISOString(),
+          thread_id: active.threadId, turn_id: active.releaseId, now: this.now(), hold_applies: false });
+        this.store.annotate(this.store.read(record.conversation_id, id, record.revision)!, { browser_delivery: { ...attempt, phase: 'delivered', acknowledgement: { turnId: active.turnId } } });
+        const reply = this.writtenBrowserReply(active.releaseId);
+        if (reply && !(reply.adapter_fields?.submission_ids as unknown[] | undefined)?.includes(record.platform_message_id)) {
+          const reason = this.retainExcludedBrowserInput(this.store.read(record.conversation_id, id, record.revision)!, reply);
+          this.publishBrowserActivity(active, 'uncertain', reason);
+        } else {
+          this.noteBrowserEffect(active.releaseId, { phase: 'accepted', thread_id: active.threadId, native_turn_id: active.turnId });
+          this.publishBrowserActivity(active, 'running');
+        }
+      } catch (error) {
+        let threadRead: unknown;
+        try { threadRead = await this.harness.readThread?.(this.session, { threadId: active.threadId, includeTurns: true }); } catch { threadRead = null; /* an unavailable native read supplies no terminal rejection proof */ }
+        const events = (this.session as { stream?: { forTurn(threadId: string, turnId: string): unknown[] } }).stream?.forTurn(active.threadId, active.turnId);
+        const verdict = this.harness.classifySteerFailure?.(error, { threadId: active.threadId, expectedTurnId: active.turnId, threadRead, events });
+        const reason = nativeFailureEvidence(error, (this.session as { credentialValues?: string[] }).credentialValues);
+        if (verdict?.delivery === 'definitely_not_delivered') {
+          this.store.annotate(this.store.read(record.conversation_id, id, record.revision)!, { browser_delivery: { ...attempt, phase: 'next_turn', reason, rejection: verdict } });
+        } else {
+          this.store.release(this.store.read(record.conversation_id, id, record.revision)!, { released_at: new Date(this.now()).toISOString(),
+            thread_id: active.threadId, turn_id: active.releaseId, now: this.now(), hold_applies: false });
+          this.store.annotate(this.store.read(record.conversation_id, id, record.revision)!, { model_effect: 'uncertain', browser_delivery: { ...attempt, phase: 'uncertain', reason } });
+          this.publishBrowserActivity(active, 'uncertain', reason);
+        }
+      }
+    }
+  }
+
+  publishBrowserActivity(active: BrowserActive, state: BrowserActivity['state'], reason: unknown = null) {
+    const prior = readBrowserActivity(this.store, active.conversationId).activity;
+    const records = this.store.recordsIn(active.conversationId).filter((one) => one.direction === 'inbound' && one.release?.turn_id === active.releaseId);
+    const uncertain = records.find((record) => (record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain');
+    if (uncertain) {
+      state = 'uncertain';
+      reason ??= (uncertain.adapter_fields?.browser_delivery as { reason?: unknown } | undefined)?.reason ?? prior?.reason;
+    }
+    writeBrowserActivity(this.store, active.conversationId, { state, release_id: active.releaseId, native_turn_id: active.turnId,
+      submission_ids: records.map((one) => one.platform_message_id), update: prior?.release_id === active.releaseId ? prior.update : null, reason });
+  }
+
+  acceptBrowserEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }) {
+    const active = this.browserActive;
+    if (!active || event.threadId !== active.threadId || event.turnId !== active.turnId) return;
+    if (event.kind === 'turn.completed') active.ended = true;
+    if (!['item.started', 'item.completed', 'message.delta'].includes(String(event.kind))) return;
+    const params = event.params as { itemId?: unknown; delta?: unknown; item?: { id?: unknown; type?: unknown; phase?: unknown; text?: unknown } } | null;
+    const id = params?.item?.id ?? params?.itemId;
+    if (typeof id !== 'string') return;
+    const item = active.updates.get(id) ?? { phase: null, text: '' };
+    if (event.kind === 'message.delta') {
+      if (typeof params?.delta === 'string') item.text = (item.text + params.delta).slice(0, 16384);
+    } else {
+      if (params?.item?.type !== 'agentMessage') return;
+      item.phase = params.item.phase;
+      if (typeof params.item.text === 'string' && params.item.text.length) item.text = params.item.text.slice(0, 16384);
+    }
+    active.updates.set(id, item);
+    if (item.phase !== 'commentary' || !item.text.length) return;
+    const update = { item_id: id, text: item.text, observed_at: new Date(this.now()).toISOString() };
+    const current = readBrowserActivity(this.store, active.conversationId).activity;
+    if (current) writeBrowserActivity(this.store, active.conversationId, { ...current, update });
+  }
+
   // ---- the harness thread -------------------------------------------------
 
   // One thread per unit. A unit whose thread record shows no completed turn gets
@@ -628,7 +768,7 @@ export class ReleaseLoop<S = Session> {
   // free.
   async threadFor(unitId: string): Promise<unknown> {
     if (this.sandboxDeny) checkSandboxDeny(this.sandboxDeny, 'before a thread was opened or resumed');
-    if (this.channel.kind === 'browser' && this.sandboxDeny) {
+    if (this.channel.kind === 'browser' && this.sandboxDeny && this.declaration.sandbox?.mode === 'read-only') {
       const unexpected = fs.readdirSync(this.work).filter((name) => name !== 'AGENTS.md' && name !== '.agents');
       if (unexpected.length > 0) throw new RuntimeFault(fault('BROWSER_WORKSPACE_NOT_ISOLATED', this.work,
         'the browser read-only working directory contains material beyond the installed client guidance',
@@ -638,11 +778,16 @@ export class ReleaseLoop<S = Session> {
     if (this.threads.has(unitId)) return this.threads.get(unitId);
     // Thread state is not schema-validated. These local operation fields preserve its old use.
     const existing = this.store.readThread(unitId) as { thread_id?: unknown; completed_turns: number } | null;
+    const workspace = this.channel.kind === 'browser' && this.declaration.sandbox?.mode === 'workspace-write'
+      ? browserWorkspace({ work: this.work, conversationId: unitId, checkout: this.checkout }) : null;
+    if (workspace) placeGuidance({ work: workspace.analysis, checkout: this.checkout, log: this.log });
+    const permission = workspace ? this.browserThreadOptions!({ conversationId: unitId, workspace }) : null;
+    if (permission) this.browserPermissions.set(unitId, permission);
     const opening = {
-      cwd: this.work,
+      cwd: workspace?.analysis ?? this.work,
       model: this.declaration.model,
       effort: this.declaration.effort,
-      sandbox: this.declaration.sandbox?.mode,
+      ...(permission ? { permissions: permission.permissions, config: permission.config } : { sandbox: this.declaration.sandbox?.mode }),
       unitId
     };
     let threadId;
@@ -653,7 +798,7 @@ export class ReleaseLoop<S = Session> {
     } else {
       const record = await this.harness.openThread(this.session, opening);
       threadId = record.thread_id;
-      this.store.writeThread(unitId, { ...record, completed_turns: 0, turns: [] });
+      this.store.writeThread(unitId, { ...this.store.readThread(unitId), ...record, completed_turns: 0, turns: [] });
       this.log({ event: 'thread.opened', unit_id: unitId, thread_id: threadId });
     }
     this.threads.set(unitId, threadId);
@@ -674,7 +819,13 @@ export class ReleaseLoop<S = Session> {
     }
     this.holdFaults = this.harness.holdsRelease(this.declaration, statuses);
     this.toolStatusStale = false;
-    if (this.holdFaults.length > 0) this.log({ event: 'tool_server.hold', faults: this.holdFaults });
+    if (this.holdFaults.length > 0) {
+      this.log({ event: 'tool_server.hold', faults: this.holdFaults });
+      if (this.channel.kind === 'browser') {
+        for (const record of this.store.rebuild().filter((one) => one.source === 'browser' && one.account === this.channel.account && one.direction === 'inbound' && !one.release))
+          writeBrowserActivity(this.store, record.conversation_id, { state: 'accepted', release_id: null, native_turn_id: null, submission_ids: [record.platform_message_id], update: null, reason: this.holdFaults });
+      }
+    }
     return statuses;
   }
 
@@ -781,6 +932,18 @@ export class ReleaseLoop<S = Session> {
   // own files say a turn was interrupted; only the store says whether the client
   // got an answer.
   recover() {
+    if (this.channel.kind === 'browser') {
+      for (const record of this.store.rebuild()) {
+        const intent = record.adapter_fields?.browser_delivery as { phase?: string } | undefined;
+        if (record.source === 'browser' && record.account === this.channel.account && intent?.phase === 'dispatching') {
+          const reason = 'process ended after durable steering intent; delivery outcome is unknown';
+          this.store.annotate(record, { model_effect: 'uncertain', browser_delivery: { ...intent, phase: 'uncertain', reason } });
+          const prior = readBrowserActivity(this.store, record.conversation_id).activity;
+          writeBrowserActivity(this.store, record.conversation_id, { state: 'uncertain', release_id: prior?.release_id ?? record.release?.turn_id ?? null,
+            native_turn_id: prior?.native_turn_id ?? null, submission_ids: [...new Set([...(prior?.submission_ids ?? []), record.platform_message_id])], update: prior?.update ?? null, reason });
+        }
+      }
+    }
     // A claimed send may have reached the channel just before this process
     // died. Its pending file alone does not prove absence, so a restart must
     // read the channel before any retry. Keep the claim for reconciliation.
@@ -813,6 +976,7 @@ export class ReleaseLoop<S = Session> {
       if (replies.some((r) => r.delivery?.status === 'sent')) {
         const completedAt = new Date(this.now()).toISOString();
         for (const record of records) {
+          if ((record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain') { unknown.add(releaseId); continue; }
           this.store.completeRelease(record, completedAt);
           done.push(record.message_id);
         }
@@ -945,7 +1109,7 @@ export class ReleaseLoop<S = Session> {
     };
 
     for (const record of records) {
-      if (this.channel.kind === 'browser' && this.store.recordsIn(record.conversation_id).some((other) => other.release && !other.release.completed_at && other.adapter_fields?.model_effect === 'uncertain')) {
+      if (this.channel.kind === 'browser' && this.store.recordsIn(record.conversation_id).some((other) => other.adapter_fields?.model_effect === 'uncertain' && (!other.release || !other.release.completed_at))) {
         held.push(record.message_id);
         continue;
       }
@@ -983,9 +1147,14 @@ export class ReleaseLoop<S = Session> {
     for (const group of groups) {
       if (this.stopping()) break;
       if (this.channel.kind === 'browser' && this.store.recordsIn(group.records[0].conversation_id)
-        .some((other) => other.release && !other.release.completed_at && other.adapter_fields?.model_effect === 'uncertain')) {
+        .some((other) => other.adapter_fields?.model_effect === 'uncertain' && (!other.release || !other.release.completed_at))) {
         held.push(...group.records.map((record) => record.message_id));
         continue;
+      }
+      if (this.channel.kind === 'browser' && !group.reissue) {
+        group.records = group.records.map((record) => this.store.read(record.conversation_id, record.message_id, record.revision)!)
+          .filter((record) => !record.release && (record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase !== 'uncertain');
+        if (!group.records.length) continue;
       }
       let outcome;
       try {
@@ -1052,7 +1221,7 @@ export class ReleaseLoop<S = Session> {
     releaseId ??= releaseIdFor(records);
     const messageIds = records.map((r) => r.message_id);
 
-    const input = turnInput(records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration });
+    const input = turnInput(this.channel.kind === 'browser' && record.adapter_fields?.input_kind ? records.map((one) => ({ ...one, attachments: [] })) : records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration });
     // Written before the turn, always. A restart reads this and knows the model
     // was asked; the record's own turn_id is the release id, because that is the
     // only identifier that exists before turn/start and it is the one the reply
@@ -1099,6 +1268,9 @@ export class ReleaseLoop<S = Session> {
       }
     }
     const { result, completedAt } = taken;
+    if (this.channel.kind === 'browser') {
+      records.splice(0, records.length, ...this.store.recordsIn(record.conversation_id).filter((one) => one.direction === 'inbound' && one.release?.turn_id === releaseId));
+    }
 
     // The status is recorded verbatim. `failed` is the model's own permanent
     // refusal of this input, so it closes the release, marks the record and takes
@@ -1143,7 +1315,24 @@ export class ReleaseLoop<S = Session> {
     // And a spoken turn in the management conversation is not a recorded one. The
     // reply written there is held where it is until this is answered.
     const teach = await this.ensureTeachCheck(record, { unitId, threadId, releaseId });
-    for (const one of records) this.store.completeRelease(one, completedAt);
+    const acceptedReply = this.channel.kind === 'browser' ? this.writtenBrowserReply(releaseId) : null;
+    for (let index = 0; index < records.length; index++) {
+      let one = records[index];
+      if ((one.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain') continue;
+      if (acceptedReply && one.adapter_fields?.input_kind && !(acceptedReply.adapter_fields?.submission_ids as unknown[] | undefined)?.includes(one.platform_message_id)) {
+        this.retainExcludedBrowserInput(one, acceptedReply);
+        records[index] = this.store.read(one.conversation_id, one.message_id, one.revision)!;
+        continue;
+      }
+      this.store.completeRelease(one, completedAt);
+      if (this.channel.kind === 'browser') this.store.annotate(this.store.read(one.conversation_id, one.message_id, one.revision)!, { browser_delivery: { ...(one.adapter_fields?.browser_delivery as object ?? {}), phase: reply.outcome === 'parked-no-reply' ? 'failed' : 'completed', response_id: this.store.readRequest(releaseId)?.message_id ?? null } });
+    }
+    if (this.channel.kind === 'browser') {
+      const prior = readBrowserActivity(this.store, unitId).activity;
+      const uncertain = records.some((one) => (one.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain');
+      if (prior) writeBrowserActivity(this.store, unitId, { ...prior, state: uncertain ? 'uncertain' : reply.outcome === 'parked-no-reply' ? 'failed' : 'completed',
+        reason: reply.outcome === 'parked-no-reply' ? this.store.read(record.conversation_id, record.message_id, record.revision)?.adapter_fields?.park_faults ?? { code: 'REPLY_ABSENT' } : prior.reason });
+    }
     return {
       message_ids: messageIds, message_id: record.message_id, release_id: releaseId,
       status: result.status, turn_id: result.turn_id, reply: reply.outcome,
@@ -1159,23 +1348,43 @@ export class ReleaseLoop<S = Session> {
     // can call it, and told nothing again after, so a call that arrives outside a
     // turn writes a record that claims no release rather than the last one.
     if (this.channel.kind === 'browser') {
-      const records = this.store.rebuild().filter((record) => record.direction === 'inbound' && record.release?.turn_id === releaseId);
-      input = await this.prepareBrowserInput(records, releaseId, unitId, input);
+      const workspace = browserWorkspace({ work: this.work, conversationId: unitId, checkout: this.checkout });
+      this.browserActive = { conversationId: unitId, releaseId, threadId, turnId: null, ended: false, workspace,
+        permissions: this.browserPermissions.get(unitId)?.permissions, updates: new Map() };
+      this.publishBrowserActivity(this.browserActive, 'accepted');
+      const records = this.store.recordsIn(unitId).filter((record) => record.direction === 'inbound' && record.release?.turn_id === releaseId);
+      try { input = await this.prepareBrowserInput(records, releaseId, unitId, input); } catch (error) {
+        if (this.browserActive) this.publishBrowserActivity(this.browserActive, 'failed', nativeFailureEvidence(error));
+        this.browserActive = null;
+        for (const record of records) { this.store.annotate(record, { model_effect: 'not_started' }); this.store.completeRelease(record, new Date(this.now()).toISOString()); }
+        throw error;
+      }
     }
     this.teach?.setRelease(releaseId);
-    if (this.channel.kind === 'browser') this.store.activeBrowserReply = { conversation_id: unitId, release_id: releaseId };
+    if (this.channel.kind === 'browser') this.store.activeBrowserReply = { conversation_id: unitId, release_id: releaseId, output_root: this.browserActive?.workspace.output };
     if (this.channel.kind === 'browser') this.noteBrowserEffect(releaseId, { phase: 'dispatching', thread_id: threadId });
     let result;
     try {
       result = await this.turnOf({ threadId, input, clientUserMessageId, onStarted: this.channel.kind === 'browser'
-        ? (accepted) => this.noteBrowserEffect(releaseId, { phase: 'accepted', thread_id: accepted.threadId, native_turn_id: accepted.turnId }) : undefined });
+        ? (accepted) => {
+          this.noteBrowserEffect(releaseId, { phase: 'accepted', thread_id: accepted.threadId, native_turn_id: accepted.turnId });
+          if (this.browserActive) { this.browserActive.turnId = accepted.turnId; this.publishBrowserActivity(this.browserActive, 'running'); }
+          for (const record of this.store.recordsIn(unitId)) this.acceptBrowserInput(record);
+        } : undefined });
+      if (this.browserActive) this.browserActive.ended = true;
+      await this.browserDelivery;
+      if (this.browserActive) {
+        const uncertain = this.store.recordsIn(unitId).some((record) => record.release?.turn_id === releaseId && (record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain');
+        this.publishBrowserActivity(this.browserActive, uncertain ? 'uncertain' : result.status === 'completed' ? 'running' : result.status === 'failed' ? 'failed' : 'uncertain', result.error ?? null);
+      }
     } catch (error) {
+      if (this.browserActive) { this.browserActive.ended = true; await this.browserDelivery; this.publishBrowserActivity(this.browserActive, 'uncertain', nativeFailureEvidence(error, (this.session as { credentialValues?: string[] }).credentialValues)); }
       if (this.channel.kind === 'browser') this.noteBrowserEffect(releaseId, { phase: 'uncertain', thread_id: threadId,
         ...nativeFailureEvidence(error, (this.session as { credentialValues?: string[] }).credentialValues) });
       throw error;
     } finally {
       this.teach?.setRelease(null);
-      if (this.channel.kind === 'browser') this.store.activeBrowserReply = null;
+      if (this.channel.kind === 'browser') { this.store.activeBrowserReply = null; this.browserActive = null; }
     }
 
     // The harness reports a completion time the way the protocol gives it, which
@@ -1217,10 +1426,12 @@ export class ReleaseLoop<S = Session> {
     if (!this.prepareBrowserTurn) throw new RuntimeFault(fault('BROWSER_TICKET_READER_ABSENT', record.message_id,
       'browser turn start has no current-ticket reader', 'bind prepareBrowserTurn to the granted live readCurrentTicket operation'));
     const ticketKey = String(record.adapter_fields?.ticket_key ?? '');
+    const workspace = this.browserActive?.workspace ?? browserWorkspace({ work: this.work, conversationId: record.conversation_id, checkout: this.checkout });
+    const files = materializeBrowserAttachments(this.store, { conversationId: record.conversation_id, attachments: records.flatMap((one) => one.attachments) as Attachment[], workspace });
     const snapshot = await this.prepareBrowserTurn({ ticketKey, conversationId: record.conversation_id, unitId,
-      submissionIds: records.map((one) => String(one.adapter_fields?.submission_id)), releaseId, records });
-    const current = snapshot as { data?: { key?: unknown } } | null;
-    if (typeof current?.data?.key === 'string' && current.data.key !== ticketKey) throw new RuntimeFault(fault('BROWSER_TICKET_IDENTITY_MISMATCH', record.message_id,
+      submissionIds: records.map((one) => String(one.adapter_fields?.submission_id)), releaseId, records, workspace, writeEvidence: createBrowserEvidenceWriter(this.store, { conversationId: record.conversation_id, workspace }) });
+    const current = snapshot as { data?: { key?: unknown; ticket?: { key?: unknown } } } | null;
+    if (typeof (current?.data?.ticket?.key ?? current?.data?.key) === 'string' && (current?.data?.ticket?.key ?? current?.data?.key) !== ticketKey) throw new RuntimeFault(fault('BROWSER_TICKET_IDENTITY_MISMATCH', record.message_id,
       'the source snapshot names a different current ticket; no model turn was started',
       'repair the granted current-ticket reader before releasing this submission'));
     const history = browserHistory(this.store, record.conversation_id).map((one) => ({
@@ -1230,8 +1441,8 @@ export class ReleaseLoop<S = Session> {
     }));
     const envelope = { schema: 'carbon.browser-turn.v1', conversation_id: record.conversation_id, unit_id: unitId,
       release_id: releaseId, requests: records.map((one) => ({ submission_id: one.platform_message_id,
-        request_kind: one.adapter_fields?.request_kind, sender: { id: one.sender_id, name: one.sender_name } })),
-      current_ticket: snapshot, conversation_history: history };
+        request_kind: one.adapter_fields?.request_kind ?? null, input_kind: one.adapter_fields?.input_kind ?? null, sender: { id: one.sender_id, name: one.sender_name } })),
+      current_ticket: snapshot, conversation_history: history, workspace: { evidence: workspace.evidence, analysis: workspace.analysis, output: workspace.output }, evidence_files: files };
     const encoded = JSON.stringify(envelope);
     if (Buffer.byteLength(encoded) > 4 * 1024 * 1024) throw new RuntimeFault(fault('BROWSER_CONTEXT_CAPACITY', record.message_id,
       'the complete retained conversation and current-ticket input exceed the explicit 4 MiB envelope limit; no history was dropped',
@@ -1244,6 +1455,7 @@ export class ReleaseLoop<S = Session> {
   noteBrowserEffect(releaseId: string, evidence: Record<string, unknown>) {
     for (const record of this.store.rebuild()) {
       if (record.direction !== 'inbound' || record.release?.turn_id !== releaseId) continue;
+      if (evidence.phase !== 'uncertain' && (record.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase === 'uncertain') continue;
       const previous = record.adapter_fields?.model_effect_evidence as { native_turn_ids?: string[]; dispatch_attempts?: number } | undefined;
       const ids = previous?.native_turn_ids ?? [];
       const nativeIds = typeof evidence.native_turn_id === 'string' && !ids.includes(evidence.native_turn_id) ? [...ids, evidence.native_turn_id] : ids;
@@ -1284,10 +1496,10 @@ export class ReleaseLoop<S = Session> {
       input,
       effort: this.declaration.effort,
       model: this.declaration.model,
-      sandboxPolicy: this.harness.policyFor(this.declaration.sandbox?.mode, {
+      ...(this.browserActive?.permissions ? { permissions: this.browserActive.permissions } : { sandboxPolicy: this.harness.policyFor(this.declaration.sandbox?.mode, {
         writableRoots: this.channel.kind === 'browser' ? [] : [this.storeDir],
         networkAccess: this.declaration.sandbox?.network === true
-      }),
+      }) }),
       clientUserMessageId,
       onStarted,
       timeoutMs: this.declaration.limits?.max_turn_ms
@@ -1488,7 +1700,9 @@ export class ReleaseLoop<S = Session> {
           .filter((r) => r.direction === 'inbound'
             && r.release?.turn_id === record.delivery!.request_id // The preceding filter or status check established delivery; preserve direct access to its stored fields.
             && !r.release!.completed_at); // The matching release id condition establishes this release before its completion is read.
-        for (const one of answered) this.store.completeRelease(one, completedAt);
+        for (const one of answered) {
+          if ((one.adapter_fields?.browser_delivery as { phase?: string } | undefined)?.phase !== 'uncertain') this.store.completeRelease(one, completedAt);
+        }
       }
     }
     return sent;

@@ -4,12 +4,10 @@ A trusted companion server authenticates each consultant and supplies a
 `browserPacket` after its ticket grant check. The browser does not own the sender,
 account, ticket mapping, acceptance time or cursor. Canonical conversation identity
 is `browserConversationId(account,ticketKey)`. One conversation is one Carbon unit.
-Each accepted browser submission gets its own release and reply; the existing loop
-serialises those releases for the ticket. Legacy quiet-channel batching is unchanged.
+Legacy browser requests retain individual serial releases. A deliberate `input_kind: start` begins ordinary chat; `input_kind: message` captured while its native turn runs is steered into that turn. Its single ending carries every associated submission identity. Legacy quiet-channel batching is unchanged.
 Declare the channel as `browser`, its default room as `ops`, and the unit as
 `conversation`. This lets consultants act as operators without a customer takeover
-hold. Model records and teaching stay disabled. The read-only model policy and
-closed network require browser-qualified host read-denials before client use.
+hold. Model records and teaching stay disabled. Ordinary chat requires a launcher-supplied named native permission profile with read-only evidence, writable analysis/output and denied private authority paths. Closed network and configured write roots alone do not prove read isolation; qualify actual installed enforcement before model use.
 
 `runtime/browser.ts` exports `createBrowserBridge({store,agent,account,authorize})`.
 Its trusted synchronous authorizer checks the current ticket grant for every
@@ -77,3 +75,33 @@ browser reads with a labelled scripted harness. It proves those component handof
 and bad-case refusals. Actual Linux shell/SQL isolation, account authority, native
 model consumption through compaction and acceptance-before-crash remain installed
 host proofs. Do not label fixture evidence as those proofs.
+
+
+Ordinary chat and files
+-----------------------
+
+The trusted packet adds `input_kind: start | message` and optional `attachment_ids`.
+Do not combine it with a legacy `request_kind`. A start may have empty text; a
+message needs text or an accepted file. Exact retries retain text, sender, input
+kind and file IDs. `stageAttachment` stages bytes under the authenticated actor
+and conversation without releasing a turn. `readAttachment` exposes metadata
+with `includeBytes: false`; default reads verify the exact stored bytes. Staged
+files remain private to their actor until durably bound to an accepted message.
+Missing bytes retain metadata with state `missing`. Accepted artifacts use the
+same read operation and remain restricted to the authorised conversation.
+
+`read` and `watch` accept `activityAfter` alongside the record cursor and return
+`activity_cursor` plus shared activity. Both cursors must advance or a watch waits
+for an owned Store/file notification or its bounded timeout. Activity projects
+accepted/running/completed/failed/uncertain, exact release/native-turn IDs,
+associated submissions and the latest structurally public commentary item.
+Unknown-phase deltas, reasoning items and final-answer items are excluded.
+Native completion alone does not claim an accepted answer; a parked absent reply
+projects failed after the existing single follow-up.
+
+The installed runtime owns capture-driven delivery. Direct supported fixtures
+using `ReleaseLoop` call `listenBrowserInputs()` once and dispose the returned
+unsubscribe. Acknowledged busy messages bind to the active release; definite
+ended-turn rejection retains them for a later same-conversation turn. Unknown
+delivery and restart after dispatch intent retain visible uncertainty without
+blind replay. `operatorRead` exposes these existing structural receipts.

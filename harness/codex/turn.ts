@@ -13,6 +13,7 @@ import { fault } from '../../lib/faults.ts';
 import { HarnessFault } from './session.ts';
 import type { Session } from './session.ts';
 import type { HarnessEvent } from './events.ts';
+import { RpcError } from './protocol.ts';
 
 type TurnItem = { item?: TurnItem; type?: string; text?: string; content?: { text?: string }[]; [key: string]: unknown };
 type TurnRecord = {
@@ -20,8 +21,9 @@ type TurnRecord = {
   error?: unknown; items?: TurnItem[]; itemsView?: string;
 };
 type PolicyOptions = { writableRoots?: string[]; networkAccess?: boolean };
-type TurnOptions = {
+export type TurnOptions = {
   threadId?: string; input: string | unknown[]; effort?: string; sandboxPolicy?: unknown;
+  permissions?: string;
   clientUserMessageId?: string; model?: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
 };
 
@@ -70,20 +72,21 @@ function awaitCompletion(session: Session, threadId: string, turnId: string, { t
     // The completion payload remains wire data; only its correlation ids were checked by forTurn.
     if (already) return resolve(already.params?.turn as TurnRecord);
 
-    const previous = session.stream.onEvent;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
     const done = <T>(fn: (value: T) => void, value: T) => {
-      session.stream.onEvent = previous;
+      if (settled) return;
+      settled = true;
+      unsubscribe();
       if (timer) clearTimeout(timer);
       fn(value);
     };
-    session.stream.onEvent = (event) => {
-      previous(event);
+    const unsubscribe = session.stream.subscribe((event) => {
       if (event.kind === 'turn.completed' && event.threadId === threadId && event.params?.turn?.id === turnId) {
         // Matching id establishes correlation, not schema validity of the carried turn.
         done(resolve, event.params.turn as TurnRecord);
       }
-    };
+    });
     session.exit.then(({ code, signal }) => done(reject, new HarnessFault(
       fault('HARNESS_CHILD_EXITED_MID_TURN', `${threadId}:${turnId}`,
         `the app-server exited with code ${code} signal ${signal} before the turn completed`,
@@ -101,18 +104,30 @@ function awaitCompletion(session: Session, threadId: string, turnId: string, { t
 // after a restart carries the same value; whether the app-server deduplicates on it
 // is recorded in harness/codex/verifications.
 export async function turn(session: Session, {
-  threadId, input, effort, sandboxPolicy, clientUserMessageId, model, timeoutMs, onStarted
+  threadId, input, effort, sandboxPolicy, permissions, clientUserMessageId, model, timeoutMs, onStarted
 }: TurnOptions) {
   if (!threadId) {
     throw new HarnessFault(fault('HARNESS_THREAD_ID_ABSENT', 'turn/start.threadId',
       'a turn was asked for with no thread', 'open or resume the unit\'s thread first'));
   }
-  if (!sandboxPolicy) {
+  if (permissions && sandboxPolicy) {
+    throw new HarnessFault(fault('HARNESS_PERMISSION_POLICY_CONFLICT', 'turn/start',
+      'permissions and sandboxPolicy cannot be combined; a legacy policy replaces the named profile read restrictions',
+      'send the named permissions profile alone'));
+  }
+  if (permissions && !session.experimentalApi) {
+    throw new HarnessFault(fault('HARNESS_PERMISSION_API_NOT_ENABLED', 'turn/start.permissions',
+      'named turn permission profiles require the explicitly enabled experimental app-server API',
+      'connect with experimentalApi true on the qualified binary and configured profile'));
+  }
+  if (!sandboxPolicy && !permissions) {
     throw new HarnessFault(fault('HARNESS_SANDBOX_POLICY_ABSENT', 'turn/start.sandboxPolicy',
       'a turn was asked for with no sandbox policy, and an omitted policy inherits the last one silently',
       'build the policy with policyFor() from the declaration and pass it on every turn'));
   }
-  const params: { threadId: string; input: unknown[]; sandboxPolicy: unknown; approvalPolicy: string; effort?: string; model?: string; clientUserMessageId?: string } = { threadId, input: inputItems(input), sandboxPolicy, approvalPolicy: 'never' };
+  const params: { threadId: string; input: unknown[]; sandboxPolicy?: unknown; permissions?: string; approvalPolicy: string; effort?: string; model?: string; clientUserMessageId?: string } = { threadId, input: inputItems(input), approvalPolicy: 'never' };
+  if (permissions) params.permissions = permissions;
+  else params.sandboxPolicy = sandboxPolicy;
   if (effort) params.effort = effort;
   if (model) params.model = model;
   if (clientUserMessageId) params.clientUserMessageId = clientUserMessageId;
@@ -253,6 +268,38 @@ export async function steer(session: Session, { threadId, expectedTurnId, input,
   const params: { threadId: string; expectedTurnId: string; input: unknown[]; clientUserMessageId?: string } = { threadId, expectedTurnId, input: inputItems(input) };
   if (clientUserMessageId) params.clientUserMessageId = clientUserMessageId;
   return session.request('turn/steer', params);
+}
+
+// A validation rejection and exact terminal turn evidence together settle the
+// ended-turn race. Transport loss, generic server errors, missing reads and prose
+// never establish that the accepted input was not delivered.
+function nativeRpcCode(error: unknown) {
+  if (!(error instanceof RpcError) || error.rpcError === null || typeof error.rpcError !== 'object' || !('code' in error.rpcError)) return null;
+  return typeof error.rpcError.code === 'number' ? error.rpcError.code : null;
+}
+function terminalTurnStatus(value: unknown, expectedTurnId: string) {
+  if (value === null || typeof value !== 'object' || !('id' in value) || value.id !== expectedTurnId || !('status' in value)) return null;
+  return typeof value.status === 'string' && ['completed', 'interrupted', 'failed'].includes(value.status) ? value.status : null;
+}
+function readThreadTurns(threadRead: unknown, threadId: string) {
+  const thread = threadRead !== null && typeof threadRead === 'object' && 'thread' in threadRead ? threadRead.thread : null;
+  return thread !== null && typeof thread === 'object' && 'id' in thread && thread.id === threadId && 'turns' in thread && Array.isArray(thread.turns) ? thread.turns : [];
+}
+export function classifySteerFailure(error: unknown, { threadId, expectedTurnId, threadRead, events = [] }: {
+  threadId: string; expectedTurnId: string; threadRead?: unknown; events?: HarnessEvent[];
+}) {
+  const rpc = nativeRpcCode(error);
+  const rejection = error instanceof RpcError && error.method === 'turn/steer' && rpc === -32600;
+  let status: string | null = null;
+  for (const event of events) {
+    if (event.kind === 'turn.completed' && event.threadId === threadId && event.turnId === expectedTurnId)
+      status = terminalTurnStatus(event.params?.turn, expectedTurnId) ?? status;
+  }
+  const turn = readThreadTurns(threadRead, threadId).find((value: unknown) => terminalTurnStatus(value, expectedTurnId) !== null);
+  status = terminalTurnStatus(turn, expectedTurnId) ?? status;
+
+  return { delivery: rejection && status !== null ? 'definitely_not_delivered' as const : 'uncertain' as const,
+    expected_turn_status: status, rpc_code: typeof rpc === 'number' ? rpc : null };
 }
 
 // The last resort, not a feature: the plan refuses a mid-turn interrupt of the

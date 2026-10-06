@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import { redactNativeReason } from './reasons.ts';
 import { spawn } from 'node:child_process';
+import { PassThrough, Writable } from 'node:stream';
 import { fault } from '../../lib/faults.ts';
 import { Connection, RpcError } from './protocol.ts';
 import { EventStream } from './events.ts';
@@ -20,12 +21,24 @@ import type { HarnessEvent, NotificationParams } from './events.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 
 type Fault = { code: string; subject: string; problem: string; fix: string };
-type ThreadReply = { thread?: { id?: unknown }; model?: unknown; reasoningEffort?: unknown; cwd?: unknown; approvalPolicy?: unknown; sandbox?: unknown } | null;
-type ConnectOptions = {
+type ThreadReply = { thread?: { id?: unknown }; model?: unknown; reasoningEffort?: unknown; cwd?: unknown; approvalPolicy?: unknown; sandbox?: unknown; activePermissionProfile?: { id?: unknown } | null } | null;
+export type ConnectOptions = {
   binary: string; codexHome: string; providerKeyPath?: string; providerKeyEnvName?: string;
   extraEnv?: Record<string, string>; credentialValues?: string[]; onEvent?: (event: HarnessEvent) => void;
   onStderr?: (chunk: string) => void; onDropped?: (line: string) => void;
   onWire?: (direction: string, line: string) => void;
+  experimentalApi?: boolean;
+  privateEndpoint?: string;
+  attachPrivateEndpoint?: (details: PrivateEndpointDetails) => Promise<PrivateEndpointAttachment>;
+};
+
+export type PrivateEndpointDetails = { endpoint: string; pid: number; binary: string; codexHome: string };
+export type PrivateEndpointAttachment = { close: () => Promise<void> | void; failed?: Promise<unknown> };
+
+export type ThreadOpening = {
+  cwd: string; model?: string; effort?: string; sandbox?: string; permissions?: string;
+  unitId?: string; config?: Record<string, unknown>;
+  developerInstructions?: string;
 };
 
 export const CLIENT_INFO = { name: 'carbon', version: 'increment-3' };
@@ -65,6 +78,9 @@ export class Session {
   threadId: unknown;
   thread: ThreadReply;
   initializeResult: unknown;
+  experimentalApi = false;
+  transportFailure: unknown = null;
+  privateClose: (() => Promise<void>) | null = null;
   exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 
   constructor({ child, connection, stream, binary, codexHome, stderr }: {
@@ -80,7 +96,9 @@ export class Session {
     this.threadId = null;
     this.thread = null;
     this.initializeResult = null;
-    this.exit = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    this.exit = child.exitCode !== null || child.signalCode !== null
+      ? Promise.resolve({ code: child.exitCode, signal: child.signalCode })
+      : new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
   }
 
   request(method: string, params: unknown) {
@@ -99,6 +117,7 @@ export class Session {
       cwd: this.thread?.cwd ?? null,
       approval_policy: this.thread?.approvalPolicy ?? null,
       sandbox: this.thread?.sandbox ?? null,
+      ...(this.thread?.activePermissionProfile ? { active_permission_profile: this.thread.activePermissionProfile } : {}),
       codex_home: this.codexHome,
       binary: this.binary,
       started_at: new Date().toISOString()
@@ -106,9 +125,11 @@ export class Session {
   }
 
   async stop() {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
-    this.child.kill('SIGTERM');
-    await this.exit;
+    if (this.child.exitCode === null && this.child.signalCode === null) {
+      this.child.kill('SIGTERM');
+      await this.exit;
+    }
+    await this.privateClose?.();
   }
 
   kill9() {
@@ -117,10 +138,92 @@ export class Session {
   }
 }
 
+function privateEndpointUrl(endpoint: string) {
+  let url: URL;
+  try { url = new URL(endpoint); } catch { url = new URL('http://invalid'); }
+  if (url.protocol !== 'ws:' || !['127.0.0.1', '[::1]'].includes(url.hostname)
+    || !url.port || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+    throw new HarnessFault(fault('HARNESS_PRIVATE_ENDPOINT_REFUSED', 'connect.privateEndpoint',
+      'the private app-server endpoint must be an explicit loopback WebSocket address and port',
+      'supply ws://127.0.0.1:<owned-port> or ws://[::1]:<owned-port>'));
+  }
+  return url.origin;
+}
+
+async function openPrivateSocket(child: ChildProcessWithoutNullStreams, endpoint: string) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
+    const socket = new WebSocket(endpoint);
+    const opened = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => { socket.close(); resolve(false); }, Math.max(1, deadline - Date.now()));
+      socket.addEventListener('open', () => { clearTimeout(timer); resolve(true); }, { once: true });
+      socket.addEventListener('error', () => { clearTimeout(timer); resolve(false); }, { once: true });
+    });
+    if (opened) return socket;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new HarnessFault(fault('HARNESS_PRIVATE_ENDPOINT_UNAVAILABLE', 'connect.privateEndpoint',
+    'the owned app-server did not open its private WebSocket endpoint within ten seconds',
+    'read the retained native stderr and correct the selected endpoint or binary'));
+}
+
+async function privateTransport(child: ChildProcessWithoutNullStreams, endpoint: string, attach: NonNullable<ConnectOptions['attachPrivateEndpoint']>, binary: string, codexHome: string, startupExit: Promise<void>) {
+  let socket: WebSocket | null = null;
+  let attachment: PrivateEndpointAttachment | null = null;
+  let input = child.stdout;
+  let output = child.stdin;
+  try {
+    socket = await openPrivateSocket(child, endpoint);
+    attachment = await attach({ endpoint, pid: child.pid!, binary, codexHome });
+    if (!attachment || typeof attachment.close !== 'function') throw new Error('the private endpoint owner supplied no close hook');
+    const incoming = new PassThrough();
+    const openedSocket = socket;
+    input = incoming;
+    output = new Writable({ write(chunk, _encoding, callback) {
+      try { openedSocket.send(String(chunk).trimEnd()); callback(); } catch (error) { callback(error as Error); }
+    } });
+    socket.addEventListener('message', (message) => {
+      if (typeof message.data === 'string') incoming.write(message.data + '\n');
+    });
+    socket.addEventListener('close', () => { incoming.destroy(); child.kill('SIGTERM'); });
+    output.on('error', () => { incoming.destroy(); child.kill('SIGTERM'); });
+  } catch (error) {
+    socket?.close();
+    child.kill('SIGTERM');
+    await startupExit;
+    await attachment?.close();
+    throw error;
+  }
+  return { socket, attachment, input, output };
+}
+
+function attachPrivateLifecycle(session: Session, socket: WebSocket, attachment: PrivateEndpointAttachment) {
+  const connectedSocket = socket;
+  const owner = attachment;
+  let release: Promise<void> | null = null;
+  session.privateClose = () => {
+    if (!release) release = Promise.resolve().then(async () => { connectedSocket.close(); await owner.close(); });
+    return release;
+  };
+  session.exit.then(() => { void session.privateClose!().catch(error => { session.transportFailure = error; }); });
+  owner.failed?.then(reason => {
+    session.transportFailure = reason;
+    void session.stop().catch(error => { session.transportFailure = error; });
+  }, reason => {
+    session.transportFailure = reason;
+    void session.stop().catch(error => { session.transportFailure = error; });
+  });
+}
+
+function redactionValues(credentialValues: string[], providerKey: string | undefined, extraEnv?: Record<string, string>) {
+  return [...credentialValues, ...(providerKey ? [providerKey] : []),
+    ...Object.entries(extraEnv ?? {}).filter(([name]) => /TOKEN|SECRET|KEY|CREDENTIAL|PASSWORD|CANARY/.test(name)).map(([, value]) => value)];
+}
+
 // Spawns the app-server and completes the handshake. Does not open a thread; that
 // is `openThread` or `resumeThread`, so a caller that only wants tool status pays
 // for nothing more.
-export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, credentialValues = [], onEvent, onStderr, onDropped, onWire }: ConnectOptions) {
+export async function connect({ binary, codexHome, providerKeyPath, providerKeyEnvName, extraEnv, credentialValues = [], onEvent, onStderr, onDropped, onWire, experimentalApi = false, privateEndpoint, attachPrivateEndpoint }: ConnectOptions) {
   if (!fs.existsSync(codexHome)) {
     throw new HarnessFault(fault('HARNESS_CODEX_HOME_ABSENT', codexHome,
       'the CODEX_HOME directory does not exist, and the harness never creates it',
@@ -142,10 +245,17 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
     }
   }
 
-  const child = spawn(binary, ['app-server', '--stdio'], {
+  const endpoint = privateEndpoint ? privateEndpointUrl(privateEndpoint) : null;
+  if ((endpoint === null) !== (attachPrivateEndpoint === undefined)) {
+    throw new HarnessFault(fault('HARNESS_PRIVATE_ENDPOINT_LIFECYCLE_ABSENT', 'connect.attachPrivateEndpoint',
+      'a private endpoint and its owner lifecycle hook must be supplied together',
+      'supply both options for the qualified private route, or omit both for stdio'));
+  }
+  const child = spawn(binary, ['app-server', ...(endpoint ? ['--listen', endpoint] : ['--stdio'])], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: childEnv({ codexHome, providerKeyEnvName, providerKey, extraEnv })
   });
+  const startupExit = new Promise<void>(resolve => child.once('exit', () => resolve()));
 
   const stderr: string[] = [];
   child.stderr.setEncoding('utf8');
@@ -154,10 +264,13 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
     if (onStderr) onStderr(chunk);
   });
 
+  const transport = endpoint ? await privateTransport(child, endpoint, attachPrivateEndpoint!, binary, codexHome, startupExit)
+    : { input: child.stdout, output: child.stdin, socket: null, attachment: null };
+
   const stream = new EventStream(onEvent);
   const connection = new Connection({
-    input: child.stdout,
-    output: child.stdin,
+    input: transport.input,
+    output: transport.output,
     // The stream keeps raw optional notification fields; it does not treat this wire value as validated.
     onNotification: (method, params) => stream.accept(method, params as NotificationParams),
     onUnparsable: (line) => { if (onDropped) onDropped(line); },
@@ -165,31 +278,60 @@ export async function connect({ binary, codexHome, providerKeyPath, providerKeyE
   });
 
   const session = new Session({ child, connection, stream, binary, codexHome, stderr });
-  session.credentialValues = [...credentialValues, ...(providerKey ? [providerKey] : []),
-    ...Object.entries(extraEnv ?? {}).filter(([name]) => /TOKEN|SECRET|KEY|CREDENTIAL|PASSWORD|CANARY/.test(name)).map(([, value]) => value)];
-  session.initializeResult = await connection.request('initialize', { clientInfo: CLIENT_INFO });
-  connection.notify('initialized', {});
-  return session;
+  session.experimentalApi = experimentalApi;
+  if (transport.socket && transport.attachment) attachPrivateLifecycle(session, transport.socket, transport.attachment);
+  session.credentialValues = redactionValues(credentialValues, providerKey, extraEnv);
+  try {
+    session.initializeResult = await connection.request('initialize', { clientInfo: CLIENT_INFO,
+      ...(experimentalApi ? { capabilities: { experimentalApi: true } } : {}) });
+    connection.notify('initialized', {});
+    return session;
+  } catch (error) {
+    await session.stop();
+    throw error;
+  }
 }
 
 // One thread per unit of work. `sandbox` is the thread's mode; the per-turn
 // sandboxPolicy on turn/start is what actually fences a turn, and turn.mjs sends it
 // every time.
-export async function openThread(session: Session, { cwd, model, effort, sandbox, unitId }: {
-  cwd: string; model?: string; effort?: string; sandbox: string; unitId?: string;
-}) {
-  const params: { cwd: string; model?: string; sandbox: string; approvalPolicy: string; ephemeral: boolean; config?: { model_reasoning_effort: string } } = {
+function permissionSelection(session: Session, permissions?: string, sandbox?: string) {
+  if (permissions && sandbox) throw new HarnessFault(fault('HARNESS_PERMISSION_POLICY_CONFLICT', 'thread.permissions',
+    'permissions and sandbox cannot be combined; a legacy sandbox replaces the named profile read restrictions',
+    'send the named permissions profile alone'));
+  if (permissions && !session.experimentalApi) throw new HarnessFault(fault('HARNESS_PERMISSION_API_NOT_ENABLED', 'thread.permissions',
+    'named thread permission profiles require the explicitly enabled experimental app-server API',
+    'connect with experimentalApi true on the qualified binary and configured profile'));
+}
+
+function confirmPermissionProfile(reply: ThreadReply, permissions?: string) {
+  if (permissions && reply?.activePermissionProfile?.id !== permissions) throw new HarnessFault(fault('HARNESS_PERMISSION_PROFILE_NOT_CONFIRMED', 'thread.activePermissionProfile',
+    `the named permissions profile ${JSON.stringify(permissions)} was requested but the thread reports ${JSON.stringify(reply?.activePermissionProfile?.id ?? null)}`,
+    'stop before a turn; qualify the selected binary and CODEX_HOME profile configuration'));
+}
+
+function configurationWithEffort(config?: Record<string, unknown>, effort?: string) {
+  return config || effort ? { ...config, ...(effort ? { model_reasoning_effort: effort } : {}) } : undefined;
+}
+
+export async function openThread(session: Session, { cwd, model, effort, sandbox, permissions, unitId, config, developerInstructions }: ThreadOpening) {
+  permissionSelection(session, permissions, sandbox);
+  const params: { cwd: string; model?: string; sandbox?: string; permissions?: string; approvalPolicy: string; ephemeral: boolean; config?: Record<string, unknown>; developerInstructions?: string } = {
     cwd,
     model,
-    sandbox,
     approvalPolicy: 'never',
     ephemeral: false
   };
-  if (effort) params.config = { model_reasoning_effort: effort };
+  if (sandbox) params.sandbox = sandbox;
+  if (permissions) params.permissions = permissions;
+  if (developerInstructions !== undefined) params.developerInstructions = developerInstructions;
+  const configuration = configurationWithEffort(config, effort);
+  if (configuration) params.config = configuration;
   // Optional wire fields are inspected below; missing or mismatched values still fault.
   const started = await session.request('thread/start', params) as ThreadReply;
   session.thread = started;
   session.threadId = started?.thread?.id ?? null;
+  confirmPermissionProfile(started, permissions);
 
   const faults = [];
   if (!session.threadId) {
@@ -221,16 +363,21 @@ export async function openThread(session: Session, { cwd, model, effort, sandbox
 // Rejoins a thread the app-server already has on disk, which is what the runtime
 // does after a restart. The thread state the reply reports is returned whole,
 // because "what does the thread say it is" is the question a restart asks.
-export async function resumeThread(session: Session, { threadId, cwd, model, effort, sandbox }: {
-  threadId: string; cwd?: string; model?: string; effort?: string; sandbox?: string;
+export async function resumeThread(session: Session, { threadId, cwd, model, effort, sandbox, permissions, config, developerInstructions }: {
+  threadId: string; cwd?: string; model?: string; effort?: string; sandbox?: string; permissions?: string; config?: Record<string, unknown>; developerInstructions?: string;
 }) {
-  const params: { threadId: string; cwd?: string; model?: string; sandbox?: string; config?: { model_reasoning_effort: string } } = { threadId };
+  permissionSelection(session, permissions, sandbox);
+  const params: { threadId: string; cwd?: string; model?: string; sandbox?: string; permissions?: string; config?: Record<string, unknown>; developerInstructions?: string } = { threadId };
   if (cwd) params.cwd = cwd;
   if (model) params.model = model;
   if (sandbox) params.sandbox = sandbox;
-  if (effort) params.config = { model_reasoning_effort: effort };
+  if (permissions) params.permissions = permissions;
+  if (developerInstructions !== undefined) params.developerInstructions = developerInstructions;
+  const configuration = configurationWithEffort(config, effort);
+  if (configuration) params.config = configuration;
   // The returned record remains wire data; callers receive it whole after the existing id fallback.
   const resumed = await session.request('thread/resume', params) as ThreadReply;
+  confirmPermissionProfile(resumed, permissions);
   session.thread = resumed;
   session.threadId = resumed?.thread?.id ?? threadId;
   return resumed;

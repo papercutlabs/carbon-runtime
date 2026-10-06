@@ -60,11 +60,11 @@ export type Context = {
 };
 export type Status = { name: string; runtimeStatus?: string | null };
 export type ThreadOpening = {
-  cwd: string; model?: string; effort?: string; sandbox?: string; unitId: string;
+  cwd: string; model?: string; effort?: string; sandbox?: string; unitId: string; permissions?: string; config?: Record<string, unknown>;
 };
 export type TurnParams = {
   threadId: string; input: string; text?: string; effort?: string; model?: string;
-  sandboxPolicy?: unknown; clientUserMessageId: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
+  sandboxPolicy?: unknown; permissions?: string; clientUserMessageId: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
 };
 export type TurnResult = {
   thread_id?: unknown; turn_id?: unknown; status?: unknown;
@@ -76,12 +76,14 @@ export type Session = { stop?(): Promise<unknown>; exit: Promise<ChildExit> };
 export type Harness<S = Session> = {
   connect(options: {
     binary: string; codexHome: string; providerKeyPath?: string;
-    providerKeyEnvName?: string; onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;
+    providerKeyEnvName?: string; experimentalApi?: boolean; onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;
     onStderr(): void;
   }): Promise<S>;
   openThread(session: S, options: ThreadOpening): Promise<{ thread_id: string; [key: string]: unknown }>;
   resumeThread(session: S, options: ThreadOpening & { threadId: string }): Promise<unknown>;
   turn(session: S, options: TurnParams): Promise<TurnResult>;
+  steer?(session: S, options: { threadId: string; expectedTurnId: string; input: unknown; clientUserMessageId: string }): Promise<unknown>;
+  classifySteerFailure?(error: unknown, context: { threadId: string; expectedTurnId: string; threadRead?: unknown; events?: unknown[] }): { delivery: 'definitely_not_delivered' | 'uncertain'; [key: string]: unknown };
   readThread?(session: S, options: { threadId: string; includeTurns: boolean }): Promise<unknown>;
   listToolServerStatus(session: S, options: { threadId: string }): Promise<Status[]>;
   onToolServerStatus?(session: S, handler: () => void): unknown;
@@ -95,5 +97,5 @@ export type Harness<S = Session> = {
 export type TeachHandle = { setRelease(id: string | null): void };
 export type TurnOptions = { store?: Store | null; checkout?: string | null; declaration?: Declaration | null };
 export type RecordOrRecords = MessageRecord | MessageRecord[];
-export type RenderRecord = { conversation_id?: unknown; message_id?: unknown; revision?: unknown; received_at?: unknown; sender_name?: unknown; sender_id?: unknown; body?: string; attachments?: unknown[] };
+export type RenderRecord = { source?: string; adapter_fields?: Record<string, unknown>; conversation_id?: unknown; message_id?: unknown; revision?: unknown; received_at?: unknown; sender_name?: unknown; sender_id?: unknown; body?: string; attachments?: unknown[] };
 export type RenderRecords = RenderRecord | RenderRecord[];

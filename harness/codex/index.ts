@@ -23,6 +23,7 @@ export {
   HarnessFault,
   CLIENT_INFO
 } from './session.ts';
+export type { ConnectOptions, ThreadOpening, PrivateEndpointDetails, PrivateEndpointAttachment } from './session.ts';
 
 // One read beside the six operations, as `listSkills` is: which provider account
 // the open session is signed in to and what is left of its allowance. It asks the
@@ -41,8 +42,10 @@ export {
   readOnlyPolicy,
   inputItems,
   agentMessageFrom,
-  tokenUsageFrom
+  tokenUsageFrom,
+  classifySteerFailure
 } from './turn.ts';
+export type { TurnOptions } from './turn.ts';
 
 export { inject, createInjectLog, INJECT_FAULT_CODE } from './inject.ts';
 
@@ -59,7 +62,8 @@ export {
 // it to run an agent; it is how a caller records what the agent was carrying.
 export { listSkills } from './skills.ts';
 
-export { EventStream, mapNotification, VOCABULARY } from './events.ts';
+export { EventStream, mapNotification, subscribeEvents, VOCABULARY } from './events.ts';
+export type { HarnessEvent, NotificationParams } from './events.ts';
 
 export {
   REQUESTS,

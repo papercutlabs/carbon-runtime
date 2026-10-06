@@ -73,6 +73,7 @@ export type MessageRecord<TAttachment = unknown> = {
   reply_to?: string;
 };
 export type Attachment = {
+  attachment_id?: string;
   file: string;
   mime: string;
   bytes: number;
@@ -191,14 +192,14 @@ export function recordFileName(encodedMessageId: string, revision: number): stri
 
 export class Store<TRecord extends MessageRecord = MessageRecord> {
   declare dir: string;
-  activeBrowserReply: { conversation_id: string; release_id: string } | null = null;
+  activeBrowserReply: { conversation_id: string; release_id: string; output_root?: string } | null = null;
   // Rebuildable scalar projection of durable browser notifications, never bodies
   // or a second history authority. A new Store reconstructs from disk.
   browserProjectionVersion = 0;
   browserProjectionUpdates = new Map<string, { conversation_id: string; message_id: string; revision: number; seq: number; cursor: number }>();
-  browserListeners = new Set<(event: { kind: 'capture' | 'state'; conversation_id: string; direction: string }) => void>();
+  browserListeners = new Set<(event: { kind: 'capture' | 'state'; conversation_id: string; direction: string; message_id: string; revision: number }) => void>();
 
-  subscribeBrowserChanges(listener: (event: { kind: 'capture' | 'state'; conversation_id: string; direction: string }) => void) {
+  subscribeBrowserChanges(listener: (event: { kind: 'capture' | 'state'; conversation_id: string; direction: string; message_id: string; revision: number }) => void) {
     this.browserListeners.add(listener);
     return () => { this.browserListeners.delete(listener); };
   }
@@ -212,7 +213,7 @@ export class Store<TRecord extends MessageRecord = MessageRecord> {
     const cursor = Math.max(seq, Number(record.adapter_fields?.browser_event_seq ?? 0));
     this.browserProjectionUpdates.set(identity, { conversation_id: record.conversation_id, message_id: record.message_id, revision, seq, cursor });
     this.browserProjectionVersion++;
-    for (const listener of this.browserListeners) listener({ kind, conversation_id: record.conversation_id, direction: record.direction });
+    for (const listener of this.browserListeners) listener({ kind, conversation_id: record.conversation_id, direction: record.direction, message_id: record.message_id, revision });
   }
 
   constructor(dir: string) {
