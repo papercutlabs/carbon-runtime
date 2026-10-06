@@ -1,3 +1,4 @@
+import { readEvidence, readEvidenceChanges, readEvidenceFragment, downloadEvidence, validateEvidenceReferences } from './browser-evidence.ts';
 // Public browser store bridge. External HTTP/CLI/MCP callers belong to the
 // companion's typed route boundary; this is the trusted shared library.
 import fs from 'node:fs';
@@ -27,7 +28,8 @@ type BrowserRead = (grant: unknown, key: string, options?: { after?: number; act
 function sameBrowserSubmission(prior: MessageRecord, record: MessageRecord, packet: BrowserPacket) {
   return prior.body === record.body && prior.sender_id === record.sender_id && prior.sender_name === record.sender_name
     && prior.adapter_fields?.request_kind === packet.request_kind && prior.adapter_fields?.input_kind === packet.input_kind
-    && JSON.stringify(prior.adapter_fields?.attachment_ids ?? []) === JSON.stringify(packet.attachment_ids ?? []);
+    && JSON.stringify(prior.adapter_fields?.attachment_ids ?? []) === JSON.stringify(packet.attachment_ids ?? [])
+    && JSON.stringify(prior.adapter_fields?.references ?? []) === JSON.stringify(packet.references ?? []);
 }
 
 export function createBrowserBridge({ store, agent, account, authorize }: { store: Store; agent: string; account: string; authorize: BrowserAuthorization }) {
@@ -58,6 +60,7 @@ export function createBrowserBridge({ store, agent, account, authorize }: { stor
         bindBrowserAttachments(store, { conversationId, actorId: packet.consultant.id, attachmentIds: packet.attachment_ids ?? [], messageId: prior.message_id });
         return { record: prior, duplicate: true };
       }
+      validateEvidenceReferences(store, conversationId, packet.references ?? []);
       record.attachments = resolveBrowserAttachments(store, { conversationId, actorId: packet.consultant.id, attachmentIds: packet.attachment_ids ?? [] });
       const accepted = store.capture(record, { raw, cursor }).record;
       bindBrowserAttachments(store, { conversationId, actorId: packet.consultant.id, attachmentIds: packet.attachment_ids ?? [], messageId: record.message_id });
@@ -81,6 +84,21 @@ export function createBrowserBridge({ store, agent, account, authorize }: { stor
       if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 0 || options.timeoutMs > 30000) refuse('BROWSER_WAIT_INVALID', key, 'wait must be between zero and 30000 ms');
       return watchBrowserChanges(store, conversationId, grant, key, options, check, read);
     },
+    evidenceRead(grant:unknown,key:string,options:Parameters<typeof readEvidence>[2]) { return readEvidence(store,check(grant,key,'read'),options); },
+    evidenceChanges(grant:unknown,key:string,{cursor=0,limit=100,waitMs=0,signal}:{cursor?:number;limit?:number;waitMs?:number;signal?:AbortSignal}={}) {
+      const conversation=check(grant,key,'watch');
+      if(!Number.isSafeInteger(waitMs)||waitMs<0||waitMs>30000)refuse('EVIDENCE_WAIT_INVALID','waitMs','expected explicit bounded wait');
+      const read=()=>{check(grant,key,'watch');return readEvidenceChanges(store,conversation,cursor,limit);};
+      const initial=read();if(initial.changes.length||waitMs===0)return Promise.resolve(initial);
+      return new Promise<ReturnType<typeof readEvidenceChanges>>((resolve,reject)=>{let stop=()=>{},timer:ReturnType<typeof setTimeout>|undefined,done=false;
+        const cleanup=()=>{stop();if(timer)clearTimeout(timer);signal?.removeEventListener('abort',abort);};
+        const finish=(force=false)=>{if(done)return;try{const page=read();if(!force&&!page.changes.length)return;done=true;cleanup();resolve(page);}catch(e){done=true;cleanup();reject(e);}};
+        const abort=()=>{if(done)return;done=true;cleanup();reject(new Error('Evidence wait aborted'));};
+        stop=store.subscribeBrowserChanges(e=>{if(e.conversation_id===conversation)finish();});signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted){abort();return;}timer=setTimeout(()=>finish(true),waitMs);finish();
+      });
+    },
+    evidenceFragment(grant:unknown,key:string,itemId:string,selector:Parameters<typeof readEvidenceFragment>[3],before:number,after:number,limit:number){return readEvidenceFragment(store,check(grant,key,'read'),itemId,selector,before,after,limit);},
+    evidenceDownload(grant:unknown,key:string,sourceId:string){return downloadEvidence(store,check(grant,key,'read'),sourceId);},
     operatorRead(grant: unknown, key: string) {
       const conversation_id = check(grant, key, 'operator');
       const records = browserHistory(store, conversation_id);

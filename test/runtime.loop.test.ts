@@ -118,8 +118,8 @@ test('six records in one packet are one release, turn and delivery in arrival or
   assert.deepEqual(result.released[0].message_ids, messageIds);
   assert.equal(harness.session.turns.length, 1);
   for (let index = 1; index <= 6; index++) {
-    assert.ok(harness.session.turns[0].input.indexOf(`body-${index}`)
-      < (index === 6 ? Infinity : harness.session.turns[0].input.indexOf(`body-${index + 1}`)));
+    assert.ok(textInput(harness.session.turns[0].input).indexOf(`body-${index}`)
+      < (index === 6 ? Infinity : textInput(harness.session.turns[0].input).indexOf(`body-${index + 1}`)));
   }
   assert.deepEqual(result.delivered.map((d) => d.status), ['sent']);
 
@@ -145,7 +145,7 @@ test('two records captured in one pass are one release, turn and delivery', asyn
   assert.equal(result.released.length, 1);
   assert.deepEqual(result.released[0].message_ids, [`${ACCOUNT}:c1:1`, `${ACCOUNT}:c1:2`]);
   assert.equal(harness.session.turns.length, 1);
-  assert.ok(harness.session.turns[0].input.indexOf('first') < harness.session.turns[0].input.indexOf('second'));
+  assert.ok(textInput(harness.session.turns[0].input).indexOf('first') < textInput(harness.session.turns[0].input).indexOf('second'));
   assert.deepEqual(result.delivered.map((one) => one.status), ['sent']);
   assert.equal(store.rebuild().filter((r) => r.direction === 'outbound').length, 1);
 });
@@ -271,7 +271,7 @@ test('records from two conversations in one pass become two releases', async () 
     onTurn: (s) => {
       const handle = replyHandler({ store: s, agent: AGENT });
       return (session, params) => {
-        const conversation = params.input.match(/^conversation_id: (.+)$/m)?.[1];
+        const conversation = textInput(params.input).match(/^conversation_id: (.+)$/m)?.[1];
         handle({ conversation_id: conversation!, request_id: params.clientUserMessageId, text: 'the answer' }); // This fixture creates the selected value before this access; retain the original failure if it is absent.
         return 'completed';
       };
@@ -303,11 +303,11 @@ test('a record captured while a gathered turn runs waits for the next pass', asy
 
   const first = await loop.pass([item(1, 'first')]);
   assert.deepEqual(first.released[0].message_ids, [`${ACCOUNT}:c1:1`]);
-  assert.doesNotMatch(harness.session.turns[0].input, /arrived during the turn/);
+  assert.doesNotMatch(textInput(harness.session.turns[0].input), /arrived during the turn/);
 
   const second = await loop.pass([]);
   assert.deepEqual(second.released[0].message_ids, [`${ACCOUNT}:c1:2`]);
-  assert.match(harness.session.turns[1].input, /arrived during the turn/);
+  assert.match(textInput(harness.session.turns[1].input), /arrived during the turn/);
 });
 
 test('a second reply under a sent request id returns the chunk ids and sends nothing', async () => {
@@ -1090,7 +1090,7 @@ test('the turn the loop runs carries the attachment, not only the body', async (
   const inputs: string[] = [];
   const { loop, store } = makeLoop({
     onTurn: (s) => (session, params) => {
-      inputs.push(params.input ?? params.text ?? null);
+      inputs.push(textInput(params.input) ?? params.text ?? null);
       replyHandler({ store: s, agent: AGENT })({
         conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer'
       });
@@ -1119,7 +1119,7 @@ test('an oversize attachment parks nothing, ends nothing, and the message still 
   const inputs: string[] = [];
   const { loop, store } = makeLoop({
     onTurn: (s) => (session, params) => {
-      inputs.push(params.input ?? params.text ?? null);
+      inputs.push(textInput(params.input) ?? params.text ?? null);
       replyHandler({ store: s, agent: AGENT })({
         conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer'
       });
@@ -1303,7 +1303,7 @@ test('an instruction taught in one turn is in the next turn of the unit, with no
     decl,
     statuses: TEACH_LISTED,
     onTurn: (s) => async (session, params) => {
-      inputs.push(params.input);
+      inputs.push(textInput(params.input));
       if (inputs.length === 1) {
         const capture = s.rebuild().find((r) => r.direction === 'inbound');
         const called = await fetch(served.url, {
@@ -1394,7 +1394,7 @@ test('a remember from a work chat is refused by name and writes nothing, while t
         refusals.push((await called.json()).result);
       }
       replyHandler({ store: s, agent: AGENT })({
-        conversation_id: params.input.match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
+        conversation_id: textInput(params.input).match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
         request_id: params.clientUserMessageId, text: 'Understood.'
       });
       return 'completed';
@@ -1428,7 +1428,7 @@ test('with teaching off the turn carries no block and the harness lists no teach
     decl,
     statuses: REPLY_LISTED,
     onTurn: (s) => (session, params) => {
-      inputs.push(params.input);
+      inputs.push(textInput(params.input));
       replyHandler({ store: s, agent: AGENT })({
         conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'Understood.'
       });
@@ -1495,7 +1495,7 @@ async function callTeachTool(url: string, name: string, args: Record<string, unk
 // serving, which is what holds a management reply where it is.
 function replyWith(store: Store, decl: Declaration, params: TurnParams, text: string) {
   return replyHandler({ store, agent: AGENT, declaration: decl })({
-    conversation_id: params.input.match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
+    conversation_id: textInput(params.input).match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
     request_id: params.clientUserMessageId.replace(/-(follow-up|teach-check)$/, ''),
     text
   });
@@ -1508,11 +1508,11 @@ test('a management turn that recorded what it was taught sends its reply and tak
       const capture = s.rebuild().find((r) => r.direction === 'inbound');
       const result = await callTeachTool(served!.url, 'remember', { // This fixture creates the selected value before this access; retain the original failure if it is absent.
         text: 'When a workbook lands here I will not change any records off it.',
-        conversation_id: params.input.match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
-        source_message_id: params.input.match(/message_id: (\S+)/)![1] // This fixture creates the selected value before this access; retain the original failure if it is absent.
+        conversation_id: textInput(params.input).match(/conversation_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
+        source_message_id: textInput(params.input).match(/message_id: (\S+)/)![1] // This fixture creates the selected value before this access; retain the original failure if it is absent.
       });
       assert.notEqual(result.isError, true, JSON.stringify(result));
-      assert.equal(capture!.message_id, params.input.match(/message_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
+      assert.equal(capture!.message_id, textInput(params.input).match(/message_id: (\S+)/)![1], // This fixture creates the selected value before this access; retain the original failure if it is absent.
         'the turn stated a message_id that is not this message');
       replyWith(s, decl, params, 'Understood. I will wait for the reviewed updates.');
       return 'completed';
@@ -1544,7 +1544,7 @@ test('a management turn that recorded nothing is asked once, and NOTHING_TAUGHT 
   const inputs: string[] = [];
   const { loop, store, harness, decl } = await teachCheckLoop({
     onTurn: (s) => (session, params) => {
-      inputs.push(params.input);
+      inputs.push(textInput(params.input));
       if (inputs.length === 1) {
         replyWith(s, decl, params, 'Both cases are with the reviewer.');
         return 'completed';
@@ -1807,3 +1807,5 @@ test('the provider proxy is not an MCP server: never listed, and while its port 
   assert.deepEqual(again.holding, ['tool_servers.provider-proxy']);
   assert.ok(store.rebuild().some((r) => r.message_id === `${ACCOUNT}:c1:2` && !r.release));
 });
+
+function textInput(value:string|unknown[]):string {assert.equal(typeof value,'string','legacy fixture requires a textual input');return value as string;}

@@ -63,7 +63,7 @@ export type ThreadOpening = {
   cwd: string; model?: string; effort?: string; sandbox?: string; unitId: string; permissions?: string; config?: Record<string, unknown>;
 };
 export type TurnParams = {
-  threadId: string; input: string; text?: string; effort?: string; model?: string;
+  threadId: string; input: string | unknown[]; text?: string; effort?: string; model?: string;
   sandboxPolicy?: unknown; permissions?: string; clientUserMessageId: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
 };
 export type TurnResult = {

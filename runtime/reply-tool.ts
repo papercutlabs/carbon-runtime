@@ -39,6 +39,7 @@ import { managementConversationOf } from './channel.ts';
 import { unitIdFor } from './unit.ts';
 import { beginBoundAction, finishMappedAction } from '../tools/lib/action-check.ts';
 import { assertNoSymlinks, validateBrowserFilename } from './browser-files.ts';
+import { EVIDENCE_TOOLS, evidenceToolHandlers } from './browser-evidence-tools.ts';
 
 export const REPLY_SERVER_NAME = 'carbon-reply';
 // The reply tool listens here unless a caller names another port. It is a
@@ -54,6 +55,7 @@ export const MANIFEST = {
   transport: 'http',
   secrets: [],
   tools: [
+    ...EVIDENCE_TOOLS,
     {
       name: 'reply',
       description: 'Send one reply on the conversation this turn is about. Call it exactly once per turn, with the request_id this turn was given.',
@@ -421,7 +423,7 @@ export async function recordSentAction(store: Store, record: MessageRecord,
 export function createReplyServer({ store, agent, declaration = null, work = null, validateBrowserReply }: ReplyOptions) {
   return createServer({
     manifest: MANIFEST,
-    handlers: { reply: declaration?.records?.enabled === true
+    handlers: { ...evidenceToolHandlers(store, agent), reply: declaration?.records?.enabled === true
       ? recordsReplyHandler({ store, agent, declaration, work, validateBrowserReply })
       : replyHandler({ store, agent, declaration, work, validateBrowserReply }) }
   });
