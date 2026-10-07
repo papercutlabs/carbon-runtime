@@ -51,7 +51,7 @@ function decodedRepresentation(base:RepresentationBase,text:string,mime:string,f
 }
 export function indexEvidenceRepresentation(bytes: Uint8Array, mime: string, filename: string): EvidenceRepresentation {
  const sha256 = hash(bytes), base = { id: 'representation-' + hash(REPRESENTATION_VERSION + ':' + sha256), version: REPRESENTATION_VERSION, sha256, limitation: null };
- const image=imageSize(Buffer.from(bytes),mime);if(image)return {...base,kind:'image',...image};
+ const image=(mime==='image/png'||mime==='image/jpeg')?imageSize(Buffer.from(bytes),mime):null;if(image)return {...base,kind:'image',...image};
  // Active formats never become runnable display content. Original download remains available.
  if (/html|svg|javascript|xml/.test(mime) || /\.(html?|svg|js)$/i.test(filename)) return { ...base, kind: 'file', limitation: 'Active format is available only as an authenticated original download.' };
  let text: string; try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return { ...base, kind: 'file', limitation: 'No safe text/image representation is supported; use the immutable original.' }; }
