@@ -60,43 +60,20 @@ function describeArg(arg: unknown) {
 
 function recordingActions(overrides: Partial<Actions> = {}) {
   const calls: Call[] = [];
+  const record = (name: string) => function (this: Actions, ...args: unknown[]) {
+    calls.push({ name, receiverIsActions: this === actions, args: args.map(describeArg) });
+    return { ok: name };
+  };
   const actions = {
-    action_turn_start(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'turn-start', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'turn-start' };
-    },
-    action_turn_end(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'turn-end', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'turn-end' };
-    },
-    action_collect(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'collect', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'collect' };
-    },
-    action_classify(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'classify', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'classify' };
-    },
-    action_begin(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'begin', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'begin' };
-    },
-    action_bound(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'bound', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'bound' };
-    },
-    action_finish(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'finish', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'finish' };
-    },
-    action_reconcile_ready(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'reconcile-ready', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'reconcile-ready' };
-    },
-    action_reconcile_absent(this: Actions, ...args: unknown[]) {
-      calls.push({ name: 'reconcile-absent', receiverIsActions: this === actions, args: args.map(describeArg) });
-      return { ok: 'reconcile-absent' };
-    },
+    action_turn_start: record('turn-start'),
+    action_turn_end: record('turn-end'),
+    action_collect: record('collect'),
+    action_classify: record('classify'),
+    action_begin: record('begin'),
+    action_bound: record('bound'),
+    action_finish: record('finish'),
+    action_reconcile_ready: record('reconcile-ready'),
+    action_reconcile_absent: record('reconcile-absent'),
     ...overrides
   } as Actions;
   return { actions, calls };
@@ -552,11 +529,9 @@ test('premature upload abort stays outside the 409 catch and does not hang the s
     import http from 'node:http';
     const received = Promise.withResolvers();
     let serverReceivedBytes = 0;
-    let requests = 0;
     const create = http.createServer;
     http.createServer = function (listener) {
       return create.call(http, (req, res) => {
-        requests += 1;
         req.on('data', (chunk) => {
           serverReceivedBytes += chunk.length;
           received.resolve();
@@ -604,7 +579,7 @@ test('premature upload abort stays outside the 409 catch and does not hang the s
       ping.on('error', reject);
     });
     await started.close();
-    process.stdout.write(JSON.stringify({ unhandled, health, actions, serverReceivedBytes, requests }));
+    process.stdout.write(JSON.stringify({ unhandled, health, actions, serverReceivedBytes }));
   `;
   const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
     cwd: new URL('..', import.meta.url).pathname,
