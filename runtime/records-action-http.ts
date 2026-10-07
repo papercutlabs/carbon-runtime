@@ -18,6 +18,21 @@ type Actions = {
 };
 const MAX_BODY = 16384;
 
+type PostRoute = (actions: Actions, body: any, signal: AbortSignal) => unknown;
+const POST_ROUTES: Record<string, PostRoute> = {
+  '/turn-start': (actions, body, signal) => actions.action_turn_start(body, signal),
+  '/turn-end': (actions, body) => actions.action_turn_end(body.releaseId),
+  '/collect': (actions, body) => actions.action_collect(body.source_id, body.channel, body.unit),
+  '/classify': (actions, body) => actions.action_classify(body.job, body.operation),
+  '/begin': (actions, body) => actions.action_begin(body.job, body.step, body.source_id, body.operation, body.owner),
+  '/bound': (actions, body) => actions.action_bound(body.unit, body.operation, body.about_job, body.about_move,
+    body.source_id, body.owner),
+  '/finish': (actions, body) => actions.action_finish(body.job, body.step, body.source_id, body.action_id),
+  '/reconcile-ready': (actions, body) => actions.action_reconcile_ready(body.job, body.step, body.action_id),
+  '/reconcile-absent': (actions, body) => actions.action_reconcile_absent(body.job, body.step, body.source_id,
+    body.action_id, body.read_receipt)
+};
+
 // This is a service-to-service route. It is not in MCP tools/list. The model's
 // shell has no network grant; the runtime and mapped tools call it outside that
 // sandbox, then the records service performs the owner-role transaction.
@@ -36,8 +51,7 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
       send(200, { schema: 'carbon.records-action-health.v1', status: 'ready' });
       return;
     }
-    if (request.method !== 'POST' || !['/collect', '/classify', '/begin', '/bound', '/finish', '/reconcile-ready', '/reconcile-absent',
-      '/turn-start', '/turn-end'].includes(request.url ?? '')) {
+    if (request.method !== 'POST' || !Object.hasOwn(POST_ROUTES, request.url ?? '')) {
       send(404, { faults: [fault('RECORDS_ACTION_ROUTE', String(request.url),
         'this route does not exist', 'use an action route from a mapped tool')] });
       return;
@@ -55,20 +69,7 @@ export async function serveActionHttp(actions: Actions, port = 8733) {
     }
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const routes: Record<string, () => unknown> = {
-        '/turn-start': () => actions.action_turn_start(body, disconnected.signal),
-        '/turn-end': () => actions.action_turn_end(body.releaseId),
-        '/collect': () => actions.action_collect(body.source_id, body.channel, body.unit),
-        '/classify': () => actions.action_classify(body.job, body.operation),
-        '/begin': () => actions.action_begin(body.job, body.step, body.source_id, body.operation, body.owner),
-        '/bound': () => actions.action_bound(body.unit, body.operation, body.about_job, body.about_move,
-          body.source_id, body.owner),
-        '/finish': () => actions.action_finish(body.job, body.step, body.source_id, body.action_id),
-        '/reconcile-ready': () => actions.action_reconcile_ready(body.job, body.step, body.action_id),
-        '/reconcile-absent': () => actions.action_reconcile_absent(body.job, body.step, body.source_id,
-          body.action_id, body.read_receipt)
-      };
-      const value = await routes[request.url!]();
+      const value = await POST_ROUTES[request.url!](actions, body, disconnected.signal);
       send(200, value);
     } catch (error) {
       send(409, { faults: asFaults(error) });
