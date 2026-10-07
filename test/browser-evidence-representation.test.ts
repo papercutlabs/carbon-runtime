@@ -35,10 +35,10 @@ function accountPayloadCopies(bytes: Uint8Array, mime: string, filename: string)
  const orig = Buffer.from;
  let copies = 0, bytesCopied = 0, otherBytes = 0;
  function patched(value: unknown, encodingOrOffset?: unknown, length?: unknown) {
-  if (value === bytes) { copies += 1; bytesCopied += bytes.byteLength; }
-  else if (Array.isArray(value)) otherBytes += value.length;
-  else if (value instanceof Uint8Array) otherBytes += value.byteLength;
-  return orig.call(Buffer, value as never, encodingOrOffset as never, length as never);
+  const copied: Buffer = Reflect.apply(orig, Buffer, [value, encodingOrOffset, length]);
+  if (value === bytes) { copies += 1; bytesCopied += copied.byteLength; }
+  else if (Array.isArray(value) || value instanceof Uint8Array) otherBytes += copied.byteLength;
+  return copied;
  }
  Object.defineProperty(Buffer, 'from', { value: patched, configurable: true, writable: true });
  try { return { result: indexEvidenceRepresentation(bytes, mime, filename), copies, bytesCopied, otherBytes }; }
