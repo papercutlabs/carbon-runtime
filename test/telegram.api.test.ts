@@ -22,7 +22,7 @@ import { botIdOf, call, readToken, scrub, TelegramFault } from '../adapters/tele
 import { ALBUM_QUIET_MS, arrivals, forget, IDLE_MS, transportFor } from '../adapters/telegram/live.ts';
 import { nextOffset } from '../adapters/telegram/cursors.ts';
 import * as adapter from '../adapters/telegram/index.ts';
-import { photoUpdate, sleep, TOKEN, tokenFile, update, waitForBatch } from './telegram-fixtures.ts';
+import { heldRetryWait, photoUpdate, sleep, TOKEN, tokenFile, update, waitForBatch } from './telegram-fixtures.ts';
 
 // ---- the token ---------------------------------------------------------------
 
@@ -387,10 +387,19 @@ test('an album keeps first-sight timestamps and fetches each photo once across a
     now: Date.now()
   };
   const server = albumServerOf({ failAt: 2 });
+  const held = heldRetryWait();
 
   try {
-    await arrivals(context);
-    const { items, fault } = await waitForBatch(context, { acceptFault: true });
+    await arrivals(context, held.dependency);
+    const { items, fault } = await waitForBatch(context, {
+      acceptFault: true,
+      onFault(error) {
+        if (error instanceof TelegramFault) {
+          assert.equal(held.held, 1, 'the retry was not still held when the fault was observed');
+          held.release();
+        }
+      }
+    });
     assert.ok(fault instanceof TelegramFault, 'the failed repeat ask was not exposed as a channel fault');
     assert.equal(items.length, 3);
     assert.deepEqual([...server.fetched.values()], [1, 1, 1]);

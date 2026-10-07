@@ -1,6 +1,7 @@
 // Fetch replacements implement only the response methods exercised below; the
 // installation assertions retain these deliberately partial synthetic responses.
 import type { Context, Channel, ArrivedItem, Item, Fields } from '../adapters/telegram/types.ts';
+import type { RetryWait } from '../adapters/telegram/live.ts';
 import type { MessageRecord } from '../stream/store.ts';
 // What the Telegram tests are run against: a token on disk, updates shaped the
 // way the Bot API shapes them, a recording server whose answers are scripted,
@@ -165,7 +166,42 @@ export function idsOf(items: Item[]) {
 
 // Ask the way the loop asks, until the worker has something. A fault is thrown
 // on unless the test is the one about faults.
-export async function waitForBatch(context: Context, { acceptFault = false, attempts = 80 } = {}) {
+// A retry the test holds shut. It opens only when the test releases it, or when
+// stop or forget aborts the worker's signal — the same way the production sleep
+// ends. Release does not run until the caller has seen the fault.
+export function heldRetryWait() {
+  let open = false;
+  const waiting: { signal: AbortSignal; onAbort: () => void; resolve: () => void }[] = [];
+  const finish = (waiter: typeof waiting[number]) => {
+    waiter.signal.removeEventListener('abort', waiter.onAbort);
+    waiter.resolve();
+  };
+  const dependency: RetryWait = {
+    wait(signal) {
+      return new Promise<void>((resolve) => {
+        if (open || signal.aborted) { resolve(); return; }
+        const waiter = { signal, resolve, onAbort: () => {} };
+        waiter.onAbort = () => {
+          const index = waiting.indexOf(waiter);
+          if (index !== -1) waiting.splice(index, 1);
+          finish(waiter);
+        };
+        waiting.push(waiter);
+        signal.addEventListener('abort', waiter.onAbort, { once: true });
+      });
+    }
+  };
+  return {
+    dependency,
+    get held() { return waiting.length; },
+    release() {
+      open = true;
+      for (const waiter of waiting.splice(0)) finish(waiter);
+    }
+  };
+}
+
+export async function waitForBatch(context: Context, { acceptFault = false, attempts = 80, onFault }: { acceptFault?: boolean; attempts?: number; onFault?: (error: unknown) => void } = {}) {
   let items: ArrivedItem[] = [];
   let fault: unknown = null;
   for (let i = 0; i < attempts && items.length === 0; i++) {
@@ -175,6 +211,7 @@ export async function waitForBatch(context: Context, { acceptFault = false, atte
     } catch (error) {
       if (!acceptFault) throw error;
       fault = error;
+      onFault?.(error);
     }
   }
   return { items, fault };

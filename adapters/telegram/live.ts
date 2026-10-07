@@ -63,6 +63,18 @@ export const ALBUM_QUIET_MS = 2000;
 // event loop turns.
 export const RETRY_MS = 5000;
 
+// The wait after a failed call. The worker captures one when it starts. The
+// ordinary caller passes none, so that capture is the production sleep of
+// RETRY_MS, which stop aborts. A test can pass its own and hold it until the
+// fault is visible. A later arrivals call does not replace what was captured.
+export type RetryWait = {
+  wait(signal: AbortSignal): Promise<void>;
+};
+
+const productionRetry: RetryWait = {
+  wait(signal) { return sleep(RETRY_MS, signal); }
+};
+
 type PollEntry = {
   items: ArrivedItem[]; highest: number | null; worker: Promise<void> | null;
   stopped: boolean; ending: AbortController; fault: unknown; started_at: number | null;
@@ -131,11 +143,12 @@ function entryFor(context: Context) {
 // has nothing to hand over, is a failed poll: the runtime writes it on the channel
 // and holds past the declared count. It is not this adapter's business to end the
 // process.
-export async function arrivals(context: Context) {
+export async function arrivals(context: Context, retryWait: RetryWait = productionRetry) {
   const entry = entryFor(context);
   if (entry.worker === null) {
     entry.started_at = Date.now();
-    entry.worker = work(entry, context).catch((error) => { entry.fault = error; });
+    const captured = retryWait;
+    entry.worker = work(entry, context, captured).catch((error) => { entry.fault = error; });
   }
   if (entry.items.length === 0 && entry.fault !== null) {
     const carried = entry.fault;
@@ -147,7 +160,7 @@ export async function arrivals(context: Context) {
 
 // The worker. One long poll at a time, and never one that would confirm an update
 // the store has not written.
-async function work(entry: PollEntry, context: Context) {
+async function work(entry: PollEntry, context: Context, retryWait: RetryWait) {
   const { store, account, channel } = context;
   const timeout = Math.min(50, Math.max(0, channel?.long_poll_timeout_s ?? 25));
   const albumQuiet = channel?.album_quiet_ms ?? ALBUM_QUIET_MS;
@@ -186,7 +199,7 @@ async function work(entry: PollEntry, context: Context) {
         : new TelegramFault([fault('BOT_API_POLL_FAILED', 'getUpdates',
           (error as Fields | null | undefined)?.message ?? String(error),
           'the runtime keeps polling until the channel\'s declared failure count is reached')]);
-      await sleep(RETRY_MS, entry.ending.signal);
+      await retryWait.wait(entry.ending.signal);
     }
   }
 }
