@@ -19,7 +19,7 @@ import { arrivals, forget, IDLE_MS, stop } from '../adapters/telegram/live.ts';
 import { nextOffset } from '../adapters/telegram/cursors.ts';
 import * as adapter from '../adapters/telegram/index.ts';
 import {
-  captureBatch, idsOf, liveContext, photoUpdate, scriptedServerOf, sleep, update, waitForBatch
+  captureBatch, heldRetryWait, idsOf, liveContext, photoUpdate, scriptedServerOf, sleep, update, waitForBatch
 } from './telegram-fixtures.ts';
 
 test('a response that omits photos the worker has already seen still hands over the whole album', async () => {
@@ -95,10 +95,19 @@ test('a failed repeat ask loses no retained photo and fetches nothing before the
     failCall: 2,
     respond: ({ call }) => (call === 1 ? album : (call === 3 ? [album[5]] : []))
   });
+  const held = heldRetryWait();
 
   try {
-    await arrivals(context);
-    const { items, fault } = await waitForBatch(context, { acceptFault: true });
+    await arrivals(context, held.dependency);
+    const { items, fault } = await waitForBatch(context, {
+      acceptFault: true,
+      onFault(error) {
+        if (error instanceof TelegramFault) {
+          assert.equal(held.held, 1, 'the retry was not still held when the fault was observed');
+          held.release();
+        }
+      }
+    });
     assert.ok(fault instanceof TelegramFault, 'the failed repeat ask was not exposed as a channel fault');
     assert.deepEqual(idsOf(items), album.map((one) => one.update_id));
     for (const item of items) {
