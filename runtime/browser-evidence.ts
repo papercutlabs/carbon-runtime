@@ -33,7 +33,8 @@ export function fromWireSelector(value:unknown):EvidenceSelector|null {
 }
 
 const EVIDENCE_REFERENCE_SCHEMA=interfaceSchema.reference;
-export const EVIDENCE_DELTA_SCHEMA=interfaceSchema.delta;
+export const EVIDENCE_DELTA_SCHEMA=interfaceSchema.deltaTemplated;
+export const EVIDENCE_DELTA_LEGACY_SCHEMA=interfaceSchema.delta;
 function refuse(code:string,subject:string,problem:string):never {throw new StreamFault([fault(code,subject,problem,'read the exact retained evidence, repair every named input, and retry the same change identity only with its original payload')]);}
 const hash=(s:Uint8Array|string)=>crypto.createHash('sha256').update(s).digest('hex');
 const inside=(root:string,p:string)=>p.startsWith(root+path.sep);

@@ -46,6 +46,42 @@
       "arguments": {
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Explicit page/fragment resource limit.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "description": "Read explicit retained evidence additions/removals and reasons, with each addition's canvas template. GET /api/evidence/changes-templated. Scope read; kind read.",
+      "name": "evidence_changes_templated",
+      "readOnlyHint": true,
+      "returns": {
+        "fields": [
+          {
+            "name": "result",
+            "what": "The declared output of evidence_changes_templated: changes (array<object>), conversationId (string), cursor (integer), hasMore (boolean), revision (integer)."
+          }
+        ],
+        "what": "Declared evidence_changes_templated result wrapped as result (changes (array<object>), conversationId (string), cursor (integer), hasMore (boolean), revision (integer))."
+      },
+      "writes": false
+    },
+    {
+      "arguments": {
+        "additionalProperties": false,
+        "properties": {
           "contextAfter": {
             "description": "Explicit nonnegative retained ordinal or surrounding context count.",
             "minimum": 0,
@@ -179,6 +215,506 @@
         "what": "Declared evidence_fragment_read result wrapped as result (assumptions (array<string>), basis (array<object>), content (object|object|object|object|object|object), conversationId (string), download (object|null), item (object), producer (object|null), provenance (object|null), reference (object), status (\"available\"|\"unavailable\"), upstreamHref (string|null))."
       },
       "writes": false
+    },
+    {
+      "arguments": {
+        "additionalProperties": false,
+        "properties": {
+          "contextAfter": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "contextBefore": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "itemId": {
+            "description": "Exact immutable item UUID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Explicit page/fragment resource limit.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "selector": {
+            "additionalProperties": false,
+            "description": "Explicit retained value.",
+            "properties": {
+              "end": {
+                "description": "Explicit retained end.",
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "height": {
+                "description": "Explicit retained height.",
+                "exclusiveMinimum": 0,
+                "maximum": 1,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "Explicit retained kind.",
+                "enum": [
+                  "lines",
+                  "rows",
+                  "field",
+                  "region"
+                ],
+                "type": "string"
+              },
+              "pointer": {
+                "description": "Explicit retained pointer.",
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "description": "Explicit retained start.",
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "width": {
+                "description": "Explicit retained width.",
+                "exclusiveMinimum": 0,
+                "maximum": 1,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "x": {
+                "description": "Explicit retained x.",
+                "maximum": 1,
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "y": {
+                "description": "Explicit retained y.",
+                "maximum": 1,
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "start",
+              "end",
+              "pointer",
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "itemId",
+          "selector",
+          "contextBefore",
+          "contextAfter",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "description": "Read exact selected source representation with explicit context and immutable original download identity, with the item's canvas template. GET /api/evidence/fragment-templated. Scope read; kind read.",
+      "name": "evidence_fragment_read_templated",
+      "readOnlyHint": true,
+      "returns": {
+        "fields": [
+          {
+            "name": "result",
+            "what": "The declared output of evidence_fragment_read_templated: assumptions (array<string>), basis (array<object>), content (object|object|object|object|object|object), conversationId (string), download (object|null), item (object), producer (object|null), provenance (object|null), reference (object), status (\"available\"|\"unavailable\"), upstreamHref (string|null)."
+          }
+        ],
+        "what": "Declared evidence_fragment_read_templated result wrapped as result (assumptions (array<string>), basis (array<object>), content (object|object|object|object|object|object), conversationId (string), download (object|null), item (object), producer (object|null), provenance (object|null), reference (object), status (\"available\"|\"unavailable\"), upstreamHref (string|null))."
+      },
+      "writes": false
+    },
+    {
+      "arguments": {
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "description": "Explicit retained add.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Explicit retained add item.",
+              "properties": {
+                "assumptions": {
+                  "description": "Explicit retained assumptions.",
+                  "items": {
+                    "description": "Explicit retained assumptions item.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "basis": {
+                  "description": "Explicit retained basis.",
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "Explicit retained basis item.",
+                    "properties": {
+                      "itemId": {
+                        "description": "Explicit retained itemId.",
+                        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                        "type": "string"
+                      },
+                      "representationId": {
+                        "description": "Explicit retained representationId.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "representationVersion": {
+                        "description": "Explicit retained representationVersion.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "selector": {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "end": {
+                            "description": "Explicit retained end.",
+                            "minimum": 1,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "height": {
+                            "description": "Explicit retained height.",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "kind": {
+                            "description": "Explicit retained kind.",
+                            "enum": [
+                              "lines",
+                              "rows",
+                              "field",
+                              "region"
+                            ],
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Explicit retained pointer.",
+                            "maxLength": 4096,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "start": {
+                            "description": "Explicit retained start.",
+                            "minimum": 1,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "width": {
+                            "description": "Explicit retained width.",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "x": {
+                            "description": "Explicit retained x.",
+                            "maximum": 1,
+                            "minimum": 0,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "y": {
+                            "description": "Explicit retained y.",
+                            "maximum": 1,
+                            "minimum": 0,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end",
+                          "pointer",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      },
+                      "sha256": {
+                        "description": "Explicit retained sha256.",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "sourceId": {
+                        "description": "Explicit retained sourceId.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "itemId",
+                      "sourceId",
+                      "representationId",
+                      "representationVersion",
+                      "sha256",
+                      "selector"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "itemId": {
+                  "description": "Explicit retained itemId.",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Explicit retained label.",
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "note": {
+                  "description": "Explicit retained note.",
+                  "maxLength": 4096,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "description": "Explicit retained path.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "producerPath": {
+                  "description": "Explicit retained producerPath.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "selector": {
+                  "additionalProperties": false,
+                  "description": "Explicit retained selector.",
+                  "properties": {
+                    "end": {
+                      "description": "Explicit retained end.",
+                      "minimum": 1,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "height": {
+                      "description": "Explicit retained height.",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "kind": {
+                      "description": "Explicit retained kind.",
+                      "enum": [
+                        "lines",
+                        "rows",
+                        "field",
+                        "region"
+                      ],
+                      "type": "string"
+                    },
+                    "pointer": {
+                      "description": "Explicit retained pointer.",
+                      "maxLength": 4096,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "start": {
+                      "description": "Explicit retained start.",
+                      "minimum": 1,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "width": {
+                      "description": "Explicit retained width.",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "description": "Explicit retained x.",
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "y": {
+                      "description": "Explicit retained y.",
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "start",
+                    "end",
+                    "pointer",
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "itemId",
+                "label",
+                "path",
+                "selector",
+                "note",
+                "basis",
+                "assumptions",
+                "producerPath"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "changeId": {
+            "description": "Explicit retained changeId.",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          },
+          "note": {
+            "description": "Explicit retained note.",
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remove": {
+            "description": "Explicit retained remove.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Explicit retained remove item.",
+              "properties": {
+                "itemId": {
+                  "description": "Explicit retained itemId.",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                "reason": {
+                  "description": "Explicit retained reason.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "itemId",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "changeId",
+          "add",
+          "remove",
+          "note"
+        ],
+        "type": "object"
+      },
+      "description": "Publish one explicit evidence delta on the exact currently executing native turn; final reply fence is unchanged. POST /api/evidence/present. Scope write; kind create.",
+      "name": "evidence_present",
+      "readOnlyHint": false,
+      "returns": {
+        "fields": [
+          {
+            "name": "result",
+            "what": "The declared output of evidence_present: added (array<object>), author (object), changeId (string), createdAt (string), messageId (string), note (string|null), releaseId (string), removed (array<object>), revision (integer), turnId (string), duplicate (boolean)."
+          }
+        ],
+        "what": "Declared evidence_present result wrapped as result (added (array<object>), author (object), changeId (string), createdAt (string), messageId (string), note (string|null), releaseId (string), removed (array<object>), revision (integer), turnId (string), duplicate (boolean))."
+      },
+      "writes": true
     },
     {
       "arguments": {
@@ -537,17 +1073,17 @@
         ],
         "type": "object"
       },
-      "description": "Publish one explicit evidence delta on the exact currently executing native turn; final reply fence is unchanged. POST /api/evidence/present. Scope write; kind create.",
-      "name": "evidence_present",
+      "description": "Publish one explicit evidence delta whose additions each carry a canvas template (or null for the default) on the exact currently executing native turn; final reply fence is unchanged. POST /api/evidence/present-templated. Scope write; kind create.",
+      "name": "evidence_present_templated",
       "readOnlyHint": false,
       "returns": {
         "fields": [
           {
             "name": "result",
-            "what": "The declared output of evidence_present: added (array<object>), author (object), changeId (string), createdAt (string), messageId (string), note (string|null), releaseId (string), removed (array<object>), revision (integer), turnId (string), duplicate (boolean)."
+            "what": "The declared output of evidence_present_templated: added (array<object>), author (object), changeId (string), createdAt (string), messageId (string), note (string|null), releaseId (string), removed (array<object>), revision (integer), turnId (string), duplicate (boolean)."
           }
         ],
-        "what": "Declared evidence_present result wrapped as result (added (array<object>), author (object), changeId (string), createdAt (string), messageId (string), note (string|null), releaseId (string), removed (array<object>), revision (integer), turnId (string), duplicate (boolean))."
+        "what": "Declared evidence_present_templated result wrapped as result (added (array<object>), author (object), changeId (string), createdAt (string), messageId (string), note (string|null), releaseId (string), removed (array<object>), revision (integer), turnId (string), duplicate (boolean))."
       },
       "writes": true
     },
@@ -592,6 +1128,50 @@
           }
         ],
         "what": "Declared evidence_read result wrapped as result (anchor (string|null), conversationId (string), cursor (integer), hasMore (boolean), items (array<object>), revision (integer), total (integer))."
+      },
+      "writes": false
+    },
+    {
+      "arguments": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "description": "Exact anchor or null for current.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cursor": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Explicit page/fragment resource limit.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "anchor",
+          "cursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "description": "Read a compact current set or one immutable conversation anchor, with each item's canvas template, then detail on demand. GET /api/evidence/templated. Scope read; kind read.",
+      "name": "evidence_read_templated",
+      "readOnlyHint": true,
+      "returns": {
+        "fields": [
+          {
+            "name": "result",
+            "what": "The declared output of evidence_read_templated: anchor (string|null), conversationId (string), cursor (integer), hasMore (boolean), items (array<object>), revision (integer), total (integer)."
+          }
+        ],
+        "what": "Declared evidence_read_templated result wrapped as result (anchor (string|null), conversationId (string), cursor (integer), hasMore (boolean), items (array<object>), revision (integer), total (integer))."
       },
       "writes": false
     }

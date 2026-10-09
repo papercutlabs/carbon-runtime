@@ -265,11 +265,20 @@ opens a Store and a browser bridge and calls `createBrowserHost({ store, bridge,
 it never imports another Carbon path and never reads a stored record or an
 `adapter_fields` key. The functions are `openConversation`, `submitMessage`,
 `stageFile`, `readConversation`, `readChanges`, `readMessage`, `readFiles`,
-`readCanvas` and `readPeriodSummary`; each takes the server grant the bridge checks.
+`readCanvas`, `readPeriodSummary`, `readEvidencePage`, `readEvidenceChanges`,
+`readEvidenceFragment` and `downloadEvidence`; each takes the server grant the bridge
+checks. The evidence functions return the same wire shapes as the generated evidence
+operations (with cursors, changes, selected fragments and the retained original bytes),
+so a host needs no `browser-evidence` import. `submitMessage` accepts an optional
+`requestKind` (`investigate`, `follow_up`, `copy_draft`), stored as
+`adapter_fields.request_kind`.
 
 A message view carries `messageId`, `conversationId`, `role`, `sender`, `text`,
 `createdAt`, `replyTo`, `turnId`, `submissionIds`, `files`, `state`,
-`validationFaults` and `nativeReason`. `state` is exactly one of `accepted`,
+`validationFaults`, `nativeReason`, `requestKind`, `inputKind` and `reply`
+(`sources`, `uncertainty`, `draftLabel`, or null). The activity view carries
+`nativeTurnId` and `nativeReason`; `nativeReason` is null when none was retained,
+for example after an acceptance crash. `state` is exactly one of `accepted`,
 `queued`, `running`, `answer`, `evidence_update`, `failed` or `uncertain`. An
 evidence publication is always `evidence_update`, never `answer`. An input's state
 is the progress of the response it asked for, and is `answer` once answered; only
