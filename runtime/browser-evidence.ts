@@ -7,7 +7,7 @@ import { Store, StreamFault, type Attachment, type MessageRecord } from '../stre
 import { fault, type Fault } from '../stream/faults.ts';
 import { validateInput, Type } from '@pcl/routes';
 const validateEvidence=(schema:Record<string,unknown>,value:unknown)=>validateInput(Type.Unsafe({type:'object',additionalProperties:false,required:['value'],properties:{value:schema}}),{value});
-import { assertNoSymlinks, type BrowserWorkspace } from './browser-files.ts';
+import { assertNoSymlinks, consultantUploadProvenance, type BrowserWorkspace } from './browser-files.ts';
 import { indexEvidenceRepresentation, resolveEvidenceFragment, type EvidenceSelector, type EvidenceRepresentation, REPRESENTATION_VERSION } from './browser-evidence-representation.ts';
 import type { EvidenceReference } from '../lib/browser-evidence.ts';
 export type { EvidenceReference } from '../lib/browser-evidence.ts';
@@ -68,6 +68,11 @@ function representation(store:Store,source:EvidenceSource){
  let rep=cache.get(key);if(!rep){rep=indexEvidenceRepresentation(file.bytes,source.attachment.mime,source.attachment.filename??'');cache.set(key,rep);}return rep;
 }
 function mimeFor(p:string){return ({'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.csv':'text/csv','.json':'application/json','.txt':'text/plain','.log':'text/plain','.md':'text/plain','.pdf':'application/pdf'} as Record<string,string>)[path.extname(p).toLowerCase()]??'application/octet-stream';}
+function consultantUploadReceipt(store:Store,conversation:string,workspace:BrowserWorkspace,given:string,received:VerifiedFile){
+ const parts=path.relative(workspace.evidence,given).split(path.sep);if(parts.length!==2||parts[0]!==received.sha256)return null;
+ const provenance=consultantUploadProvenance(store,{conversationId:conversation,sha256:received.sha256,filename:parts[1]});
+ return provenance&&provenance.bytes===received.bytes.length?{provenance:provenance as Record<string,unknown>,mime:provenance.mediaType,filename:provenance.filename}:null;
+}
 function sourceReceipt(store:Store,root:string,given:string,bytes:Buffer,received:VerifiedFile,filename:string){
 let sidecar;try{sidecar=JSON.parse(checkedBytes(store,root,given+'.provenance.json').bytes.toString('utf8'));}catch{refuse('EVIDENCE_ORIGINAL_UNREGISTERED','path','original must have a tools-owned protected provenance receipt');}
  if(sidecar.size!==bytes.length||sidecar.sha256!==undefined&&sidecar.sha256!==received.sha256||typeof sidecar.mediaType!=='string'||!sidecar.provenance)refuse('EVIDENCE_PROVENANCE_INVALID','path','source receipt does not describe the exact received bytes');const provenance=sidecar.provenance,mime=sidecar.mediaType.split(';')[0];filename=sidecar.filename??filename;if(!filename||/[\\/\x00-\x1f]/.test(filename))refuse('EVIDENCE_PROVENANCE_INVALID','filename','original filename must be a plain safe name');return {provenance,mime,filename};
@@ -76,7 +81,7 @@ function sourceFromPath(store:Store,conversation:string,workspace:BrowserWorkspa
  const original=inside(workspace.evidence,given),root=original?workspace.evidence:inside(workspace.analysis,given)?workspace.analysis:inside(workspace.output,given)?workspace.output:null;
  if(!root||producer&&original)refuse('EVIDENCE_PATH_REFUSED','path','only a protected received source or this ticket analysis/output file is accepted');
  const received=checkedBytes(store,root,given),bytes=received.bytes;let provenance:Record<string,unknown>|null=null,mime=mimeFor(given),filename=path.basename(given);
- if(original)({provenance,mime,filename}=sourceReceipt(store,root,given,bytes,received,filename));
+ if(original)({provenance,mime,filename}=fs.existsSync(given+'.provenance.json')?sourceReceipt(store,root,given,bytes,received,filename):consultantUploadReceipt(store,conversation,workspace,given,received)??sourceReceipt(store,root,given,bytes,received,filename));
  const id='source-'+hash(JSON.stringify([conversation,given,received.sha256,mime,provenance]));
  const existing=cache.get(store)?.get(conversation)?.sources.get(id);if(existing){intact(store,existing);return {...existing,producer:null};}
  const attachment=store.putAttachment({conversation_id:conversation,message_id:id},bytes,{mime,filename});
@@ -158,4 +163,4 @@ export function modelEvidenceReferences(store:Store,conversation:string,referenc
  return {references:resolved,inputs};
 }
 
-export function publicEvidenceFragment(result:ReturnType<typeof readEvidenceFragment>){const content={...result.content};if('value' in content)delete content.value;const provenance=result.provenance?Object.fromEntries(['source','locator','fetchedAt','revision','sha256','completeness','conversion'].map(k=>[k,typeof result.provenance![k]==='string'?result.provenance![k]:null])):null;return {...result,content,provenance};}
+export function publicEvidenceFragment(result:ReturnType<typeof readEvidenceFragment>){const content={...result.content};if('value' in content)delete content.value;const upload=result.provenance?.kind==='consultant_upload'?result.provenance:null;const provenance=upload?{kind:upload.kind,actorId:upload.actorId,actorName:upload.actorName,attachmentId:upload.attachmentId,sha256:upload.sha256,bytes:upload.bytes,mediaType:upload.mediaType,filename:upload.filename,boundAt:upload.boundAt}:result.provenance?Object.fromEntries(['source','locator','fetchedAt','revision','sha256','completeness','conversion'].map(k=>[k,typeof result.provenance![k]==='string'?result.provenance![k]:null])):null;return {...result,content,provenance};}
