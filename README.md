@@ -347,7 +347,7 @@ workflow, no tools. It publishes nothing.
 Node 22, ES modules, and three runtime dependencies: `@whiskeysockets/baileys`
 for WhatsApp, `postgres` for the agent's on-box PostgreSQL records, and `@pcl/routes`
 for the existing generated evidence HTTP/CLI/MCP interface. The routes package is
-the retained `vendor/pcl-routes-0.1.0.tgz` archive, with its exact version and digest
+the retained `vendor/pcl-routes-0.1.2.tgz` archive, with its exact version and digest
 checked by the release workflow; it needs no registry during installation. The other two are
 pinned in `package.json` and `package-lock.json`. TypeScript is the sole development dependency. The checks use it to
 typecheck; the release tarball does not carry it. The Telegram adapter is the

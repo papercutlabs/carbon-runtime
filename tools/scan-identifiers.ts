@@ -62,7 +62,7 @@ function files(root: string): string[] {
 // public contract identifiers. Only these tokens are classified; every other
 // word on the same line still passes through the existing denied-name check.
 const PUBLISHED_INTERFACE_TOKENS = [
-  'node_modules/@pcl/routes', 'vendor/pcl-routes-0.1.0.tgz',
+  'node_modules/@pcl/routes', 'vendor/pcl-routes-0.1.2.tgz',
   '@pcl/routes/generate', '@pcl/routes/cli', '@pcl/routes/mcp', '@pcl/routes',
   'pcl.routes.v1', 'PCL_API_TOKEN', 'PCL_API_URL', 'PCL_API_SCOPES'
 ];

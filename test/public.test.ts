@@ -83,7 +83,7 @@ test('the scan refuses walks with no candidate files after exclusions', (t) => {
 
  test('exact published interface names are classified without exempting lines or lookalikes',t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'carbon-published-token-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const file=path.join(dir,'interface.txt');
-  const tokens=['@pcl/routes','@pcl/routes/cli','@pcl/routes/mcp','@pcl/routes/generate','node_modules/@pcl/routes','vendor/pcl-routes-0.1.0.tgz','pcl.routes.v1','PCL_API_TOKEN','PCL_API_URL','PCL_API_SCOPES'];
+  const tokens=['@pcl/routes','@pcl/routes/cli','@pcl/routes/mcp','@pcl/routes/generate','node_modules/@pcl/routes','vendor/pcl-routes-0.1.2.tgz','pcl.routes.v1','PCL_API_TOKEN','PCL_API_URL','PCL_API_SCOPES'];
   fs.writeFileSync(file,tokens.map(token=>JSON.stringify(token)).join('\n'));assert.equal(scan(dir).code,0);fs.writeFileSync(file,'Schema pcl.routes.v1. Application version 0.1.0.');assert.equal(scan(dir).code,0);
   const denied='stu'+'dio';fs.writeFileSync(file,'PCL_API_TOKEN '+denied);assert.equal(scan(dir).code,1,'published token does not exempt a nearby private name');
   for(const token of tokens){for(const lookalike of ['prefix/'+token,token+'.unqualified']){fs.writeFileSync(file,lookalike);assert.equal(scan(dir).code,1,'unqualified published lookalike passed');}}

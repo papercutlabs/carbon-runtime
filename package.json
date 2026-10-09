@@ -32,7 +32,7 @@
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "postgres": "3.4.9",
-    "@pcl/routes": "file:vendor/pcl-routes-0.1.0.tgz"
+    "@pcl/routes": "file:vendor/pcl-routes-0.1.2.tgz"
   },
   "devDependencies": {
     "typescript": "7.0.2"

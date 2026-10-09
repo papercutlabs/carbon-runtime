@@ -86,7 +86,7 @@ function optionalField(value: unknown, key: string): unknown {
 
 export const RULES = {
   SHAPE_ONE_DEPENDENCY: {
-    why: 'the runtime ships as a tarball onto a box with no registry, so its runtime dependencies are the exactly pinned @whiskeysockets/baileys and postgres plus the vendored @pcl/routes 0.1.0 package and its sole development dependency is pinned TypeScript; carbon-core has no runtime dependency and exactly pinned TypeScript and Node declarations for development. Ordinary typecheck must invoke the entrypoint checker so extensionless bin starters are covered alongside TypeScript source.'
+    why: 'the runtime ships as a tarball onto a box with no registry, so its runtime dependencies are the exactly pinned @whiskeysockets/baileys and postgres plus the vendored @pcl/routes 0.1.2 package and its sole development dependency is pinned TypeScript; carbon-core has no runtime dependency and exactly pinned TypeScript and Node declarations for development. Ordinary typecheck must invoke the entrypoint checker so extensionless bin starters are covered alongside TypeScript source.'
   },
   SHAPE_CLIENT_IDENTIFIER: {
     why: 'a client identifier in the core makes the universal layer client-specific, and one in the public half publishes it; both are refused by the scans that already exist.'
@@ -603,7 +603,7 @@ function runtimePackage(pkg: unknown, out: FaultRow[]): void {
       `this repository declares ${names.length === 0 ? 'no dependency' : names.join(', ')}, and this release names ${expected.join(' and ')}`,
       'name every runtime dependency here and explain it in the release contract'));
   }
-  for (const name of expected) if (!(name === '@pcl/routes' ? field(declared,name) === 'file:vendor/pcl-routes-0.1.0.tgz' : isExactPin(field(declared, name)))) {
+  for (const name of expected) if (!(name === '@pcl/routes' ? field(declared,name) === 'file:vendor/pcl-routes-0.1.2.tgz' : isExactPin(field(declared, name)))) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
       `${name} is declared as ${field(declared, name)}, which is absent or not an exact version`,
       'pin the exact version, so the tarball that goes on a box is the one that was tested'));

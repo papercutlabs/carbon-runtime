@@ -33,7 +33,7 @@ jobs:
             }
             for (const name of names) {
               if (name === "@pcl/routes") {
-                if (declared[name] !== "file:vendor/pcl-routes-0.1.0.tgz") throw new Error("typed routes must name the exact vendored package");
+                if (declared[name] !== "file:vendor/pcl-routes-0.1.2.tgz") throw new Error("typed routes must name the exact vendored package");
                 continue;
               }
               if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(declared[name])) {
@@ -41,12 +41,12 @@ jobs:
               }
             }
             const lock = require("./package-lock.json").packages["node_modules/@pcl/routes"];
-            if (lock.version !== "0.1.0" || lock.resolved !== declared["@pcl/routes"]) {
-              throw new Error("typed routes lock must name version 0.1.0 and the exact vendored path");
+            if (lock.version !== "0.1.2" || lock.resolved !== declared["@pcl/routes"]) {
+              throw new Error("typed routes lock must name version 0.1.2 and the exact vendored path");
             }
-            const bytes = require("node:fs").readFileSync("vendor/pcl-routes-0.1.0.tgz");
+            const bytes = require("node:fs").readFileSync("vendor/pcl-routes-0.1.2.tgz");
             const actual = require("node:crypto").createHash("sha256").update(bytes).digest("hex");
-            if (actual !== "6fbaf01ccff3bfe7df8ea5e0c589d6b386ca013bb7a53e4284eee6267c910f12") {
+            if (actual !== "591283db82e70e5b46161bfa527fbc703d53fbbb477ec0e02268611b1426c4c4") {
               throw new Error("the exact reviewed typed routes archive integrity changed");
             }
             const dev = pkg.devDependencies ?? {};
