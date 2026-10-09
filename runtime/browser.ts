@@ -79,6 +79,14 @@ export function createBrowserBridge({ store, agent, account, authorize }: { stor
       return result;
     },
     read,
+    readMessage(grant: unknown, key: string, messageId: string) {
+      const conversation_id = check(grant, key, 'read');
+      return store.read(conversation_id, messageId);
+    },
+    readHistory(grant: unknown, key: string) {
+      const conversation_id = check(grant, key, 'read');
+      return { conversation_id, records: browserHistory(store, conversation_id), ...readBrowserActivity(store, conversation_id) };
+    },
     watch(grant: unknown, key: string, options: BrowserWatchOptions): Promise<BrowserPage> {
       const conversationId = check(grant, key, 'watch');
       if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 0 || options.timeoutMs > 30000) refuse('BROWSER_WAIT_INVALID', key, 'wait must be between zero and 30000 ms');

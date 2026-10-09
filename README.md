@@ -258,6 +258,38 @@ Nine rules are worth stating on their own.
 
 `runtime/proofs/` holds what has been run for real against the pinned harness.
 
+## The browser-host interface
+
+`runtime/browser-host.ts` is the one public entry for a browser host. A host
+opens a Store and a browser bridge and calls `createBrowserHost({ store, bridge, account })`;
+it never imports another Carbon path and never reads a stored record or an
+`adapter_fields` key. The functions are `openConversation`, `submitMessage`,
+`stageFile`, `readConversation`, `readChanges`, `readMessage`, `readFiles`,
+`readCanvas` and `readPeriodSummary`; each takes the server grant the bridge checks.
+
+A message view carries `messageId`, `conversationId`, `role`, `sender`, `text`,
+`createdAt`, `replyTo`, `turnId`, `submissionIds`, `files`, `state`,
+`validationFaults` and `nativeReason`. `state` is exactly one of `accepted`,
+`queued`, `running`, `answer`, `evidence_update`, `failed` or `uncertain`. An
+evidence publication is always `evidence_update`, never `answer`. An input's state
+is the progress of the response it asked for, and is `answer` once answered; only
+an agent message in state `answer` is an answer to count.
+
+The canvas lists current evidence as items with `itemId`, `template`, `label`,
+`source` and `history`. The template is an opaque string the agent package supplies.
+Carbon fixes one, `original`: an unchanged source file with its provenance, which
+the agent can reference and never author. Evidence the agent derived is template `analysis`.
+
+The period summary counts inputs, answers, evidence updates, unmarked answers (an
+answer with no reply metadata) and the latency of each answer from its earliest
+input.
+
+The views are declared by `schema/carbon.browser-host.v1.json`. The version rule:
+a breaking change to any view needs a new schema version, `carbon.browser-host.v2`,
+beside the old one. Adding an optional field to a request or a new function is not
+breaking. Internal module paths are not a contract, and `package.json` has no
+`exports` map yet.
+
 ## Running the check
 
 ```
