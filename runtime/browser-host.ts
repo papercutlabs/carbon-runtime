@@ -3,11 +3,12 @@
 // Views are declared by schema/carbon.browser-host.v1.json. A breaking change to
 // a view needs a new schema version. Internal module paths are not a contract.
 import fs from 'node:fs';
-import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
+import { Store, type MessageRecord, type Attachment } from '../stream/store.ts';
 import type { BrowserPacket } from '../adapters/browser/index.ts';
 import type { EvidenceReference } from '../lib/browser-evidence.ts';
-import { createBrowserBridge, type BrowserPage } from './browser.ts';
+import { createBrowserBridge, type BrowserPage, type BrowserAuthorization } from './browser.ts';
 import { publicEvidenceFragment, fromWireSelector } from './browser-evidence.ts';
+import { createBrowserThreadOptions } from './browser-policy.ts';
 import { RuntimeFault, fault } from './faults.ts';
 
 const BROWSER_HOST_VERSION = 'carbon.browser-host.v1';
@@ -29,6 +30,12 @@ function provenanceView(provenance: Record<string, unknown> | null): ProvenanceV
   return { kind: provenance.kind === 'consultant_upload' ? 'consultant_upload' : 'received', ...Object.fromEntries(PROVENANCE_TEXT.map((key) => [key, text(provenance[key])])),
     bytes: Number.isInteger(provenance.bytes) ? provenance.bytes as number : null } as ProvenanceView;
 }
+// A file's custody as the host sees it: `kind` is `artifact` for a file the agent produced, `input` for a consultant's;
+// `boundMessageId` is the message it was sent or produced with (null while staged); `actorId` is the staging consultant (null for an artifact).
+export type FileRead = { schema: typeof BROWSER_HOST_VERSION; fileId: string; kind: 'input' | 'artifact'; filename: string; mediaType: string; bytes: number; sha256: string;
+  boundMessageId: string | null; actorId: string | null; state: 'available' | 'missing'; content: Uint8Array | null };
+export type OperatorRead = { schema: typeof BROWSER_HOST_VERSION; conversationId: string; threadId: string | null; uncertain: boolean;
+  uncertainMessageIds: string[]; submissions: { submissionId: string; messageId: string; consultantId: string; turnId: string | null; state: MessageState; nativeReason: string | null }[] };
 export type CanvasItem = { itemId: string; template: string; label: string;
   source: { sourceId: string; sha256: string; selector: object | null; note: string | null; provenance: ProvenanceView | null };
   history: { changeId: string; revision: number; at: string; change: 'added' | 'removed'; reason: string | null }[] };
@@ -122,7 +129,9 @@ type Bridge = ReturnType<typeof createBrowserBridge>;
 type Consultant = { id: string; name: string };
 // `requestKind` is the legacy request form; it replaces `inputKind`, and giving both is refused.
 export type HostSubmission = { ticketKey: string; submissionId: string; consultant: Consultant; text: string; inputKind?: 'start' | 'message'; requestKind?: RequestKind;
-  fileIds?: string[]; references?: EvidenceReference[]; acceptedAt?: string; position?: string };
+  fileIds?: string[]; references?: WireReference[]; acceptedAt?: string; position?: string };
+// A reference as the companion's wire carries it: its selector is the wire form (every selector field present, irrelevant ones null).
+export type WireReference = Omit<EvidenceReference, 'selector'> & { selector: unknown };
 type PageOptions = { after?: number; activityAfter?: number; limit?: number };
 
 function pageView(page: BrowserPage) {
@@ -157,10 +166,38 @@ function summarize(records: MessageRecord[], from: string, to: string, ticketKey
     latency: { perAnswer, medianMs: median(perAnswer.flatMap((one) => one.ms === null ? [] : [one.ms])) } };
 }
 
+function fileRead(bridge: Bridge, grant: unknown, ticketKey: string, fileId: string, bytes: boolean): FileRead {
+  const { metadata, bytes: content } = bridge.readAttachment(grant, ticketKey, fileId, { includeBytes: bytes });
+  const bound = metadata.bound_message_id ? bridge.readMessage(grant, ticketKey, metadata.bound_message_id) : null;
+  return { schema: BROWSER_HOST_VERSION, fileId: metadata.attachment_id, kind: bound && (bound.role === 'agent' || bound.role === 'system') ? 'artifact' : 'input',
+    filename: metadata.filename, mediaType: metadata.mime, bytes: metadata.bytes, sha256: metadata.sha256,
+    boundMessageId: metadata.bound_message_id ?? null, actorId: metadata.actor_id ?? null, state: metadata.state, content };
+}
+function operatorRead(bridge: Bridge, grant: unknown, ticketKey: string): OperatorRead {
+  const operator = bridge.operatorRead(grant, ticketKey);
+  const latest = new Map<string, MessageRecord>();
+  for (const record of bridge.readHistory(grant, ticketKey).records) latest.set(record.message_id, record);
+  const views = [...latest.values()].map(messageView);
+  return { schema: BROWSER_HOST_VERSION, conversationId: operator.conversation_id, threadId: (operator.thread?.thread_id as string | undefined) ?? null,
+    uncertain: views.some((one) => one.state === 'uncertain'), uncertainMessageIds: views.filter((one) => one.state === 'uncertain').map((one) => one.messageId),
+    submissions: views.filter((one) => one.role !== 'agent' && one.role !== 'system').map((one) => ({ submissionId: one.submissionIds[0] ?? '', messageId: one.messageId,
+      consultantId: one.sender.id, turnId: one.turnId, state: one.state, nativeReason: one.nativeReason })) };
+}
+
+type EvidenceChanges = Awaited<ReturnType<Bridge['evidenceChanges']>>['changes'];
+function canvasItem(bridge: Bridge, grant: unknown, ticketKey: string, item: ReturnType<Bridge['evidenceRead']>['items'][number], changes: EvidenceChanges): CanvasItem {
+  const fragment = publicEvidenceFragment(bridge.evidenceFragment(grant, ticketKey, item.id, item.selector, 0, 0, 1));
+  return { itemId: item.id, template: templateOf(item), label: item.label,
+    source: { sourceId: item.sourceId, sha256: item.digest, selector: item.selector, note: item.note, provenance: provenanceView(fragment.provenance as Record<string, unknown> | null) },
+    history: changes.flatMap((change) => [
+      ...change.added.filter((one) => one.id === item.id).map(() => ({ changeId: change.changeId, revision: change.revision, at: change.createdAt, change: 'added' as const, reason: change.note })),
+      ...change.removed.filter((one) => one.itemId === item.id).map((one) => ({ changeId: change.changeId, revision: change.revision, at: change.createdAt, change: 'removed' as const, reason: one.reason })) ]) };
+}
+
 export function createBrowserHost({ store, bridge, account }: { store: Store; bridge: Bridge; account: string }) {
   async function submit(grant: unknown, input: HostSubmission) {
     const packet: BrowserPacket = { account, ticket_key: input.ticketKey, submission_id: input.submissionId, consultant: input.consultant,
-      ...(input.requestKind === undefined ? { input_kind: input.inputKind ?? 'message' } : { request_kind: input.requestKind, ...(input.inputKind === undefined ? {} : { input_kind: input.inputKind }) }), body: input.text, attachment_ids: input.fileIds ?? [], references: input.references ?? [],
+      ...(input.requestKind === undefined ? { input_kind: input.inputKind ?? 'message' } : { request_kind: input.requestKind, ...(input.inputKind === undefined ? {} : { input_kind: input.inputKind }) }), body: input.text, attachment_ids: input.fileIds ?? [], references: (input.references ?? []).map((one) => ({ ...one, selector: fromWireSelector(one.selector) })) as EvidenceReference[],
       accepted_at: input.acceptedAt ?? new Date().toISOString(), position: input.position ?? String(store.nextSeq()).padStart(20, '0') };
     const { record, duplicate } = bridge.submit(grant, packet);
     return { message: messageView(record), duplicate };
@@ -196,17 +233,16 @@ export function createBrowserHost({ store, bridge, account }: { store: Store; br
         return { fileId: metadata.attachment_id, filename: metadata.filename, mediaType: metadata.mime, bytes: metadata.bytes, sha256: metadata.sha256, content: bytes };
       });
     },
+    // One file's custody and, with `bytes`, its content. The grant check and the refusal of another consultant's staged file are the bridge's.
+    async readFile(grant: unknown, ticketKey: string, fileId: string, { bytes = false }: { bytes?: boolean } = {}) { return fileRead(bridge, grant, ticketKey, fileId, bytes); },
+    // What an operator route shows: the native thread, whether any message is uncertain, and each consultant input's state.
+    async readOperator(grant: unknown, ticketKey: string) { return operatorRead(bridge, grant, ticketKey); },
+    // The native thread permission profile for a browser conversation; Carbon owns its shape.
+    threadOptions: createBrowserThreadOptions,
     async readCanvas(grant: unknown, ticketKey: string, { cursor = 0, limit = 50, anchor = null }: { cursor?: number; limit?: number; anchor?: string | null } = {}) {
       const page = bridge.evidenceRead(grant, ticketKey, { cursor, limit, anchor });
       const changes = (await bridge.evidenceChanges(grant, ticketKey, { limit: 1000 })).changes;
-      const items: CanvasItem[] = page.items.map((item) => {
-        const fragment = publicEvidenceFragment(bridge.evidenceFragment(grant, ticketKey, item.id, item.selector, 0, 0, 1));
-        return { itemId: item.id, template: templateOf(item), label: item.label,
-          source: { sourceId: item.sourceId, sha256: item.digest, selector: item.selector, note: item.note, provenance: provenanceView(fragment.provenance as Record<string, unknown> | null) },
-          history: changes.flatMap((change) => [
-            ...change.added.filter((one) => one.id === item.id).map(() => ({ changeId: change.changeId, revision: change.revision, at: change.createdAt, change: 'added' as const, reason: change.note })),
-            ...change.removed.filter((one) => one.itemId === item.id).map((one) => ({ changeId: change.changeId, revision: change.revision, at: change.createdAt, change: 'removed' as const, reason: one.reason })) ]) };
-      });
+      const items = page.items.map((item) => canvasItem(bridge, grant, ticketKey, item, changes));
       return { schema: BROWSER_HOST_VERSION, conversationId: page.conversationId, revision: page.revision, items, cursor: page.cursor, hasMore: page.hasMore, total: page.total };
     },
     // The evidence routes' views, for a companion that publishes them: exactly the wire shapes the templated
@@ -234,3 +270,10 @@ export function createBrowserHost({ store, bridge, account }: { store: Store; br
   };
 }
 export type BrowserHost = ReturnType<typeof createBrowserHost>;
+
+// Open the store and bridge a host needs. `store` is what the runtime start takes as its `store` option.
+export function openBrowserHost({ storeDir, agent, account, authorize }: { storeDir: string; agent: string; account: string; authorize: BrowserAuthorization }) {
+  const store = Store.open(storeDir);
+  const bridge = createBrowserBridge({ store, agent, account, authorize });
+  return { store, host: createBrowserHost({ store, bridge, account }) };
+}

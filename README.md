@@ -260,18 +260,27 @@ Nine rules are worth stating on their own.
 
 ## The browser-host interface
 
-`runtime/browser-host.ts` is the one public entry for a browser host. A host
-opens a Store and a browser bridge and calls `createBrowserHost({ store, bridge, account })`;
-it never imports another Carbon path and never reads a stored record or an
+`runtime/browser-host.ts` is the one public entry for a browser host. A host calls
+`openBrowserHost({ storeDir, agent, account, authorize })`, which opens the store and the
+bridge and returns `{ host, store }`; `store` is the `store` option the runtime start
+takes. The only Carbon paths a host imports are this module and the runtime start
+(`runtime/index.ts` and the harness). It never reads a stored record or an
 `adapter_fields` key. The functions are `openConversation`, `submitMessage`,
-`stageFile`, `readConversation`, `readChanges`, `readMessage`, `readFiles`,
-`readCanvas`, `readPeriodSummary`, `readEvidencePage`, `readEvidenceChanges`,
-`readEvidenceFragment` and `downloadEvidence`; each takes the server grant the bridge
+`stageFile`, `readConversation`, `readChanges`, `readMessage`, `readFiles`, `readFile`,
+`readOperator`, `readCanvas`, `readPeriodSummary`, `readEvidencePage`, `readEvidenceChanges`,
+`readEvidenceFragment`, `downloadEvidence` and `threadOptions` (the native permission
+profile for browser threads); each takes the server grant the bridge
 checks. The evidence functions return the same wire shapes as the generated evidence
 operations (with cursors, changes, selected fragments and the retained original bytes),
 so a host needs no `browser-evidence` import. `submitMessage` accepts an optional
 `requestKind` (`investigate`, `follow_up`, `copy_draft`), stored as
-`adapter_fields.request_kind`.
+`adapter_fields.request_kind`. Its `references` are in the wire form the evidence
+operations return (every selector field present, irrelevant ones null); the host
+converts them and refuses a malformed selector. `readFile` returns one file's custody:
+`fileId`, `kind` (`input` or `artifact`), `filename`, `mediaType`, `bytes`, `sha256`,
+`boundMessageId`, `actorId`, `state` and, when asked for, the `content`; another
+consultant's staged file is refused. `readOperator` returns the thread id, whether any
+message is uncertain, and each consultant input's state and native reason.
 
 A message view carries `messageId`, `conversationId`, `role`, `sender`, `text`,
 `createdAt`, `replyTo`, `turnId`, `submissionIds`, `files`, `state`,

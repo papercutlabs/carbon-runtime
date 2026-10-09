@@ -8,10 +8,11 @@ import { validateOutput, Type } from '@pcl/routes';
 import { Store } from '../stream/store.ts';
 import { browserConversationId } from '../adapters/browser/index.ts';
 import { createBrowserBridge } from '../runtime/browser.ts';
-import { createBrowserHost, messageView, templateOf, reasonOf, BROWSER_HOST_SCHEMA, HOST_ADAPTER_FIELDS, type MessageState } from '../runtime/browser-host.ts';
+import { createBrowserHost, openBrowserHost, messageView, templateOf, reasonOf, BROWSER_HOST_SCHEMA, HOST_ADAPTER_FIELDS, type MessageState } from '../runtime/browser-host.ts';
 import { browserWorkspace } from '../runtime/browser-files.ts';
 import { presentEvidence, toWireSelector, readEvidenceChanges, readEvidenceFragment, readEvidence } from '../runtime/browser-evidence.ts';
 import { StreamFault } from '../stream/store.ts';
+import { RuntimeFault } from '../runtime/faults.ts';
 import { replyHandler } from '../runtime/reply-tool.ts';
 import { materializeBrowserAttachments } from '../runtime/browser-files.ts';
 
@@ -333,4 +334,78 @@ test('reasonOf reads text, faults, native failure evidence and nothing it cannot
   assert.equal(reasonOf({ original_reason: null, original_reason_available: false, native_code: null }), null);
   assert.equal(reasonOf([]), null); assert.equal(reasonOf([{ problem: 'first' }, 'second']), 'first');
   assert.equal(reasonOf({ other: 1 }), '{"other":1}');
+});
+
+test('readFile reports custody for a staged, a sent and an agent file, with bytes on request, and refuses another consultant\'s staged file', async (t) => {
+  const s = setup(t);
+  const bob = { id: 'bob', name: 'Bob' }, aliceGrant = { consultant: { id: 'alice' } }, bobGrant = { consultant: { id: 'bob' } };
+  const wide = createBrowserHost({ store: s.store, bridge: createBrowserBridge({ store: s.store, agent: 'synthetic-agent', account: s.account, authorize: () => true }), account: s.account });
+  const staged = await wide.stageFile(aliceGrant, KEY, { actor: alice, uploadId: 'f1', filename: 'rows.csv', mime: 'text/csv', bytes: Buffer.from('a,b\n'), maxBytes: 1024 });
+  const before = await wide.readFile(aliceGrant, KEY, staged.fileId);
+  assert.deepEqual(validateView('fileRead', { ...before, content: before.content ?? null }), []);
+  assert.deepEqual([before.kind, before.boundMessageId, before.actorId, before.state, before.content], ['input', null, 'alice', 'available', null]);
+  await assert.rejects(wide.readFile(bobGrant, KEY, staged.fileId), (e) => e instanceof RuntimeFault ? e.faults[0].code === 'BROWSER_FILE_ACTOR_REFUSED' : e instanceof StreamFault);
+  await wide.submitMessage(aliceGrant, { ticketKey: KEY, submissionId: 'f-s1', consultant: alice, text: 'with file', fileIds: [staged.fileId] });
+  const sent = await wide.readFile(bobGrant, KEY, staged.fileId, { bytes: true });
+  assert.equal(sent.boundMessageId, `${s.conversation}:f-s1`); assert.equal(sent.kind, 'input'); assert.equal(sent.sha256, staged.sha256);
+  assert.equal(Buffer.from(sent.content!).toString(), 'a,b\n'); assert.deepEqual(validateView('fileRead', { ...sent, content: {} }), []);
+  s.release('f-s1', 'turn-f');
+  fs.mkdirSync(s.workspace.output, { recursive: true });
+  const out = path.join(s.workspace.output, 'answer.txt'); fs.writeFileSync(out, 'artifact bytes');
+  s.store.activeBrowserReply = { conversation_id: s.conversation, release_id: 'turn-f', output_root: s.workspace.output, workspace: s.workspace } as never;
+  s.reply({ conversation_id: s.conversation, request_id: 'turn-f', text: 'done', attachments: [out] });
+  const answer = (await wide.readConversation(aliceGrant, KEY)).messages.map((m) => m.message).find((m) => m.role === 'agent')!;
+  const artifact = await wide.readFile(bobGrant, KEY, answer.files[0].fileId, { bytes: true });
+  assert.deepEqual([artifact.kind, artifact.boundMessageId, artifact.actorId], ['artifact', answer.messageId, null]);
+  assert.equal(Buffer.from(artifact.content!).toString(), 'artifact bytes');
+  await assert.rejects(s.host.readFile('wrong', KEY, staged.fileId));
+});
+
+test('readOperator reports the thread, uncertainty and each input\'s state and native reason, under the operator grant', async (t) => {
+  const s = setup(t);
+  await s.submit('o1'); s.release('o1', 'turn-o');
+  s.store.writeThread(s.conversation, { ...s.store.readThread(s.conversation), unit_id: s.conversation, thread_id: 'thread' });
+  await s.submit('o2'); s.store.annotate(s.read('o2'), { model_effect: 'uncertain', browser_delivery: { phase: 'uncertain', reason: 'native outcome unknown' } });
+  s.reply({ conversation_id: s.conversation, request_id: 'turn-o', text: 'answer' });
+  const view = await s.host.readOperator(GRANT, KEY);
+  assert.deepEqual(validateView('operator', view), [], JSON.stringify(view));
+  assert.equal(view.threadId, 'thread'); assert.equal(view.conversationId, s.conversation); assert.equal(view.uncertain, true);
+  assert.deepEqual(view.uncertainMessageIds, [`${s.conversation}:o2`]);
+  assert.deepEqual(view.submissions.map((one) => [one.submissionId, one.state, one.nativeReason]), [['o1', 'running', null], ['o2', 'uncertain', 'native outcome unknown']]);
+  assert.equal(view.submissions.some((one) => one.messageId === ''), false);
+  const readOnly = createBrowserHost({ store: s.store, bridge: createBrowserBridge({ store: s.store, agent: 'synthetic-agent', account: s.account, authorize: (_g, _k, op) => op !== 'operator' }), account: s.account });
+  await assert.rejects(readOnly.readOperator(GRANT, KEY), (e) => e instanceof RuntimeFault && e.faults[0].code === 'BROWSER_ACCESS_DENIED');
+});
+
+test('submitMessage takes wire references and refuses a malformed wire selector', async (t) => {
+  const s = setup(t);
+  await s.submit('r0'); s.release('r0', 'turn-w');
+  const original = publish(s, 'w.txt', 'line one\nline two\n', 'Source', 'original', 'turn-w', 'original');
+  const fragment = await s.host.readEvidenceFragment(GRANT, KEY, original, { selector: toWireSelector({ kind: 'lines', start: 2, end: 2 }) });
+  const wire = { ...fragment.reference, selector: toWireSelector({ kind: 'lines', start: 2, end: 2 }) };
+  assert.equal((wire.selector as { pointer: unknown }).pointer, null);
+  const sent = await s.submit('r1', 'see this', { references: [wire] });
+  assert.equal(sent.duplicate, false);
+  const stored = s.read('r1').adapter_fields!.references as { selector: object }[];
+  assert.deepEqual(stored[0].selector, { kind: 'lines', start: 2, end: 2 });
+  assert.equal((await s.submit('r1', 'see this', { references: [wire] })).duplicate, true);
+  await assert.rejects(s.submit('r2', 'bad', { references: [{ ...wire, selector: { kind: 'lines' } }] }), (e) => e instanceof StreamFault);
+  assert.equal(s.store.read(s.conversation, `${s.conversation}:r2`), null);
+});
+
+test('openBrowserHost opens the store and bridge itself and exposes the store and the thread options policy', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'carbon-open-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const opened = openBrowserHost({ storeDir: path.join(root, 'store'), agent: 'synthetic-agent', account: 'synthetic', authorize: (grant) => grant === GRANT });
+  assert.ok(opened.store instanceof Store);
+  assert.equal((await opened.host.openConversation(GRANT, KEY)).created, false);
+  await opened.host.submitMessage(GRANT, { ticketKey: KEY, submissionId: 'x1', consultant: alice, text: 'hello' });
+  assert.equal(opened.store.recordsIn(browserConversationId('synthetic', KEY)).length, 1);
+  await assert.rejects(opened.host.readConversation('wrong', KEY));
+  fs.mkdirSync(path.join(root, 'work')); fs.mkdirSync(path.join(root, 'checkout'));
+  const options = opened.host.threadOptions({ work: path.join(root, 'work'), checkout: path.join(root, 'checkout'), readRoots: [], privateRoots: [path.join(root, 'store')] });
+  const workspace = browserWorkspace({ work: path.join(root, 'work'), conversationId: 'c', checkout: path.join(root, 'checkout') });
+  const chosen = options({ conversationId: 'c', workspace });
+  assert.match(chosen.permissions, /^carbon-browser-/);
+  assert.throws(() => opened.host.threadOptions({ work: 'relative', checkout: path.join(root, 'checkout'), readRoots: [], privateRoots: ['/x'] }), (e) => e instanceof RuntimeFault);
 });
