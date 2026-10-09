@@ -43,7 +43,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 
 // What a box needs to run an agent, and nothing else.
 const SHIPPED = [
-  'package.json', 'package-lock.json', 'README.md',
+  'package.json', 'package-lock.json', 'README.md', 'LICENSE',
   'schema', 'stream', 'adapters', 'import', 'conformance', 'bin',
   // The runtime process, the harness it spawns, and the two libraries they
   // import. `tools/lib` ships and the rest of `tools/` does not: the MCP
