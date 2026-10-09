@@ -20,7 +20,7 @@ export type MessageView = { schema: typeof BROWSER_HOST_VERSION; messageId: stri
   requestKind: RequestKind | null; inputKind: 'start' | 'message' | null; reply: ReplyView | null };
 export type RequestKind = 'investigate' | 'follow_up' | 'copy_draft';
 // What the agent said about its own answer, decoded once. `sources` entries are the agent's JSON values, passed through.
-export type ReplyView = { sources: unknown[]; uncertainty: string | null; draftLabel: string | null };
+export type ReplyView = { sources: unknown[]; uncertainty: string[]; draftLabel: string | null };
 // One flat provenance for both kinds of original: a fetched source (`received`) and a consultant's upload; fields the kind lacks are null.
 const PROVENANCE_TEXT = ['source', 'locator', 'fetchedAt', 'revision', 'sha256', 'completeness', 'conversion', 'actorId', 'actorName', 'attachmentId', 'mediaType', 'filename', 'boundAt'] as const;
 export type ProvenanceView = { kind: 'received' | 'consultant_upload' } & Record<typeof PROVENANCE_TEXT[number], string | null> & { bytes: number | null };
@@ -90,7 +90,7 @@ function replyView(record: MessageRecord): ReplyView | null {
   const metadata = field(record, F.responseMetadata);
   if (record.direction !== 'outbound' || !metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const given = metadata as Record<string, unknown>;
-  return { sources: Array.isArray(given.sources) ? given.sources.filter((one) => one && typeof one === 'object' && !Array.isArray(one)) : [], uncertainty: text(given.uncertainty), draftLabel: text(given.draftLabel) };
+  return { sources: Array.isArray(given.sources) ? given.sources.filter((one) => one && typeof one === 'object' && !Array.isArray(one)) : [], uncertainty: typeof given.uncertainty === 'string' ? [given.uncertainty] : Array.isArray(given.uncertainty) ? given.uncertainty.filter((one): one is string => typeof one === 'string') : [], draftLabel: text(given.draftLabel) };
 }
 const REQUEST_KINDS: readonly unknown[] = ['investigate', 'follow_up', 'copy_draft'];
 function faultViews(record: MessageRecord) {

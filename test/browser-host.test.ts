@@ -237,15 +237,20 @@ test('gap 1 and 3: a reply carries its decoded sources, uncertainty and draft la
   s.reply({ conversation_id: s.conversation, request_id: 'turn-r1', text: 'answer', metadata: { sources, uncertainty: 'Synthetic limitation.', draftLabel: 'Draft for review' } });
   const messages = (await s.host.readConversation(GRANT, KEY)).messages.map((m) => m.message);
   const answer = messages.find((m) => m.role === 'agent')!, input = messages.find((m) => m.role !== 'agent')!;
-  assert.deepEqual(answer.reply, { sources, uncertainty: 'Synthetic limitation.', draftLabel: 'Draft for review' });
+  assert.deepEqual(answer.reply, { sources, uncertainty: ['Synthetic limitation.'], draftLabel: 'Draft for review' });
   assert.equal(input.reply, null); assert.equal(input.inputKind, 'message'); assert.equal(answer.inputKind, null);
   for (const message of messages) assert.deepEqual(validateView('message', message), [], JSON.stringify(message));
   // metadata the agent wrote loosely decodes to the typed shape rather than leaking its key names
   await s.submit('r2'); s.release('r2', 'turn-r2');
   s.reply({ conversation_id: s.conversation, request_id: 'turn-r2', text: 'second', metadata: { sources: 'not a list', uncertainty: 4, other: true } });
   const loose = (await s.host.readConversation(GRANT, KEY)).messages.map((m) => m.message).filter((m) => m.role === 'agent')[1];
-  assert.deepEqual(loose.reply, { sources: [], uncertainty: null, draftLabel: null }); assert.deepEqual(validateView('message', loose), []);
+  assert.deepEqual(loose.reply, { sources: [], uncertainty: [], draftLabel: null }); assert.deepEqual(validateView('message', loose), []);
   await s.submit('r3'); s.release('r3', 'turn-r3'); s.reply({ conversation_id: s.conversation, request_id: 'turn-r3', text: 'no metadata' });
+  // the agent contract writes uncertainty as a list; it survives as a list of strings
+  await s.submit('r4'); s.release('r4', 'turn-r4');
+  s.reply({ conversation_id: s.conversation, request_id: 'turn-r4', text: 'listed', metadata: { uncertainty: ['First limit.', 7, 'Second limit.'] } });
+  const listed = (await s.host.readConversation(GRANT, KEY)).messages.map((m) => m.message).filter((m) => m.role === 'agent' && m.text === 'listed')[0];
+  assert.deepEqual(listed.reply?.uncertainty, ['First limit.', 'Second limit.']); assert.deepEqual(validateView('message', listed), []);
   assert.equal((await s.host.readConversation(GRANT, KEY)).messages.map((m) => m.message).filter((m) => m.role === 'agent')[2].reply, null);
   const start = await s.host.openConversation(GRANT, 'CASE-8', { submissionId: 'st', consultant: alice, acceptedAt: s.at(1), position: String(s.store.nextSeq()).padStart(20, '0') });
   assert.equal(start.page.messages[0].message.inputKind, 'start');

@@ -36,7 +36,7 @@
         "inputKind": { "anyOf": [{ "enum": ["start", "message"] }, { "type": "null" }], "description": "Ordinary chat input kind; null for a legacy request and for outbound messages." },
         "reply": { "description": "What the agent said about its answer (response metadata); null on inputs and on replies without metadata.",
           "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["sources", "uncertainty", "draftLabel"],
-            "properties": { "sources": { "type": "array", "items": { "type": "object", "additionalProperties": true }, "description": "The agent's own source entries that are JSON objects, passed through unchanged; other entries are dropped." }, "uncertainty": { "$ref": "#/$defs/nullableString" }, "draftLabel": { "$ref": "#/$defs/nullableString" } } }] }
+            "properties": { "sources": { "type": "array", "items": { "type": "object", "additionalProperties": true }, "description": "The agent's own source entries that are JSON objects, passed through unchanged; other entries are dropped." }, "uncertainty": { "type": "array", "items": { "type": "string" }, "description": "The agent's stated uncertainties; a single string is returned as one item; anything else is dropped." }, "draftLabel": { "$ref": "#/$defs/nullableString" } } }] }
       }
     },
     "activity": {
