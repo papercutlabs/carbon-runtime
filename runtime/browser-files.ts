@@ -96,6 +96,20 @@ function attachmentIn(store: Store, conversationId: string, attachmentId: string
   }
   return refuse('BROWSER_FILE_NOT_FOUND', attachmentId, 'no accepted file with this identity belongs to this conversation');
 }
+export function consultantUploadProvenance(store: Store, { conversationId, sha256, filename }: { conversationId: string; sha256: string; filename: string }) {
+  for (const id of Object.keys(fileMap(store, conversationId))) {
+    const staged = fileMap(store, conversationId)[id];
+    if (staged.sha256 !== sha256 || staged.filename !== filename) continue;
+    const accepted = attachmentIn(store, conversationId, id) as Attachment & { attachment_id: string; bound_message_id?: string | null };
+    if (!accepted.bound_message_id) continue;
+    const send = store.read(conversationId, accepted.bound_message_id);
+    if (!send || !capturedFileReferences(send, staged.actor.id, [id])) continue;
+    readBytes(store, accepted);
+    return { kind: 'consultant_upload' as const, actorId: staged.actor.id, actorName: staged.actor.name, attachmentId: id, sha256: accepted.sha256,
+      bytes: accepted.bytes, mediaType: accepted.mime, filename: accepted.filename ?? filename, boundAt: send.received_at };
+  }
+  return null;
+}
 export function readBrowserAttachment(store: Store, { conversationId, attachmentId, includeBytes = true }: { conversationId: string; attachmentId: string; includeBytes?: boolean }) {
   const attachment = attachmentIn(store, conversationId, attachmentId);
   try {

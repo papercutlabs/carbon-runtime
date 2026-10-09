@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "carbon.browser-host.v1",
+  "description": "The typed views runtime/browser-host.ts returns to a browser host. A breaking change needs a new schema version.",
+  "$defs": {
+    "state": { "description": "accepted: captured and waiting to be released. queued: held for the next turn. Both appear on messages; activity.state is the turn-level progress.", "enum": ["accepted", "queued", "running", "answer", "evidence_update", "failed", "uncertain"] },
+    "nullableString": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+    "file": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fileId", "filename", "mediaType", "bytes", "sha256"],
+      "properties": { "fileId": { "type": "string" }, "filename": { "type": "string" }, "mediaType": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+    },
+    "message": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "messageId", "conversationId", "role", "sender", "text", "createdAt", "replyTo", "turnId", "submissionIds", "files", "state", "validationFaults", "nativeReason", "requestKind", "inputKind", "reply"],
+      "properties": {
+        "schema": { "const": "carbon.browser-host.v1" },
+        "messageId": { "type": "string", "minLength": 1 },
+        "conversationId": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["contact", "operator", "agent", "system"] },
+        "sender": { "type": "object", "additionalProperties": false, "required": ["id", "name"],
+          "properties": { "id": { "type": "string" }, "name": { "$ref": "#/$defs/nullableString" } } },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "replyTo": { "$ref": "#/$defs/nullableString" },
+        "turnId": { "$ref": "#/$defs/nullableString" },
+        "submissionIds": { "type": "array", "items": { "type": "string" } },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+        "state": { "$ref": "#/$defs/state" },
+        "validationFaults": { "type": "array", "items": { "type": "object", "additionalProperties": false,
+          "required": ["code", "subject", "problem"],
+          "properties": { "code": { "type": "string" }, "subject": { "type": "string" }, "problem": { "type": "string" } } } },
+        "nativeReason": { "$ref": "#/$defs/nullableString", "description": "Why the input is uncertain or was delayed: the delivery reason, else the retained model-effect reason, native failure text or inspection note; null when none was retained." },
+        "requestKind": { "anyOf": [{ "enum": ["investigate", "follow_up", "copy_draft"] }, { "type": "null" }], "description": "The legacy request form the message carries; null for ordinary chat." },
+        "inputKind": { "anyOf": [{ "enum": ["start", "message"] }, { "type": "null" }], "description": "Ordinary chat input kind; null for a legacy request and for outbound messages." },
+        "reply": { "description": "What the agent said about its answer (response metadata); null on inputs and on replies without metadata.",
+          "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["sources", "uncertainty", "draftLabel"],
+            "properties": { "sources": { "type": "array", "items": { "type": "object", "additionalProperties": true }, "description": "The agent's own source entries that are JSON objects, passed through unchanged; other entries are dropped." }, "uncertainty": { "type": "array", "items": { "type": "string" }, "description": "The agent's stated uncertainties; a single string is returned as one item; anything else is dropped." }, "draftLabel": { "$ref": "#/$defs/nullableString" } } }] }
+      }
+    },
+    "activity": {
+      "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["state", "turnId", "nativeTurnId", "nativeReason", "submissionIds", "update"],
+        "properties": { "state": { "enum": ["accepted", "queued", "running", "answer", "evidence_update", "failed", "uncertain", null] }, "turnId": { "$ref": "#/$defs/nullableString" }, "nativeTurnId": { "$ref": "#/$defs/nullableString" }, "nativeReason": { "$ref": "#/$defs/nullableString" },
+          "submissionIds": { "type": "array", "items": { "type": "string" } },
+          "update": { "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["itemId", "text", "observedAt"],
+            "properties": { "itemId": { "type": "string" }, "text": { "type": "string" }, "observedAt": { "type": "string" } } }] } } }]
+    },
+    "page": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "conversationId", "messages", "cursor", "hasMore", "activity", "activityCursor"],
+      "properties": {
+        "schema": { "const": "carbon.browser-host.v1" },
+        "conversationId": { "type": "string" },
+        "messages": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["cursor", "event", "message"],
+          "properties": { "cursor": { "type": "integer", "minimum": 0 }, "event": { "enum": ["capture", "state"] }, "message": { "$ref": "#/$defs/message" } } } },
+        "cursor": { "type": "integer", "minimum": 0 },
+        "hasMore": { "type": "boolean" },
+        "activity": { "$ref": "#/$defs/activity" },
+        "activityCursor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "canvasItem": {
+      "type": "object", "additionalProperties": false,
+      "required": ["itemId", "template", "label", "source", "history"],
+      "properties": {
+        "itemId": { "type": "string" },
+        "template": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$", "description": "Opaque to Carbon except 'original', which only Carbon sets." },
+        "label": { "type": "string" },
+        "source": { "type": "object", "additionalProperties": false, "required": ["sourceId", "sha256", "selector", "note", "provenance"],
+          "properties": { "sourceId": { "type": "string" }, "sha256": { "type": "string" }, "selector": { "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["kind"], "description": "The selected part of the source; only the fields of its kind are present.",
+            "properties": { "kind": { "enum": ["lines", "rows", "field", "region"] }, "start": { "type": "integer" }, "end": { "type": "integer" }, "pointer": { "type": "string" },
+              "x": { "type": "number" }, "y": { "type": "number" }, "width": { "type": "number" }, "height": { "type": "number" } } }] },
+            "note": { "$ref": "#/$defs/nullableString" }, "provenance": { "anyOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["kind", "source", "locator", "fetchedAt", "revision", "sha256", "completeness", "conversion", "actorId", "actorName", "attachmentId", "mediaType", "filename", "boundAt", "bytes"],
+            "description": "kind received: a fetched source (source..conversion set). kind consultant_upload: the consultant's own file (actorId..boundAt and bytes set). Fields the kind lacks are null.",
+            "properties": { "kind": { "enum": ["received", "consultant_upload"] }, "source": { "$ref": "#/$defs/nullableString" }, "locator": { "$ref": "#/$defs/nullableString" }, "fetchedAt": { "$ref": "#/$defs/nullableString" }, "revision": { "$ref": "#/$defs/nullableString" }, "sha256": { "$ref": "#/$defs/nullableString" }, "completeness": { "$ref": "#/$defs/nullableString" }, "conversion": { "$ref": "#/$defs/nullableString" }, "actorId": { "$ref": "#/$defs/nullableString" }, "actorName": { "$ref": "#/$defs/nullableString" }, "attachmentId": { "$ref": "#/$defs/nullableString" }, "mediaType": { "$ref": "#/$defs/nullableString" }, "filename": { "$ref": "#/$defs/nullableString" }, "boundAt": { "$ref": "#/$defs/nullableString" }, "bytes": { "type": ["integer", "null"] } } }] } } },
+        "history": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["changeId", "revision", "at", "change", "reason"],
+          "properties": { "changeId": { "type": "string" }, "revision": { "type": "integer" }, "at": { "type": "string" },
+            "change": { "enum": ["added", "removed"] }, "reason": { "$ref": "#/$defs/nullableString" } } } }
+      }
+    },
+    "canvas": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "conversationId", "revision", "items", "cursor", "hasMore", "total"],
+      "properties": {
+        "schema": { "const": "carbon.browser-host.v1" },
+        "conversationId": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/canvasItem" } },
+        "cursor": { "type": "integer", "minimum": 0 },
+        "hasMore": { "type": "boolean" },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "evidencePage": { "$ref": "browser-evidence-interface.json#/pageTemplated" },
+    "evidenceChanges": { "$ref": "browser-evidence-interface.json#/changesTemplated" },
+    "evidenceFragment": { "$ref": "browser-evidence-interface.json#/fragmentTemplated" },
+    "evidenceDownload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceId", "filename", "mediaType", "bytes", "sha256", "content"],
+      "properties": { "schema": { "const": "carbon.browser-host.v1" }, "sourceId": { "type": "string" }, "filename": { "type": "string" }, "mediaType": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "content": { "type": "object", "description": "The retained bytes (a Uint8Array); not JSON." } }
+    },
+    "fileRead": {"type":"object","additionalProperties":false,"required":["schema","fileId","kind","filename","mediaType","bytes","sha256","boundMessageId","actorId","state","content"],"properties":{"schema":{"const":"carbon.browser-host.v1"},"fileId":{"type":"string"},"kind":{"enum":["input","artifact"],"description":"artifact: a file the agent produced; input: a consultant's file."},"filename":{"type":"string"},"mediaType":{"type":"string"},"bytes":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"boundMessageId":{"$ref":"#/$defs/nullableString","description":"The message the file was sent or produced with; null while only staged."},"actorId":{"$ref":"#/$defs/nullableString","description":"The consultant who staged it; null for an artifact."},"state":{"enum":["available","missing"]},"content":{"type":["object","null"],"description":"The bytes (a Uint8Array) when requested and available; not JSON."}}},
+    "operator": {"type":"object","additionalProperties":false,"required":["schema","conversationId","threadId","uncertain","uncertainMessageIds","submissions"],"properties":{"schema":{"const":"carbon.browser-host.v1"},"conversationId":{"type":"string"},"threadId":{"$ref":"#/$defs/nullableString"},"uncertain":{"type":"boolean"},"uncertainMessageIds":{"type":"array","items":{"type":"string"}},"submissions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["submissionId","messageId","consultantId","turnId","state","nativeReason"],"properties":{"submissionId":{"type":"string"},"messageId":{"type":"string"},"consultantId":{"type":"string"},"turnId":{"$ref":"#/$defs/nullableString"},"state":{"$ref":"#/$defs/state"},"nativeReason":{"$ref":"#/$defs/nullableString"}}}}}},
+    "periodSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "from", "to", "ticketKeys", "inputs", "answers", "evidenceUpdates", "unmarkedAnswers", "latency"],
+      "properties": {
+        "schema": { "const": "carbon.browser-host.v1" },
+        "from": { "type": "string" }, "to": { "type": "string" },
+        "ticketKeys": { "type": "array", "items": { "type": "string" } },
+        "inputs": { "type": "integer", "minimum": 0 },
+        "answers": { "type": "integer", "minimum": 0 },
+        "evidenceUpdates": { "type": "integer", "minimum": 0 },
+        "unmarkedAnswers": { "type": "integer", "minimum": 0 },
+        "latency": { "type": "object", "additionalProperties": false, "required": ["perAnswer", "medianMs"],
+          "properties": { "perAnswer": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["messageId", "ms"],
+            "properties": { "messageId": { "type": "string" }, "ms": { "type": ["integer", "null"] } } } },
+            "medianMs": { "type": ["integer", "null"] } } }
+      }
+    }
+  }
+}

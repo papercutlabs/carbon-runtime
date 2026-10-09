@@ -435,6 +435,12 @@
           "resolver": "agent"
         },
         {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
           "code": "ROUTE_NOT_FOUND",
           "description": "No declared route matches this method and path.",
           "fix": "Call a method and path from the API description.",
@@ -521,6 +527,556 @@
       ],
       "scope": "read",
       "summary": "Read explicit retained evidence additions/removals and reasons.",
+      "transport": {
+        "body": [],
+        "path": [],
+        "query": [
+          "cursor",
+          "limit"
+        ]
+      }
+    },
+    {
+      "id": "evidence_changes_templated",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Explicit page/fragment resource limit.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "kind": "read",
+      "method": "GET",
+      "output": {
+        "additionalProperties": false,
+        "description": "Explicit retained value.",
+        "properties": {
+          "changes": {
+            "description": "Persisted changes in the named checked scope.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Explicit retained changes item.",
+              "properties": {
+                "added": {
+                  "description": "Persisted added in the named checked scope.",
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "Persisted item in the named checked scope.",
+                    "properties": {
+                      "changeId": {
+                        "description": "Explicit publishing change UUID.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "digest": {
+                        "description": "Original exact byte SHA256.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "id": {
+                        "description": "Immutable item UUID.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "label": {
+                        "description": "Public model-chosen label.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "note": {
+                        "description": "Public contextual note.",
+                        "maxLength": 8192,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "origin": {
+                        "description": "Persisted origin in the named checked scope.",
+                        "enum": [
+                          "original",
+                          "analysis"
+                        ],
+                        "type": "string"
+                      },
+                      "representationId": {
+                        "description": "Versioned representation identity.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "representationVersion": {
+                        "description": "Representation algorithm version.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "selector": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "description": "Explicit retained selector.",
+                                "properties": {
+                                  "end": {
+                                    "description": "Persisted end in the named checked scope.",
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "kind": {
+                                    "const": "lines",
+                                    "description": "Persisted kind in the named checked scope.",
+                                    "type": "string"
+                                  },
+                                  "start": {
+                                    "description": "Persisted start in the named checked scope.",
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "start",
+                                  "end"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "description": "Explicit retained selector.",
+                                "properties": {
+                                  "end": {
+                                    "description": "Persisted end in the named checked scope.",
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "kind": {
+                                    "const": "rows",
+                                    "description": "Persisted kind in the named checked scope.",
+                                    "type": "string"
+                                  },
+                                  "start": {
+                                    "description": "Persisted start in the named checked scope.",
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "start",
+                                  "end"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "description": "Explicit retained selector.",
+                                "properties": {
+                                  "kind": {
+                                    "const": "field",
+                                    "description": "Persisted kind in the named checked scope.",
+                                    "type": "string"
+                                  },
+                                  "pointer": {
+                                    "description": "Persisted pointer in the named checked scope.",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "pointer"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "description": "Explicit retained selector.",
+                                "properties": {
+                                  "height": {
+                                    "description": "Persisted height in the named checked scope.",
+                                    "type": "number"
+                                  },
+                                  "kind": {
+                                    "const": "region",
+                                    "description": "Persisted kind in the named checked scope.",
+                                    "type": "string"
+                                  },
+                                  "width": {
+                                    "description": "Persisted width in the named checked scope.",
+                                    "type": "number"
+                                  },
+                                  "x": {
+                                    "description": "Persisted x in the named checked scope.",
+                                    "type": "number"
+                                  },
+                                  "y": {
+                                    "description": "Persisted y in the named checked scope.",
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "x",
+                                  "y",
+                                  "width",
+                                  "height"
+                                ],
+                                "type": "object"
+                              }
+                            ],
+                            "description": "Explicit retained selector."
+                          },
+                          {
+                            "description": "Explicit retained selector.",
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Persisted selector in the named checked scope."
+                      },
+                      "sourceId": {
+                        "description": "Conversation-bound immutable byte custody identity.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "template": {
+                        "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                        "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "label",
+                      "origin",
+                      "sourceId",
+                      "representationId",
+                      "representationVersion",
+                      "digest",
+                      "note",
+                      "selector",
+                      "changeId",
+                      "template"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "description": "Persisted author in the named checked scope.",
+                  "properties": {
+                    "displayName": {
+                      "description": "Publisher display name.",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "Authenticated publisher.",
+                      "maxLength": 8192,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "displayName"
+                  ],
+                  "type": "object"
+                },
+                "changeId": {
+                  "description": "Immutable change UUID.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "createdAt": {
+                  "description": "Server capture timestamp.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "messageId": {
+                  "description": "Public ordinary conversation anchor.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "note": {
+                  "description": "Public change explanation.",
+                  "maxLength": 8192,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "releaseId": {
+                  "description": "Actual active Carbon release.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "removed": {
+                  "description": "Persisted removed in the named checked scope.",
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "Explicit retained removed item.",
+                    "properties": {
+                      "itemId": {
+                        "description": "Explicit removed immutable identity.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "description": "Public removal reason.",
+                        "maxLength": 8192,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "itemId",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "revision": {
+                  "description": "Persisted feedback revision, previous revisions retained.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "turnId": {
+                  "description": "Actual native turn.",
+                  "maxLength": 8192,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "changeId",
+                "messageId",
+                "revision",
+                "createdAt",
+                "author",
+                "releaseId",
+                "turnId",
+                "added",
+                "removed",
+                "note"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "conversationId": {
+            "description": "Canonical conversation.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "cursor": {
+            "description": "Last returned persisted Carbon ordinal.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hasMore": {
+            "description": "More retained messages exist after this page.",
+            "type": "boolean"
+          },
+          "revision": {
+            "description": "Persisted feedback revision, previous revisions retained.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversationId",
+          "revision",
+          "changes",
+          "cursor",
+          "hasMore"
+        ],
+        "type": "object"
+      },
+      "path": "/api/evidence/changes-templated",
+      "refusals": [
+        {
+          "code": "EVIDENCE_TURN_REFUSED",
+          "description": "evidence turn refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_SELECTOR_INVALID",
+          "description": "evidence selector invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REFERENCE_STALE",
+          "description": "evidence reference stale.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_NOT_FOUND",
+          "description": "evidence not found.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_BYTES_MISSING",
+          "description": "evidence bytes missing.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_CHANGE_CONFLICT",
+          "description": "evidence change conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PATH_REFUSED",
+          "description": "evidence path refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_DELTA_EMPTY",
+          "description": "evidence delta empty.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REMOVE_INVALID",
+          "description": "evidence remove invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ITEM_CONFLICT",
+          "description": "evidence item conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_RESOURCE_LIMIT",
+          "description": "evidence resource limit.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PROVENANCE_INVALID",
+          "description": "evidence provenance invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
+          "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ROUTE_NOT_FOUND",
+          "description": "No declared route matches this method and path.",
+          "fix": "Call a method and path from the API description.",
+          "resolver": "agent"
+        },
+        {
+          "code": "METHOD_NOT_ALLOWED",
+          "description": "The path exists but this HTTP method is not declared for it.",
+          "fix": "Use one of the methods declared for this path.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_UNKNOWN",
+          "description": "The request action is not declared for this method and path.",
+          "fix": "Send a declared action literal, or omit action when the route has none.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_MISSING",
+          "description": "This method and path declare named actions and the request did not name one.",
+          "fix": "Send body.action as one of the declared action literals.",
+          "resolver": "agent"
+        },
+        {
+          "code": "JSON_INVALID",
+          "description": "The request body is not valid JSON.",
+          "fix": "Send a JSON object body with the declared fields.",
+          "resolver": "agent"
+        },
+        {
+          "code": "INPUT_INVALID",
+          "description": "One or more declared input fields failed structural checks.",
+          "fix": "Correct every named input fault and retry once.",
+          "resolver": "agent"
+        },
+        {
+          "code": "AUTH_MISSING",
+          "description": "The request did not present a usable credential.",
+          "fix": "Send the configured service token as Authorization Bearer, or a browser session cookie.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_INVALID",
+          "description": "The presented credential was not accepted.",
+          "fix": "Use a configured token or session; do not guess identities in the body.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_SCOPE_DENIED",
+          "description": "The authenticated principal lacks this route scope.",
+          "fix": "Use a grant that lists this scope, or call a route in the granted scopes.",
+          "resolver": "principal"
+        },
+        {
+          "code": "WRITE_UNCERTAIN",
+          "description": "The write ran and readback did not confirm the persisted record.",
+          "fix": "Do not retry this write; read the record and reconcile before any further call.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_INVALID",
+          "description": "The handler result did not match the declared output schema.",
+          "fix": "Return only declared fields that satisfy the output schema.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_UNDECLARED",
+          "description": "The handler result included fields the output schema does not declare.",
+          "fix": "Return exactly the declared output fields.",
+          "resolver": "operator"
+        },
+        {
+          "code": "INTERNAL_ERROR",
+          "description": "The handler failed without a named route fault.",
+          "fix": "Retry only after an operator inspects the server; do not send secrets to diagnose.",
+          "resolver": "operator"
+        },
+        {
+          "code": "HTTP_REDIRECT",
+          "description": "The HTTP client refused to follow a redirect while holding a bearer token.",
+          "fix": "Call the https origin that serves the API; do not use a redirecting base URL.",
+          "resolver": "agent"
+        }
+      ],
+      "scope": "read",
+      "summary": "Read explicit retained evidence additions/removals and reasons, with each addition's canvas template.",
       "transport": {
         "body": [],
         "path": [],
@@ -2446,6 +3002,12 @@
           "resolver": "agent"
         },
         {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
           "code": "ROUTE_NOT_FOUND",
           "description": "No declared route matches this method and path.",
           "fix": "Call a method and path from the API description.",
@@ -2532,6 +3094,2153 @@
       ],
       "scope": "read",
       "summary": "Read exact selected source representation with explicit context and immutable original download identity.",
+      "transport": {
+        "body": [],
+        "path": [],
+        "query": [
+          "itemId",
+          "selector",
+          "contextBefore",
+          "contextAfter",
+          "limit"
+        ]
+      }
+    },
+    {
+      "id": "evidence_fragment_read_templated",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "contextAfter": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "contextBefore": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "itemId": {
+            "description": "Exact immutable item UUID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Explicit page/fragment resource limit.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "selector": {
+            "additionalProperties": false,
+            "description": "Explicit retained value.",
+            "properties": {
+              "end": {
+                "description": "Explicit retained end.",
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "height": {
+                "description": "Explicit retained height.",
+                "exclusiveMinimum": 0,
+                "maximum": 1,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "Explicit retained kind.",
+                "enum": [
+                  "lines",
+                  "rows",
+                  "field",
+                  "region"
+                ],
+                "type": "string"
+              },
+              "pointer": {
+                "description": "Explicit retained pointer.",
+                "maxLength": 4096,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "description": "Explicit retained start.",
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "width": {
+                "description": "Explicit retained width.",
+                "exclusiveMinimum": 0,
+                "maximum": 1,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "x": {
+                "description": "Explicit retained x.",
+                "maximum": 1,
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "y": {
+                "description": "Explicit retained y.",
+                "maximum": 1,
+                "minimum": 0,
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "start",
+              "end",
+              "pointer",
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "itemId",
+          "selector",
+          "contextBefore",
+          "contextAfter",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "kind": "read",
+      "method": "GET",
+      "output": {
+        "additionalProperties": false,
+        "description": "Explicit retained value.",
+        "properties": {
+          "assumptions": {
+            "description": "Persisted assumptions in the named checked scope.",
+            "items": {
+              "description": "Stated analysis assumption.",
+              "maxLength": 8192,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "basis": {
+            "description": "Persisted basis in the named checked scope.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Persisted reference in the named checked scope.",
+              "properties": {
+                "itemId": {
+                  "description": "Persisted itemId in the named checked scope.",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                "representationId": {
+                  "description": "Persisted representationId in the named checked scope.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "representationVersion": {
+                  "description": "Persisted representationVersion in the named checked scope.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "selector": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "end": {
+                              "description": "Persisted end in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "const": "lines",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "start": {
+                              "description": "Persisted start in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "start",
+                            "end"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "end": {
+                              "description": "Persisted end in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "const": "rows",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "start": {
+                              "description": "Persisted start in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "start",
+                            "end"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "kind": {
+                              "const": "field",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "pointer": {
+                              "description": "Persisted pointer in the named checked scope.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "pointer"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "height": {
+                              "description": "Persisted height in the named checked scope.",
+                              "type": "number"
+                            },
+                            "kind": {
+                              "const": "region",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "width": {
+                              "description": "Persisted width in the named checked scope.",
+                              "type": "number"
+                            },
+                            "x": {
+                              "description": "Persisted x in the named checked scope.",
+                              "type": "number"
+                            },
+                            "y": {
+                              "description": "Persisted y in the named checked scope.",
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "x",
+                            "y",
+                            "width",
+                            "height"
+                          ],
+                          "type": "object"
+                        }
+                      ],
+                      "description": "Explicit retained selector."
+                    },
+                    {
+                      "description": "Explicit retained selector.",
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Persisted selector in the named checked scope."
+                },
+                "sha256": {
+                  "description": "Persisted sha256 in the named checked scope.",
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "sourceId": {
+                  "description": "Persisted sourceId in the named checked scope.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "itemId",
+                "sourceId",
+                "representationId",
+                "representationVersion",
+                "sha256",
+                "selector"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "Explicit retained content.",
+                "properties": {
+                  "columns": {
+                    "description": "Persisted columns in the named checked scope.",
+                    "items": {
+                      "description": "Explicit retained columns item.",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "end": {
+                    "description": "Persisted end in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "hasMore": {
+                    "description": "More retained messages exist after this page.",
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "text",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "lines": {
+                    "description": "Persisted lines in the named checked scope.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Explicit retained lines item.",
+                      "properties": {
+                        "number": {
+                          "description": "Persisted number in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "text": {
+                          "description": "Persisted text in the named checked scope.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "number",
+                        "text"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "nextSelector": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "lines",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "rows",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "kind": {
+                                "const": "field",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "description": "Persisted pointer in the named checked scope.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "pointer"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "height": {
+                                "description": "Persisted height in the named checked scope.",
+                                "type": "number"
+                              },
+                              "kind": {
+                                "const": "region",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "width": {
+                                "description": "Persisted width in the named checked scope.",
+                                "type": "number"
+                              },
+                              "x": {
+                                "description": "Persisted x in the named checked scope.",
+                                "type": "number"
+                              },
+                              "y": {
+                                "description": "Persisted y in the named checked scope.",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x",
+                              "y",
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "description": "Explicit retained nextSelector."
+                      },
+                      {
+                        "description": "Explicit retained nextSelector.",
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Persisted selector in the named checked scope."
+                  },
+                  "rows": {
+                    "description": "Persisted rows in the named checked scope.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Explicit retained rows item.",
+                      "properties": {
+                        "cells": {
+                          "description": "Persisted cells in the named checked scope.",
+                          "items": {
+                            "description": "Explicit retained cells item.",
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "number": {
+                          "description": "Persisted number in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "number",
+                        "cells"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "start": {
+                    "description": "Persisted start in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "total": {
+                    "description": "Persisted total in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "total",
+                  "start",
+                  "end",
+                  "lines",
+                  "rows",
+                  "columns",
+                  "hasMore",
+                  "nextSelector"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Explicit retained content.",
+                "properties": {
+                  "columns": {
+                    "description": "Persisted columns in the named checked scope.",
+                    "items": {
+                      "description": "Explicit retained columns item.",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "end": {
+                    "description": "Persisted end in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "hasMore": {
+                    "description": "More retained messages exist after this page.",
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "table",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "lines": {
+                    "description": "Persisted lines in the named checked scope.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Explicit retained lines item.",
+                      "properties": {
+                        "number": {
+                          "description": "Persisted number in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "text": {
+                          "description": "Persisted text in the named checked scope.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "number",
+                        "text"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "nextSelector": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "lines",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "rows",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "kind": {
+                                "const": "field",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "description": "Persisted pointer in the named checked scope.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "pointer"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "height": {
+                                "description": "Persisted height in the named checked scope.",
+                                "type": "number"
+                              },
+                              "kind": {
+                                "const": "region",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "width": {
+                                "description": "Persisted width in the named checked scope.",
+                                "type": "number"
+                              },
+                              "x": {
+                                "description": "Persisted x in the named checked scope.",
+                                "type": "number"
+                              },
+                              "y": {
+                                "description": "Persisted y in the named checked scope.",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x",
+                              "y",
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "description": "Explicit retained nextSelector."
+                      },
+                      {
+                        "description": "Explicit retained nextSelector.",
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Persisted selector in the named checked scope."
+                  },
+                  "rows": {
+                    "description": "Persisted rows in the named checked scope.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Explicit retained rows item.",
+                      "properties": {
+                        "cells": {
+                          "description": "Persisted cells in the named checked scope.",
+                          "items": {
+                            "description": "Explicit retained cells item.",
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "number": {
+                          "description": "Persisted number in the named checked scope.",
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "number",
+                        "cells"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "start": {
+                    "description": "Persisted start in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "total": {
+                    "description": "Persisted total in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "total",
+                  "start",
+                  "end",
+                  "lines",
+                  "rows",
+                  "columns",
+                  "hasMore",
+                  "nextSelector"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Explicit retained content.",
+                "properties": {
+                  "hasMore": {
+                    "description": "More retained messages exist after this page.",
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "json",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "nextSelector": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "lines",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "rows",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "kind": {
+                                "const": "field",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "description": "Persisted pointer in the named checked scope.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "pointer"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "height": {
+                                "description": "Persisted height in the named checked scope.",
+                                "type": "number"
+                              },
+                              "kind": {
+                                "const": "region",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "width": {
+                                "description": "Persisted width in the named checked scope.",
+                                "type": "number"
+                              },
+                              "x": {
+                                "description": "Persisted x in the named checked scope.",
+                                "type": "number"
+                              },
+                              "y": {
+                                "description": "Persisted y in the named checked scope.",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x",
+                              "y",
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "description": "Explicit retained nextSelector."
+                      },
+                      {
+                        "description": "Explicit retained nextSelector.",
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Persisted selector in the named checked scope."
+                  },
+                  "pointer": {
+                    "description": "Persisted pointer in the named checked scope.",
+                    "type": "string"
+                  },
+                  "text": {
+                    "description": "Persisted text in the named checked scope.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pointer",
+                  "text",
+                  "hasMore",
+                  "nextSelector"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Explicit retained content.",
+                "properties": {
+                  "hasMore": {
+                    "description": "More retained messages exist after this page.",
+                    "type": "boolean"
+                  },
+                  "height": {
+                    "description": "Persisted height in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "image",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "nextSelector": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "lines",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "rows",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "kind": {
+                                "const": "field",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "description": "Persisted pointer in the named checked scope.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "pointer"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "height": {
+                                "description": "Persisted height in the named checked scope.",
+                                "type": "number"
+                              },
+                              "kind": {
+                                "const": "region",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "width": {
+                                "description": "Persisted width in the named checked scope.",
+                                "type": "number"
+                              },
+                              "x": {
+                                "description": "Persisted x in the named checked scope.",
+                                "type": "number"
+                              },
+                              "y": {
+                                "description": "Persisted y in the named checked scope.",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x",
+                              "y",
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "description": "Explicit retained nextSelector."
+                      },
+                      {
+                        "description": "Explicit retained nextSelector.",
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Persisted selector in the named checked scope."
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained region.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "lines",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained region.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "rows",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained region.",
+                            "properties": {
+                              "kind": {
+                                "const": "field",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "description": "Persisted pointer in the named checked scope.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "pointer"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained region.",
+                            "properties": {
+                              "height": {
+                                "description": "Persisted height in the named checked scope.",
+                                "type": "number"
+                              },
+                              "kind": {
+                                "const": "region",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "width": {
+                                "description": "Persisted width in the named checked scope.",
+                                "type": "number"
+                              },
+                              "x": {
+                                "description": "Persisted x in the named checked scope.",
+                                "type": "number"
+                              },
+                              "y": {
+                                "description": "Persisted y in the named checked scope.",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x",
+                              "y",
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "description": "Explicit retained region."
+                      },
+                      {
+                        "description": "Explicit retained region.",
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Persisted selector in the named checked scope."
+                  },
+                  "width": {
+                    "description": "Persisted width in the named checked scope.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "width",
+                  "height",
+                  "region",
+                  "hasMore",
+                  "nextSelector"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Explicit retained content.",
+                "properties": {
+                  "hasMore": {
+                    "description": "More retained messages exist after this page.",
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "file",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "limitation": {
+                    "description": "Explicit unsupported display reason.",
+                    "maxLength": 8192,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "nextSelector": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "lines",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "end": {
+                                "description": "Persisted end in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "rows",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "start": {
+                                "description": "Persisted start in the named checked scope.",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "kind": {
+                                "const": "field",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "pointer": {
+                                "description": "Persisted pointer in the named checked scope.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "pointer"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Explicit retained nextSelector.",
+                            "properties": {
+                              "height": {
+                                "description": "Persisted height in the named checked scope.",
+                                "type": "number"
+                              },
+                              "kind": {
+                                "const": "region",
+                                "description": "Persisted kind in the named checked scope.",
+                                "type": "string"
+                              },
+                              "width": {
+                                "description": "Persisted width in the named checked scope.",
+                                "type": "number"
+                              },
+                              "x": {
+                                "description": "Persisted x in the named checked scope.",
+                                "type": "number"
+                              },
+                              "y": {
+                                "description": "Persisted y in the named checked scope.",
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x",
+                              "y",
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "description": "Explicit retained nextSelector."
+                      },
+                      {
+                        "description": "Explicit retained nextSelector.",
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Persisted selector in the named checked scope."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "limitation",
+                  "hasMore",
+                  "nextSelector"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Explicit retained content.",
+                "properties": {
+                  "kind": {
+                    "const": "unavailable",
+                    "description": "Persisted kind in the named checked scope.",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "description": "Retained-byte availability limitation.",
+                    "maxLength": 8192,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "Persisted content in the named checked scope."
+          },
+          "conversationId": {
+            "description": "Canonical conversation.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "download": {
+            "additionalProperties": false,
+            "description": "Persisted download in the named checked scope.",
+            "properties": {
+              "conversationId": {
+                "description": "Exact bound conversation.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "path": {
+                "const": "/api/evidence/download",
+                "description": "Persisted path in the named checked scope.",
+                "type": "string"
+              },
+              "sourceId": {
+                "description": "Immutable accepted source identity.",
+                "maxLength": 8192,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "conversationId",
+              "sourceId"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "item": {
+            "additionalProperties": false,
+            "description": "Persisted item in the named checked scope.",
+            "properties": {
+              "changeId": {
+                "description": "Explicit publishing change UUID.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "digest": {
+                "description": "Original exact byte SHA256.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "id": {
+                "description": "Immutable item UUID.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "label": {
+                "description": "Public model-chosen label.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "note": {
+                "description": "Public contextual note.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "origin": {
+                "description": "Persisted origin in the named checked scope.",
+                "enum": [
+                  "original",
+                  "analysis"
+                ],
+                "type": "string"
+              },
+              "representationId": {
+                "description": "Versioned representation identity.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "representationVersion": {
+                "description": "Representation algorithm version.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ],
+                    "description": "Explicit retained selector."
+                  },
+                  {
+                    "description": "Explicit retained selector.",
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              },
+              "sourceId": {
+                "description": "Conversation-bound immutable byte custody identity.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "template": {
+                "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "origin",
+              "sourceId",
+              "representationId",
+              "representationVersion",
+              "digest",
+              "note",
+              "selector",
+              "changeId",
+              "template"
+            ],
+            "type": "object"
+          },
+          "producer": {
+            "additionalProperties": false,
+            "description": "Persisted producer in the named checked scope.",
+            "properties": {
+              "conversationId": {
+                "description": "Exact bound conversation.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "path": {
+                "const": "/api/evidence/download",
+                "description": "Persisted path in the named checked scope.",
+                "type": "string"
+              },
+              "sourceId": {
+                "description": "Immutable accepted source identity.",
+                "maxLength": 8192,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "conversationId",
+              "sourceId"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "provenance": {
+            "additionalProperties": false,
+            "description": "Persisted provenance in the named checked scope. A fetched original carries its source receipt; a consultant upload carries kind consultant_upload and the upload fields instead.",
+            "properties": {
+              "actorId": {
+                "description": "Consultant upload actorId.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actorName": {
+                "description": "Consultant upload actorName.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attachmentId": {
+                "description": "Consultant upload attachmentId.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "boundAt": {
+                "description": "Consultant upload boundAt.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "bytes": {
+                "description": "Consultant upload size in bytes.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "completeness": {
+                "description": "Original source receipt completeness.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "conversion": {
+                "description": "Original source receipt conversion.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fetchedAt": {
+                "description": "Original source receipt fetchedAt.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "filename": {
+                "description": "Consultant upload filename.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "consultant_upload for a consultant-supplied original; absent for a fetched source.",
+                "enum": [
+                  "consultant_upload"
+                ],
+                "type": "string"
+              },
+              "locator": {
+                "description": "Original source receipt locator.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mediaType": {
+                "description": "Consultant upload mediaType.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "revision": {
+                "description": "Original source receipt revision.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sha256": {
+                "description": "Original source receipt sha256.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "description": "Original source receipt source.",
+                "maxLength": 8192,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "reference": {
+            "additionalProperties": false,
+            "description": "Persisted reference in the named checked scope.",
+            "properties": {
+              "itemId": {
+                "description": "Persisted itemId in the named checked scope.",
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              "representationId": {
+                "description": "Persisted representationId in the named checked scope.",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "representationVersion": {
+                "description": "Persisted representationVersion in the named checked scope.",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "lines",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "end": {
+                            "description": "Persisted end in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "const": "rows",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "start": {
+                            "description": "Persisted start in the named checked scope.",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "kind": {
+                            "const": "field",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Persisted pointer in the named checked scope.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "height": {
+                            "description": "Persisted height in the named checked scope.",
+                            "type": "number"
+                          },
+                          "kind": {
+                            "const": "region",
+                            "description": "Persisted kind in the named checked scope.",
+                            "type": "string"
+                          },
+                          "width": {
+                            "description": "Persisted width in the named checked scope.",
+                            "type": "number"
+                          },
+                          "x": {
+                            "description": "Persisted x in the named checked scope.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Persisted y in the named checked scope.",
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": "object"
+                      }
+                    ],
+                    "description": "Explicit retained selector."
+                  },
+                  {
+                    "description": "Explicit retained selector.",
+                    "type": "null"
+                  }
+                ],
+                "description": "Persisted selector in the named checked scope."
+              },
+              "sha256": {
+                "description": "Persisted sha256 in the named checked scope.",
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "sourceId": {
+                "description": "Persisted sourceId in the named checked scope.",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "itemId",
+              "sourceId",
+              "representationId",
+              "representationVersion",
+              "sha256",
+              "selector"
+            ],
+            "type": "object"
+          },
+          "status": {
+            "description": "Persisted status in the named checked scope.",
+            "enum": [
+              "available",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "upstreamHref": {
+            "description": "Safe original upstream URL where supplied; no local paths or credentials.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "conversationId",
+          "item",
+          "reference",
+          "status",
+          "content",
+          "download",
+          "upstreamHref",
+          "provenance",
+          "basis",
+          "assumptions",
+          "producer"
+        ],
+        "type": "object"
+      },
+      "path": "/api/evidence/fragment-templated",
+      "refusals": [
+        {
+          "code": "EVIDENCE_TURN_REFUSED",
+          "description": "evidence turn refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_SELECTOR_INVALID",
+          "description": "evidence selector invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REFERENCE_STALE",
+          "description": "evidence reference stale.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_NOT_FOUND",
+          "description": "evidence not found.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_BYTES_MISSING",
+          "description": "evidence bytes missing.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_CHANGE_CONFLICT",
+          "description": "evidence change conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PATH_REFUSED",
+          "description": "evidence path refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_DELTA_EMPTY",
+          "description": "evidence delta empty.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REMOVE_INVALID",
+          "description": "evidence remove invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ITEM_CONFLICT",
+          "description": "evidence item conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_RESOURCE_LIMIT",
+          "description": "evidence resource limit.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PROVENANCE_INVALID",
+          "description": "evidence provenance invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
+          "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ROUTE_NOT_FOUND",
+          "description": "No declared route matches this method and path.",
+          "fix": "Call a method and path from the API description.",
+          "resolver": "agent"
+        },
+        {
+          "code": "METHOD_NOT_ALLOWED",
+          "description": "The path exists but this HTTP method is not declared for it.",
+          "fix": "Use one of the methods declared for this path.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_UNKNOWN",
+          "description": "The request action is not declared for this method and path.",
+          "fix": "Send a declared action literal, or omit action when the route has none.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_MISSING",
+          "description": "This method and path declare named actions and the request did not name one.",
+          "fix": "Send body.action as one of the declared action literals.",
+          "resolver": "agent"
+        },
+        {
+          "code": "JSON_INVALID",
+          "description": "The request body is not valid JSON.",
+          "fix": "Send a JSON object body with the declared fields.",
+          "resolver": "agent"
+        },
+        {
+          "code": "INPUT_INVALID",
+          "description": "One or more declared input fields failed structural checks.",
+          "fix": "Correct every named input fault and retry once.",
+          "resolver": "agent"
+        },
+        {
+          "code": "AUTH_MISSING",
+          "description": "The request did not present a usable credential.",
+          "fix": "Send the configured service token as Authorization Bearer, or a browser session cookie.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_INVALID",
+          "description": "The presented credential was not accepted.",
+          "fix": "Use a configured token or session; do not guess identities in the body.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_SCOPE_DENIED",
+          "description": "The authenticated principal lacks this route scope.",
+          "fix": "Use a grant that lists this scope, or call a route in the granted scopes.",
+          "resolver": "principal"
+        },
+        {
+          "code": "WRITE_UNCERTAIN",
+          "description": "The write ran and readback did not confirm the persisted record.",
+          "fix": "Do not retry this write; read the record and reconcile before any further call.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_INVALID",
+          "description": "The handler result did not match the declared output schema.",
+          "fix": "Return only declared fields that satisfy the output schema.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_UNDECLARED",
+          "description": "The handler result included fields the output schema does not declare.",
+          "fix": "Return exactly the declared output fields.",
+          "resolver": "operator"
+        },
+        {
+          "code": "INTERNAL_ERROR",
+          "description": "The handler failed without a named route fault.",
+          "fix": "Retry only after an operator inspects the server; do not send secrets to diagnose.",
+          "resolver": "operator"
+        },
+        {
+          "code": "HTTP_REDIRECT",
+          "description": "The HTTP client refused to follow a redirect while holding a bearer token.",
+          "fix": "Call the https origin that serves the API; do not use a redirecting base URL.",
+          "resolver": "agent"
+        }
+      ],
+      "scope": "read",
+      "summary": "Read exact selected source representation with explicit context and immutable original download identity, with the item's canvas template.",
       "transport": {
         "body": [],
         "path": [],
@@ -3281,6 +5990,12 @@
           "resolver": "agent"
         },
         {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
           "code": "ROUTE_NOT_FOUND",
           "description": "No declared route matches this method and path.",
           "fix": "Call a method and path from the API description.",
@@ -3367,6 +6082,861 @@
       ],
       "scope": "write",
       "summary": "Publish one explicit evidence delta on the exact currently executing native turn; final reply fence is unchanged.",
+      "transport": {
+        "body": [
+          "changeId",
+          "add",
+          "remove",
+          "note"
+        ],
+        "path": [],
+        "query": []
+      }
+    },
+    {
+      "id": "evidence_present_templated",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "description": "Explicit retained add.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Explicit retained add item.",
+              "properties": {
+                "assumptions": {
+                  "description": "Explicit retained assumptions.",
+                  "items": {
+                    "description": "Explicit retained assumptions item.",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "basis": {
+                  "description": "Explicit retained basis.",
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "Explicit retained basis item.",
+                    "properties": {
+                      "itemId": {
+                        "description": "Explicit retained itemId.",
+                        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                        "type": "string"
+                      },
+                      "representationId": {
+                        "description": "Explicit retained representationId.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "representationVersion": {
+                        "description": "Explicit retained representationVersion.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "selector": {
+                        "additionalProperties": false,
+                        "description": "Explicit retained selector.",
+                        "properties": {
+                          "end": {
+                            "description": "Explicit retained end.",
+                            "minimum": 1,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "height": {
+                            "description": "Explicit retained height.",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "kind": {
+                            "description": "Explicit retained kind.",
+                            "enum": [
+                              "lines",
+                              "rows",
+                              "field",
+                              "region"
+                            ],
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "description": "Explicit retained pointer.",
+                            "maxLength": 4096,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "start": {
+                            "description": "Explicit retained start.",
+                            "minimum": 1,
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "width": {
+                            "description": "Explicit retained width.",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "x": {
+                            "description": "Explicit retained x.",
+                            "maximum": 1,
+                            "minimum": 0,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "y": {
+                            "description": "Explicit retained y.",
+                            "maximum": 1,
+                            "minimum": 0,
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "start",
+                          "end",
+                          "pointer",
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ],
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      },
+                      "sha256": {
+                        "description": "Explicit retained sha256.",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "sourceId": {
+                        "description": "Explicit retained sourceId.",
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "itemId",
+                      "sourceId",
+                      "representationId",
+                      "representationVersion",
+                      "sha256",
+                      "selector"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "itemId": {
+                  "description": "Explicit retained itemId.",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Explicit retained label.",
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "note": {
+                  "description": "Explicit retained note.",
+                  "maxLength": 4096,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "description": "Explicit retained path.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "producerPath": {
+                  "description": "Explicit retained producerPath.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "selector": {
+                  "additionalProperties": false,
+                  "description": "Explicit retained selector.",
+                  "properties": {
+                    "end": {
+                      "description": "Explicit retained end.",
+                      "minimum": 1,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "height": {
+                      "description": "Explicit retained height.",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "kind": {
+                      "description": "Explicit retained kind.",
+                      "enum": [
+                        "lines",
+                        "rows",
+                        "field",
+                        "region"
+                      ],
+                      "type": "string"
+                    },
+                    "pointer": {
+                      "description": "Explicit retained pointer.",
+                      "maxLength": 4096,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "start": {
+                      "description": "Explicit retained start.",
+                      "minimum": 1,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "width": {
+                      "description": "Explicit retained width.",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "description": "Explicit retained x.",
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "y": {
+                      "description": "Explicit retained y.",
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "start",
+                    "end",
+                    "pointer",
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ],
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "template": {
+                  "description": "Optional canvas template the agent package defines. Original items are always template original; analysis items default to analysis and may not use original. Null means no template supplied; the runtime treats an omitted field as null.",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "itemId",
+                "label",
+                "path",
+                "selector",
+                "note",
+                "basis",
+                "assumptions",
+                "producerPath",
+                "template"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "changeId": {
+            "description": "Explicit retained changeId.",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          },
+          "note": {
+            "description": "Explicit retained note.",
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remove": {
+            "description": "Explicit retained remove.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Explicit retained remove item.",
+              "properties": {
+                "itemId": {
+                  "description": "Explicit retained itemId.",
+                  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                  "type": "string"
+                },
+                "reason": {
+                  "description": "Explicit retained reason.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "itemId",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "changeId",
+          "add",
+          "remove",
+          "note"
+        ],
+        "type": "object"
+      },
+      "kind": "create",
+      "method": "POST",
+      "output": {
+        "additionalProperties": false,
+        "description": "Explicit retained value.",
+        "properties": {
+          "added": {
+            "description": "Persisted added in the named checked scope.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Persisted item in the named checked scope.",
+              "properties": {
+                "changeId": {
+                  "description": "Explicit publishing change UUID.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "digest": {
+                  "description": "Original exact byte SHA256.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Immutable item UUID.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Public model-chosen label.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "note": {
+                  "description": "Public contextual note.",
+                  "maxLength": 8192,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "origin": {
+                  "description": "Persisted origin in the named checked scope.",
+                  "enum": [
+                    "original",
+                    "analysis"
+                  ],
+                  "type": "string"
+                },
+                "representationId": {
+                  "description": "Versioned representation identity.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "representationVersion": {
+                  "description": "Representation algorithm version.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "selector": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "end": {
+                              "description": "Persisted end in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "const": "lines",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "start": {
+                              "description": "Persisted start in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "start",
+                            "end"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "end": {
+                              "description": "Persisted end in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "const": "rows",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "start": {
+                              "description": "Persisted start in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "start",
+                            "end"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "kind": {
+                              "const": "field",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "pointer": {
+                              "description": "Persisted pointer in the named checked scope.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "pointer"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "height": {
+                              "description": "Persisted height in the named checked scope.",
+                              "type": "number"
+                            },
+                            "kind": {
+                              "const": "region",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "width": {
+                              "description": "Persisted width in the named checked scope.",
+                              "type": "number"
+                            },
+                            "x": {
+                              "description": "Persisted x in the named checked scope.",
+                              "type": "number"
+                            },
+                            "y": {
+                              "description": "Persisted y in the named checked scope.",
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "x",
+                            "y",
+                            "width",
+                            "height"
+                          ],
+                          "type": "object"
+                        }
+                      ],
+                      "description": "Explicit retained selector."
+                    },
+                    {
+                      "description": "Explicit retained selector.",
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Persisted selector in the named checked scope."
+                },
+                "sourceId": {
+                  "description": "Conversation-bound immutable byte custody identity.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "template": {
+                  "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "origin",
+                "sourceId",
+                "representationId",
+                "representationVersion",
+                "digest",
+                "note",
+                "selector",
+                "changeId",
+                "template"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "author": {
+            "additionalProperties": false,
+            "description": "Persisted author in the named checked scope.",
+            "properties": {
+              "displayName": {
+                "description": "Publisher display name.",
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "id": {
+                "description": "Authenticated publisher.",
+                "maxLength": 8192,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "displayName"
+            ],
+            "type": "object"
+          },
+          "changeId": {
+            "description": "Immutable change UUID.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "Server capture timestamp.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "duplicate": {
+            "description": "Exact previously retained change identity/payload was reused.",
+            "type": "boolean"
+          },
+          "messageId": {
+            "description": "Public ordinary conversation anchor.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "note": {
+            "description": "Public change explanation.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "releaseId": {
+            "description": "Actual active Carbon release.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "removed": {
+            "description": "Persisted removed in the named checked scope.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Explicit retained removed item.",
+              "properties": {
+                "itemId": {
+                  "description": "Explicit removed immutable identity.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "reason": {
+                  "description": "Public removal reason.",
+                  "maxLength": 8192,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "itemId",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "description": "Persisted feedback revision, previous revisions retained.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "turnId": {
+            "description": "Actual native turn.",
+            "maxLength": 8192,
+            "type": "string"
+          }
+        },
+        "required": [
+          "added",
+          "author",
+          "changeId",
+          "createdAt",
+          "messageId",
+          "note",
+          "releaseId",
+          "removed",
+          "revision",
+          "turnId",
+          "duplicate"
+        ],
+        "type": "object"
+      },
+      "path": "/api/evidence/present-templated",
+      "refusals": [
+        {
+          "code": "EVIDENCE_TURN_REFUSED",
+          "description": "evidence turn refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_SELECTOR_INVALID",
+          "description": "evidence selector invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REFERENCE_STALE",
+          "description": "evidence reference stale.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_NOT_FOUND",
+          "description": "evidence not found.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_BYTES_MISSING",
+          "description": "evidence bytes missing.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_CHANGE_CONFLICT",
+          "description": "evidence change conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PATH_REFUSED",
+          "description": "evidence path refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_DELTA_EMPTY",
+          "description": "evidence delta empty.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REMOVE_INVALID",
+          "description": "evidence remove invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ITEM_CONFLICT",
+          "description": "evidence item conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_RESOURCE_LIMIT",
+          "description": "evidence resource limit.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PROVENANCE_INVALID",
+          "description": "evidence provenance invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
+          "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ROUTE_NOT_FOUND",
+          "description": "No declared route matches this method and path.",
+          "fix": "Call a method and path from the API description.",
+          "resolver": "agent"
+        },
+        {
+          "code": "METHOD_NOT_ALLOWED",
+          "description": "The path exists but this HTTP method is not declared for it.",
+          "fix": "Use one of the methods declared for this path.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_UNKNOWN",
+          "description": "The request action is not declared for this method and path.",
+          "fix": "Send a declared action literal, or omit action when the route has none.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_MISSING",
+          "description": "This method and path declare named actions and the request did not name one.",
+          "fix": "Send body.action as one of the declared action literals.",
+          "resolver": "agent"
+        },
+        {
+          "code": "JSON_INVALID",
+          "description": "The request body is not valid JSON.",
+          "fix": "Send a JSON object body with the declared fields.",
+          "resolver": "agent"
+        },
+        {
+          "code": "INPUT_INVALID",
+          "description": "One or more declared input fields failed structural checks.",
+          "fix": "Correct every named input fault and retry once.",
+          "resolver": "agent"
+        },
+        {
+          "code": "AUTH_MISSING",
+          "description": "The request did not present a usable credential.",
+          "fix": "Send the configured service token as Authorization Bearer, or a browser session cookie.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_INVALID",
+          "description": "The presented credential was not accepted.",
+          "fix": "Use a configured token or session; do not guess identities in the body.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_SCOPE_DENIED",
+          "description": "The authenticated principal lacks this route scope.",
+          "fix": "Use a grant that lists this scope, or call a route in the granted scopes.",
+          "resolver": "principal"
+        },
+        {
+          "code": "WRITE_UNCERTAIN",
+          "description": "The write ran and readback did not confirm the persisted record.",
+          "fix": "Do not retry this write; read the record and reconcile before any further call.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_INVALID",
+          "description": "The handler result did not match the declared output schema.",
+          "fix": "Return only declared fields that satisfy the output schema.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_UNDECLARED",
+          "description": "The handler result included fields the output schema does not declare.",
+          "fix": "Return exactly the declared output fields.",
+          "resolver": "operator"
+        },
+        {
+          "code": "INTERNAL_ERROR",
+          "description": "The handler failed without a named route fault.",
+          "fix": "Retry only after an operator inspects the server; do not send secrets to diagnose.",
+          "resolver": "operator"
+        },
+        {
+          "code": "HTTP_REDIRECT",
+          "description": "The HTTP client refused to follow a redirect while holding a bearer token.",
+          "fix": "Call the https origin that serves the API; do not use a redirecting base URL.",
+          "resolver": "agent"
+        }
+      ],
+      "scope": "write",
+      "summary": "Publish one explicit evidence delta whose additions each carry a canvas template (or null for the default) on the exact currently executing native turn; final reply fence is unchanged.",
       "transport": {
         "body": [
           "changeId",
@@ -3730,6 +7300,12 @@
           "resolver": "agent"
         },
         {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
           "code": "ROUTE_NOT_FOUND",
           "description": "No declared route matches this method and path.",
           "fix": "Call a method and path from the API description.",
@@ -3816,6 +7392,473 @@
       ],
       "scope": "read",
       "summary": "Read a compact current set or one immutable conversation anchor, then detail on demand.",
+      "transport": {
+        "body": [],
+        "path": [],
+        "query": [
+          "anchor",
+          "cursor",
+          "limit"
+        ]
+      }
+    },
+    {
+      "id": "evidence_read_templated",
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "description": "Exact anchor or null for current.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cursor": {
+            "description": "Explicit nonnegative retained ordinal or surrounding context count.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Explicit page/fragment resource limit.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "anchor",
+          "cursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "kind": "read",
+      "method": "GET",
+      "output": {
+        "additionalProperties": false,
+        "description": "Explicit retained value.",
+        "properties": {
+          "anchor": {
+            "description": "Fixed snapshot anchor, null only when empty.",
+            "maxLength": 8192,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conversationId": {
+            "description": "Canonical conversation.",
+            "maxLength": 8192,
+            "type": "string"
+          },
+          "cursor": {
+            "description": "Last returned persisted Carbon ordinal.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hasMore": {
+            "description": "More retained messages exist after this page.",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "Persisted items in the named checked scope.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Persisted item in the named checked scope.",
+              "properties": {
+                "changeId": {
+                  "description": "Explicit publishing change UUID.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "digest": {
+                  "description": "Original exact byte SHA256.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Immutable item UUID.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Public model-chosen label.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "note": {
+                  "description": "Public contextual note.",
+                  "maxLength": 8192,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "origin": {
+                  "description": "Persisted origin in the named checked scope.",
+                  "enum": [
+                    "original",
+                    "analysis"
+                  ],
+                  "type": "string"
+                },
+                "representationId": {
+                  "description": "Versioned representation identity.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "representationVersion": {
+                  "description": "Representation algorithm version.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "selector": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "end": {
+                              "description": "Persisted end in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "const": "lines",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "start": {
+                              "description": "Persisted start in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "start",
+                            "end"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "end": {
+                              "description": "Persisted end in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "const": "rows",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "start": {
+                              "description": "Persisted start in the named checked scope.",
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "start",
+                            "end"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "kind": {
+                              "const": "field",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "pointer": {
+                              "description": "Persisted pointer in the named checked scope.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "pointer"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "description": "Explicit retained selector.",
+                          "properties": {
+                            "height": {
+                              "description": "Persisted height in the named checked scope.",
+                              "type": "number"
+                            },
+                            "kind": {
+                              "const": "region",
+                              "description": "Persisted kind in the named checked scope.",
+                              "type": "string"
+                            },
+                            "width": {
+                              "description": "Persisted width in the named checked scope.",
+                              "type": "number"
+                            },
+                            "x": {
+                              "description": "Persisted x in the named checked scope.",
+                              "type": "number"
+                            },
+                            "y": {
+                              "description": "Persisted y in the named checked scope.",
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "x",
+                            "y",
+                            "width",
+                            "height"
+                          ],
+                          "type": "object"
+                        }
+                      ],
+                      "description": "Explicit retained selector."
+                    },
+                    {
+                      "description": "Explicit retained selector.",
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Persisted selector in the named checked scope."
+                },
+                "sourceId": {
+                  "description": "Conversation-bound immutable byte custody identity.",
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "template": {
+                  "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "origin",
+                "sourceId",
+                "representationId",
+                "representationVersion",
+                "digest",
+                "note",
+                "selector",
+                "changeId",
+                "template"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "description": "Persisted feedback revision, previous revisions retained.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "description": "Persisted total in the named checked scope.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversationId",
+          "revision",
+          "anchor",
+          "items",
+          "cursor",
+          "hasMore",
+          "total"
+        ],
+        "type": "object"
+      },
+      "path": "/api/evidence/templated",
+      "refusals": [
+        {
+          "code": "EVIDENCE_TURN_REFUSED",
+          "description": "evidence turn refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_SELECTOR_INVALID",
+          "description": "evidence selector invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REFERENCE_STALE",
+          "description": "evidence reference stale.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_NOT_FOUND",
+          "description": "evidence not found.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_BYTES_MISSING",
+          "description": "evidence bytes missing.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_CHANGE_CONFLICT",
+          "description": "evidence change conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PATH_REFUSED",
+          "description": "evidence path refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_DELTA_EMPTY",
+          "description": "evidence delta empty.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_REMOVE_INVALID",
+          "description": "evidence remove invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ITEM_CONFLICT",
+          "description": "evidence item conflict.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_RESOURCE_LIMIT",
+          "description": "evidence resource limit.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_PROVENANCE_INVALID",
+          "description": "evidence provenance invalid.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
+          "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ROUTE_NOT_FOUND",
+          "description": "No declared route matches this method and path.",
+          "fix": "Call a method and path from the API description.",
+          "resolver": "agent"
+        },
+        {
+          "code": "METHOD_NOT_ALLOWED",
+          "description": "The path exists but this HTTP method is not declared for it.",
+          "fix": "Use one of the methods declared for this path.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_UNKNOWN",
+          "description": "The request action is not declared for this method and path.",
+          "fix": "Send a declared action literal, or omit action when the route has none.",
+          "resolver": "agent"
+        },
+        {
+          "code": "ACTION_MISSING",
+          "description": "This method and path declare named actions and the request did not name one.",
+          "fix": "Send body.action as one of the declared action literals.",
+          "resolver": "agent"
+        },
+        {
+          "code": "JSON_INVALID",
+          "description": "The request body is not valid JSON.",
+          "fix": "Send a JSON object body with the declared fields.",
+          "resolver": "agent"
+        },
+        {
+          "code": "INPUT_INVALID",
+          "description": "One or more declared input fields failed structural checks.",
+          "fix": "Correct every named input fault and retry once.",
+          "resolver": "agent"
+        },
+        {
+          "code": "AUTH_MISSING",
+          "description": "The request did not present a usable credential.",
+          "fix": "Send the configured service token as Authorization Bearer, or a browser session cookie.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_INVALID",
+          "description": "The presented credential was not accepted.",
+          "fix": "Use a configured token or session; do not guess identities in the body.",
+          "resolver": "principal"
+        },
+        {
+          "code": "AUTH_SCOPE_DENIED",
+          "description": "The authenticated principal lacks this route scope.",
+          "fix": "Use a grant that lists this scope, or call a route in the granted scopes.",
+          "resolver": "principal"
+        },
+        {
+          "code": "WRITE_UNCERTAIN",
+          "description": "The write ran and readback did not confirm the persisted record.",
+          "fix": "Do not retry this write; read the record and reconcile before any further call.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_INVALID",
+          "description": "The handler result did not match the declared output schema.",
+          "fix": "Return only declared fields that satisfy the output schema.",
+          "resolver": "operator"
+        },
+        {
+          "code": "OUTPUT_UNDECLARED",
+          "description": "The handler result included fields the output schema does not declare.",
+          "fix": "Return exactly the declared output fields.",
+          "resolver": "operator"
+        },
+        {
+          "code": "INTERNAL_ERROR",
+          "description": "The handler failed without a named route fault.",
+          "fix": "Retry only after an operator inspects the server; do not send secrets to diagnose.",
+          "resolver": "operator"
+        },
+        {
+          "code": "HTTP_REDIRECT",
+          "description": "The HTTP client refused to follow a redirect while holding a bearer token.",
+          "fix": "Call the https origin that serves the API; do not use a redirecting base URL.",
+          "resolver": "agent"
+        }
+      ],
+      "scope": "read",
+      "summary": "Read a compact current set or one immutable conversation anchor, with each item's canvas template, then detail on demand.",
       "transport": {
         "body": [],
         "path": [],

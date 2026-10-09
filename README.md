@@ -258,6 +258,62 @@ Nine rules are worth stating on their own.
 
 `runtime/proofs/` holds what has been run for real against the pinned harness.
 
+## The browser-host interface
+
+`runtime/browser-host.ts` is the one public entry for a browser host. A host calls
+`openBrowserHost({ storeDir, agent, account, authorize })`, which opens the store and the
+bridge and returns `{ host, store }`; `store` is the `store` option the runtime start
+takes. The only Carbon paths a host imports are this module and the runtime start
+(`runtime/index.ts` and the harness). It never reads a stored record or an
+`adapter_fields` key. The functions are `openConversation`, `submitMessage`,
+`stageFile`, `readConversation`, `readChanges`, `readMessage`, `readFiles`, `readFile`,
+`readOperator`, `readCanvas`, `readPeriodSummary`, `readEvidencePage`, `readEvidenceChanges`,
+`readEvidenceFragment`, `downloadEvidence` and `threadOptions` (the native permission
+profile for browser threads); each takes the server grant the bridge
+checks. The evidence functions return the same wire shapes as the generated evidence
+operations (with cursors, changes, selected fragments and the retained original bytes),
+so a host needs no `browser-evidence` import. `submitMessage` accepts an optional
+`requestKind` (`investigate`, `follow_up`, `copy_draft`), stored as
+`adapter_fields.request_kind`. Its `references` are in the wire form the evidence
+operations return (every selector field present, irrelevant ones null); the host
+converts them and refuses a malformed selector. `readFile` returns one file's custody:
+`fileId`, `kind` (`input` or `artifact`), `filename`, `mediaType`, `bytes`, `sha256`,
+`boundMessageId`, `actorId`, `state` and, when asked for, the `content`; another
+consultant's staged file is refused. `readOperator` returns the thread id, whether any
+message is uncertain, and each consultant input's state and native reason.
+
+A message view carries `messageId`, `conversationId`, `role`, `sender`, `text`,
+`createdAt`, `replyTo`, `turnId`, `submissionIds`, `files`, `state`,
+`validationFaults`, `nativeReason`, `requestKind`, `inputKind` and `reply`
+(`sources`, `uncertainty`, `draftLabel`, or null). The activity view carries
+`nativeTurnId` and `nativeReason`; `nativeReason` is null when none was retained,
+for example after an acceptance crash. `state` is exactly one of `accepted`,
+`queued`, `running`, `answer`, `evidence_update`, `failed` or `uncertain`. An
+evidence publication is always `evidence_update`, never `answer`. An input's state
+is the progress of the response it asked for, and is `answer` once answered; only
+an agent message in state `answer` is an answer to count.
+
+The canvas lists current evidence as items with `itemId`, `template`, `label`,
+`source` and `history`. Carbon supplies a generic canvas; each agent package supplies
+its templates, the agent normally uses them and may go beyond them. A template is an
+opaque string matching `^[a-z][a-z0-9_.-]{0,63}$` that the agent sets in the optional
+`template` field of an evidence addition; Carbon stores it on the item and never
+interprets it. Carbon fixes exactly one, `original`: an unchanged source file with its
+provenance, which the agent can reference and never author. An original item is always
+template `original`, and any other value for it is refused (`EVIDENCE_TEMPLATE_REFUSED`).
+An analysis item uses the supplied template, or `analysis` when none is given; the
+value `original` is reserved and refused there.
+
+The period summary counts inputs, answers, evidence updates, unmarked answers (an
+answer with no reply metadata) and the latency of each answer from its earliest
+input.
+
+The views are declared by `schema/carbon.browser-host.v1.json`. The version rule:
+a breaking change to any view needs a new schema version, `carbon.browser-host.v2`,
+beside the old one. Adding an optional field to a request or a new function is not
+breaking. Internal module paths are not a contract, and `package.json` has no
+`exports` map yet.
+
 ## Running the check
 
 ```
@@ -315,7 +371,7 @@ workflow, no tools. It publishes nothing.
 Node 22, ES modules, and three runtime dependencies: `@whiskeysockets/baileys`
 for WhatsApp, `postgres` for the agent's on-box PostgreSQL records, and `@pcl/routes`
 for the existing generated evidence HTTP/CLI/MCP interface. The routes package is
-the retained `vendor/pcl-routes-0.1.0.tgz` archive, with its exact version and digest
+the retained `vendor/pcl-routes-0.1.2.tgz` archive, with its exact version and digest
 checked by the release workflow; it needs no registry during installation. The other two are
 pinned in `package.json` and `package-lock.json`. TypeScript is the sole development dependency. The checks use it to
 typecheck; the release tarball does not carry it. The Telegram adapter is the
