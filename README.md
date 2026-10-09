@@ -276,9 +276,15 @@ is the progress of the response it asked for, and is `answer` once answered; onl
 an agent message in state `answer` is an answer to count.
 
 The canvas lists current evidence as items with `itemId`, `template`, `label`,
-`source` and `history`. The template is an opaque string the agent package supplies.
-Carbon fixes one, `original`: an unchanged source file with its provenance, which
-the agent can reference and never author. Evidence the agent derived is template `analysis`.
+`source` and `history`. Carbon supplies a generic canvas; each agent package supplies
+its templates, the agent normally uses them and may go beyond them. A template is an
+opaque string matching `^[a-z][a-z0-9_.-]{0,63}$` that the agent sets in the optional
+`template` field of an evidence addition; Carbon stores it on the item and never
+interprets it. Carbon fixes exactly one, `original`: an unchanged source file with its
+provenance, which the agent can reference and never author. An original item is always
+template `original`, and any other value for it is refused (`EVIDENCE_TEMPLATE_REFUSED`).
+An analysis item uses the supplied template, or `analysis` when none is given; the
+value `original` is reserved and refused there.
 
 The period summary counts inputs, answers, evidence updates, unmarked answers (an
 answer with no reply metadata) and the latency of each answer from its earliest

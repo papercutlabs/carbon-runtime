@@ -291,7 +291,8 @@
             "note",
             "basis",
             "assumptions",
-            "producerPath"
+            "producerPath",
+            "template"
           ],
           "properties": {
             "itemId": {
@@ -606,6 +607,18 @@
                   "type": "null"
                 }
               ]
+            },
+            "template": {
+              "description": "Optional canvas template the agent package defines. Original items are always template original; analysis items default to analysis and may not use original. Null means no template supplied; the runtime treats an omitted field as null.",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           }
         }
@@ -844,6 +857,11 @@
               "description": "Conversation-bound immutable byte custody identity.",
               "maxLength": 8192,
               "type": "string"
+            },
+            "template": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+              "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals."
             }
           },
           "required": [
@@ -856,7 +874,8 @@
             "digest",
             "note",
             "selector",
-            "changeId"
+            "changeId",
+            "template"
           ],
           "type": "object"
         },
@@ -1065,6 +1084,11 @@
                     "description": "Conversation-bound immutable byte custody identity.",
                     "maxLength": 8192,
                     "type": "string"
+                  },
+                  "template": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                    "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals."
                   }
                 },
                 "required": [
@@ -1077,7 +1101,8 @@
                   "digest",
                   "note",
                   "selector",
-                  "changeId"
+                  "changeId",
+                  "template"
                 ],
                 "type": "object"
               },
@@ -2607,6 +2632,11 @@
             "description": "Conversation-bound immutable byte custody identity.",
             "maxLength": 8192,
             "type": "string"
+          },
+          "template": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+            "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals."
           }
         },
         "required": [
@@ -2619,7 +2649,8 @@
           "digest",
           "note",
           "selector",
-          "changeId"
+          "changeId",
+          "template"
         ],
         "type": "object"
       },
@@ -3091,6 +3122,11 @@
         "description": "Conversation-bound immutable byte custody identity.",
         "maxLength": 8192,
         "type": "string"
+      },
+      "template": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+        "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals."
       }
     },
     "required": [
@@ -3103,7 +3139,8 @@
       "digest",
       "note",
       "selector",
-      "changeId"
+      "changeId",
+      "template"
     ],
     "type": "object"
   },
@@ -3297,6 +3334,11 @@
               "description": "Conversation-bound immutable byte custody identity.",
               "maxLength": 8192,
               "type": "string"
+            },
+            "template": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+              "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals."
             }
           },
           "required": [
@@ -3309,7 +3351,8 @@
             "digest",
             "note",
             "selector",
-            "changeId"
+            "changeId",
+            "template"
           ],
           "type": "object"
         },

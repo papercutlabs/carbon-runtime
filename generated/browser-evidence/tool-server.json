@@ -462,6 +462,14 @@
                     "object",
                     "null"
                   ]
+                },
+                "template": {
+                  "description": "Optional canvas template the agent package defines. Original items are always template original; analysis items default to analysis and may not use original. Null means no template supplied; the runtime treats an omitted field as null.",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -472,7 +480,8 @@
                 "note",
                 "basis",
                 "assumptions",
-                "producerPath"
+                "producerPath",
+                "template"
               ],
               "type": "object"
             },

@@ -11,11 +11,11 @@ import { assertNoSymlinks, consultantUploadProvenance, type BrowserWorkspace } f
 import { indexEvidenceRepresentation, resolveEvidenceFragment, type EvidenceSelector, type EvidenceRepresentation, REPRESENTATION_VERSION } from './browser-evidence-representation.ts';
 import type { EvidenceReference } from '../lib/browser-evidence.ts';
 export type { EvidenceReference } from '../lib/browser-evidence.ts';
-export type EvidenceItem = { id:string; label:string; origin:'original'|'analysis'; sourceId:string; representationId:string; representationVersion:string; digest:string; note:string|null; selector:EvidenceSelector|null; changeId:string };
+export type EvidenceItem = { id:string; label:string; origin:'original'|'analysis'; template:string; sourceId:string; representationId:string; representationVersion:string; digest:string; note:string|null; selector:EvidenceSelector|null; changeId:string };
 type EvidenceSource = { id:string; attachment:Attachment; originalPath:string; origin:'original'|'analysis'; provenance:Record<string,unknown>|null; producer:EvidenceSource|null };
 type Detail = { item:EvidenceItem; source:EvidenceSource; basis:EvidenceReference[]; assumptions:string[] };
 export type EvidenceChange = { changeId:string; messageId:string; revision:number; createdAt:string; author:{id:string;displayName:string}; releaseId:string; turnId:string; added:EvidenceItem[]; removed:{itemId:string;reason:string}[]; note:string|null };
-type Addition={itemId:string;label:string;path:string;selector:EvidenceSelector|null;note:string|null;basis:EvidenceReference[];assumptions:string[];producerPath:string|null};
+type Addition={itemId:string;template?:string|null;label:string;path:string;selector:EvidenceSelector|null;note:string|null;basis:EvidenceReference[];assumptions:string[];producerPath:string|null};
 export type EvidenceDelta={changeId:string;add:Addition[];remove:{itemId:string;reason:string}[];note:string|null};
 const uuid={type:'string',pattern:'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'};
 const str={type:'string',minLength:1,maxLength:4096};
@@ -89,7 +89,7 @@ function sourceFromPath(store:Store,conversation:string,workspace:BrowserWorkspa
 }
 type State={version:number;changes:EvidenceChange[];details:Map<string,Detail>;current:Map<string,EvidenceItem>;sources:Map<string,EvidenceSource>;revision:number};
 const cache=new WeakMap<Store,Map<string,State>>();
-function applyRecord(found:State,r:MessageRecord){const c=r.adapter_fields!.evidence_change as EvidenceChange;found.changes.push(c);found.revision=c.revision;for(const d of r.adapter_fields!.evidence_details as Detail[]){found.details.set(d.item.id,d);found.current.set(d.item.id,d.item);found.sources.set(d.source.id,d.source);if(d.source.producer)found.sources.set(d.source.producer.id,d.source.producer);}for(const removed of c.removed)found.current.delete(removed.itemId);}
+function applyRecord(found:State,r:MessageRecord){const c=r.adapter_fields!.evidence_change as EvidenceChange;for(const i of c.added)i.template??=i.origin==='original'?'original':'analysis';found.changes.push(c);found.revision=c.revision;for(const d of r.adapter_fields!.evidence_details as Detail[]){d.item.template??=d.item.origin==='original'?'original':'analysis';found.details.set(d.item.id,d);found.current.set(d.item.id,d.item);found.sources.set(d.source.id,d.source);if(d.source.producer)found.sources.set(d.source.producer.id,d.source.producer);}for(const removed of c.removed)found.current.delete(removed.itemId);}
 function state(store:Store,conversation:string):State{
  let all=cache.get(store);if(!all){all=new Map();cache.set(store,all);}
  const latest=store.browserEvidenceVersions.get(conversation),version=latest?.version??0;let found=all.get(conversation);
@@ -111,21 +111,30 @@ export function validateEvidenceReferences(store:Store,conversation:string,refs:
  if(problems.length)throw new StreamFault(problems);return structuredClone(result);
 }
 function normalizeDelta(delta:unknown){
+ if(delta&&typeof delta==='object'&&Array.isArray((delta as EvidenceDelta).add))delta={...delta,add:(delta as EvidenceDelta).add.map(a=>a&&typeof a==='object'&&!('template' in a)?{...a,template:null}:a)};
  const faults=validateEvidence(EVIDENCE_DELTA_SCHEMA,delta);if(faults.length)throw new StreamFault(faults);const raw=delta as EvidenceDelta,selectorFaults:Fault[]=[];const normalize=(selector:unknown)=>{try{return fromWireSelector(selector);}catch(e){if((e as StreamFault).faults)selectorFaults.push(...(e as StreamFault).faults);else throw e;return null;}};const input={...raw,add:raw.add.map(a=>({...a,selector:normalize(a.selector),basis:a.basis.map(r=>({...r,selector:normalize(r.selector)}))}))};if(selectorFaults.length)throw new StreamFault(selectorFaults);
 return input;
+}
+const TEMPLATE_PATTERN=/^[a-z][a-z0-9_.-]{0,63}$/;
+function templateFor(origin:'original'|'analysis',supplied:string|null|undefined){
+ supplied??=undefined;
+ if(supplied!==undefined&&!TEMPLATE_PATTERN.test(supplied))refuse('EVIDENCE_TEMPLATE_REFUSED','template','template must match ^[a-z][a-z0-9_.-]{0,63}$');
+ if(origin==='original'){if(supplied!==undefined&&supplied!=='original')refuse('EVIDENCE_TEMPLATE_REFUSED','template','a received original is always template original; the agent package cannot give it another');return 'original';}
+ if(supplied==='original')refuse('EVIDENCE_TEMPLATE_REFUSED','template','template original is reserved for received originals');
+ return supplied??'analysis';
 }
 function prepareDelta(store:Store,conversationId:string,workspace:BrowserWorkspace,input:EvidenceDelta,s:State,ready:Detail[]){
  const removed=new Set<string>(),added=new Set<string>(),problems:Fault[]=[];
  for(const removal of input.remove){if(removed.has(removal.itemId)||!s.current.has(removal.itemId))problems.push(fault('EVIDENCE_REMOVE_INVALID',removal.itemId,'removal must name one currently presented item exactly once','read current evidence and give an explicit reason'));removed.add(removal.itemId);}
  for(const add of input.add){try{if(added.has(add.itemId)||s.details.has(add.itemId))refuse('EVIDENCE_ITEM_CONFLICT','itemId','item identities are immutable and cannot be reused');added.add(add.itemId);const source=sourceFromPath(store,conversationId,workspace,add.path);if(add.producerPath)source.producer=sourceFromPath(store,conversationId,workspace,add.producerPath,true);
- const indexed=representation(store,source);resolveEvidenceFragment(indexed,add.selector,0,0,1000);
- const basis=validateEvidenceReferences(store,conversationId,add.basis);ready.push({item:{id:add.itemId,label:add.label,origin:source.origin,sourceId:source.id,representationId:indexed.id,representationVersion:indexed.version,digest:source.attachment.sha256,note:add.note,selector:add.selector,changeId:input.changeId},source,basis,assumptions:add.assumptions});}catch(e){if((e as StreamFault).faults)problems.push(...(e as StreamFault).faults);else problems.push(fault('EVIDENCE_FILE_UNAVAILABLE',add.itemId,String((e as Error).message),'finish writing the exact source file and retry'));}}
+ const template=templateFor(source.origin,add.template);const indexed=representation(store,source);resolveEvidenceFragment(indexed,add.selector,0,0,1000);
+ const basis=validateEvidenceReferences(store,conversationId,add.basis);ready.push({item:{id:add.itemId,label:add.label,origin:source.origin,template,sourceId:source.id,representationId:indexed.id,representationVersion:indexed.version,digest:source.attachment.sha256,note:add.note,selector:add.selector,changeId:input.changeId},source,basis,assumptions:add.assumptions});}catch(e){if((e as StreamFault).faults)problems.push(...(e as StreamFault).faults);else problems.push(fault('EVIDENCE_FILE_UNAVAILABLE',add.itemId,String((e as Error).message),'finish writing the exact source file and retry'));}}
  if(problems.length)throw new StreamFault(problems);
 }
 export function presentEvidence(store:Store,{agent,account,workspace,conversationId,releaseId,turnId,delta,now=new Date().toISOString()}:{agent:string;account:string;workspace:BrowserWorkspace;conversationId:string;releaseId:string;turnId:string;delta:unknown;now?:string}){
  const input=normalizeDelta(delta);
  const active=store.activeBrowserReply;if(!active||active.conversation_id!==conversationId||active.release_id!==releaseId||active.native_turn_id!==turnId)refuse('EVIDENCE_TURN_REFUSED','turn','only the exact currently executing browser turn can publish');
- const messageId=`${conversationId}:evidence:${input.changeId}`,prior=store.read(conversationId,messageId),identity=hash(JSON.stringify(input));
+ const messageId=`${conversationId}:evidence:${input.changeId}`,prior=store.read(conversationId,messageId),identity=hash(JSON.stringify({...input,add:input.add.map(({template,...a})=>template===null||template===undefined?a:{...a,template})}));
  if(prior){if(prior.adapter_fields?.evidence_identity!==identity)refuse('EVIDENCE_CHANGE_CONFLICT','changeId','identity already names a different explicit delta');return {...prior.adapter_fields!.evidence_change as EvidenceChange,duplicate:true};}
  if(!input.add.length&&!input.remove.length)refuse('EVIDENCE_DELTA_EMPTY','changeId','publication must explicitly add or remove an item');
  const s=state(store,conversationId),ready:Detail[]=[];

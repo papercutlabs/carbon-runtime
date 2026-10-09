@@ -10,7 +10,8 @@ import { browserConversationId } from '../adapters/browser/index.ts';
 import { createBrowserBridge } from '../runtime/browser.ts';
 import { createBrowserHost, messageView, templateOf, BROWSER_HOST_SCHEMA, HOST_ADAPTER_FIELDS, type MessageState } from '../runtime/browser-host.ts';
 import { browserWorkspace } from '../runtime/browser-files.ts';
-import { presentEvidence, toWireSelector } from '../runtime/browser-evidence.ts';
+import { presentEvidence, toWireSelector, readEvidenceChanges, readEvidenceFragment, readEvidence } from '../runtime/browser-evidence.ts';
+import { StreamFault } from '../stream/store.ts';
 import { replyHandler } from '../runtime/reply-tool.ts';
 
 const KEY = 'CASE-7';
@@ -49,7 +50,7 @@ function validateView(name: string, value: unknown) {
       : Object.fromEntries(Object.entries(n).filter(([k]) => k !== 'description').map(([k, v]) => [k, inline(v)]))) : n;
   return validateInput(Type.Unsafe(inline(defs[name]) as never), value);
 }
-function publish(s: ReturnType<typeof setup>, name: string, content: string, label: string, kind: 'original' | 'analysis', turn: string) {
+function publish(s: ReturnType<typeof setup>, name: string, content: string, label: string, kind: 'original' | 'analysis', turn: string, template?: string) {
   const itemId = crypto.randomUUID(), changeId = crypto.randomUUID();
   const dir = kind === 'original' ? s.workspace.evidence : s.workspace.analysis, file = path.join(dir, name), bytes = Buffer.from(content);
   fs.writeFileSync(file, bytes, { mode: 0o400 });
@@ -57,7 +58,7 @@ function publish(s: ReturnType<typeof setup>, name: string, content: string, lab
     provenance: { url: 'https://source.invalid/page', fetchedAt: '2026-10-09T00:00:00Z' } }), { mode: 0o400 });
   s.store.activeBrowserReply = { conversation_id: s.conversation, release_id: turn, native_turn_id: 'native', workspace: s.workspace };
   presentEvidence(s.store, { agent: 'synthetic-agent', account: s.account, workspace: s.workspace, conversationId: s.conversation, releaseId: turn, turnId: 'native',
-    delta: { changeId, add: [{ itemId, label, path: file, selector: toWireSelector(null), note: null, basis: [], assumptions: [], producerPath: null }], remove: [], note: null } });
+    delta: { changeId, add: [{ itemId, label, path: file, selector: toWireSelector(null), note: null, basis: [], assumptions: [], producerPath: null, ...(template === undefined ? {} : { template }) }], remove: [], note: null } });
   return itemId;
 }
 
@@ -150,8 +151,37 @@ test('the canvas exposes current evidence as templated items with provenance and
   assert.deepEqual(after.items.map((i) => i.itemId), [original]);
   const anchored = await s.host.readCanvas(GRANT, KEY, { anchor: canvas.items.length ? (await s.bridge.evidenceChanges(GRANT, KEY, {})).changes[1].changeId : null });
   assert.equal(anchored.total, 2);
-  assert.equal(templateOf('original'), 'original'); assert.equal(templateOf('analysis'), 'analysis');
-  assert.throws(() => templateOf('invented'));
+  assert.equal(templateOf({ origin: 'original', template: 'original' }), 'original');
+  assert.throws(() => templateOf({ origin: 'invented', template: 'x' }));
+  assert.equal(templateOf({ origin: 'analysis', template: 'anything-the-package-says' }), 'anything-the-package-says');
+});
+
+test('an agent-supplied template round-trips through publication, reads, history and the canvas; the default is analysis', async (t) => {
+  const s = setup(t);
+  await s.submit('c1'); s.release('c1', 'turn-t');
+  const custom = publish(s, 'a.txt', 'one', 'Custom', 'analysis', 'turn-t', 'cost-breakdown.v2');
+  const plain = publish(s, 'b.txt', 'two', 'Plain', 'analysis', 'turn-t');
+  const original = publish(s, 'c.txt', 'three', 'Source', 'original', 'turn-t', 'original');
+  const canvas = await s.host.readCanvas(GRANT, KEY);
+  assert.deepEqual(validateView('canvas', canvas), []);
+  const byId = new Map(canvas.items.map((item) => [item.itemId, item.template]));
+  assert.deepEqual([byId.get(custom), byId.get(plain), byId.get(original)], ['cost-breakdown.v2', 'analysis', 'original']);
+  const current = readEvidence(s.store, s.conversation);
+  assert.equal(current.items.find((i) => i.id === custom)!.template, 'cost-breakdown.v2');
+  assert.equal(readEvidenceFragment(s.store, s.conversation, custom, null).item.template, 'cost-breakdown.v2');
+  const history = readEvidenceChanges(s.store, s.conversation).changes.flatMap((c) => c.added);
+  assert.deepEqual(history.map((i) => i.template), ['cost-breakdown.v2', 'analysis', 'original']);
+});
+
+test('templates are refused when they are malformed, reserved on analysis, or foreign to an original', async (t) => {
+  const s = setup(t);
+  await s.submit('c1'); s.release('c1', 'turn-r');
+  const refused = (fn: () => unknown) => assert.throws(fn, (e) => e instanceof StreamFault && e.faults.length > 0);
+  refused(() => publish(s, 'a.txt', 'x', 'A', 'analysis', 'turn-r', 'original'));
+  refused(() => publish(s, 'b.txt', 'x', 'B', 'original', 'turn-r', 'cost-breakdown'));
+  for (const [n, bad] of ['Upper', '1lead', '', 'has space', 'x'.repeat(65)].entries()) refused(() => publish(s, `m${n}.txt`, 'x', 'C', 'analysis', 'turn-r', bad));
+  assert.throws(() => publish(s, 'e.txt', 'x', 'D', 'analysis', 'turn-r', 'original'), (e) => e instanceof StreamFault && e.faults.some((f) => f.code === 'EVIDENCE_TEMPLATE_REFUSED'));
+  assert.equal(readEvidence(s.store, s.conversation).total, 0);
 });
 
 test('open, submit, page, changes, message and files go through the bridge grant', async (t) => {

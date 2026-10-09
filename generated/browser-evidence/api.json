@@ -207,6 +207,11 @@
                         "description": "Conversation-bound immutable byte custody identity.",
                         "maxLength": 8192,
                         "type": "string"
+                      },
+                      "template": {
+                        "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                        "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -219,7 +224,8 @@
                       "digest",
                       "note",
                       "selector",
-                      "changeId"
+                      "changeId",
+                      "template"
                     ],
                     "type": "object"
                   },
@@ -431,6 +437,12 @@
         {
           "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
           "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
           "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
           "resolver": "agent"
         },
@@ -2052,6 +2064,11 @@
                 "description": "Conversation-bound immutable byte custody identity.",
                 "maxLength": 8192,
                 "type": "string"
+              },
+              "template": {
+                "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                "type": "string"
               }
             },
             "required": [
@@ -2064,7 +2081,8 @@
               "digest",
               "note",
               "selector",
-              "changeId"
+              "changeId",
+              "template"
             ],
             "type": "object"
           },
@@ -2442,6 +2460,12 @@
         {
           "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
           "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
           "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
           "resolver": "agent"
         },
@@ -2827,6 +2851,14 @@
                     "object",
                     "null"
                   ]
+                },
+                "template": {
+                  "description": "Optional canvas template the agent package defines. Original items are always template original; analysis items default to analysis and may not use original. Null means no template supplied; the runtime treats an omitted field as null.",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -2837,7 +2869,8 @@
                 "note",
                 "basis",
                 "assumptions",
-                "producerPath"
+                "producerPath",
+                "template"
               ],
               "type": "object"
             },
@@ -3078,6 +3111,11 @@
                   "description": "Conversation-bound immutable byte custody identity.",
                   "maxLength": 8192,
                   "type": "string"
+                },
+                "template": {
+                  "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": "string"
                 }
               },
               "required": [
@@ -3090,7 +3128,8 @@
                 "digest",
                 "note",
                 "selector",
-                "changeId"
+                "changeId",
+                "template"
               ],
               "type": "object"
             },
@@ -3277,6 +3316,12 @@
         {
           "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
           "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
           "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
           "resolver": "agent"
         },
@@ -3609,6 +3654,11 @@
                   "description": "Conversation-bound immutable byte custody identity.",
                   "maxLength": 8192,
                   "type": "string"
+                },
+                "template": {
+                  "description": "Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.",
+                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                  "type": "string"
                 }
               },
               "required": [
@@ -3621,7 +3671,8 @@
                 "digest",
                 "note",
                 "selector",
-                "changeId"
+                "changeId",
+                "template"
               ],
               "type": "object"
             },
@@ -3726,6 +3777,12 @@
         {
           "code": "EVIDENCE_ORIGINAL_UNREGISTERED",
           "description": "evidence original unregistered.",
+          "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
+          "resolver": "agent"
+        },
+        {
+          "code": "EVIDENCE_TEMPLATE_REFUSED",
+          "description": "evidence template refused.",
           "fix": "Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.",
           "resolver": "agent"
         },

@@ -75,12 +75,11 @@ export function messageView(record: MessageRecord): MessageView {
     state: messageState(record), validationFaults: faultViews(record), nativeReason: reasonText(record) };
 }
 
-// Carbon fixes one template, `original`. Every other template string is the agent package's.
-const TEMPLATE_OF_ORIGIN: Record<EvidenceItem['origin'], string> = { original: 'original', analysis: 'analysis' };
-export function templateOf(origin: string): string {
-  const template = (TEMPLATE_OF_ORIGIN as Record<string, string | undefined>)[origin];
-  if (!template) throw new Error(`evidence origin ${origin} has no canvas template`);
-  return template;
+// Carbon fixes one template, `original`. Every other template string is the agent package's and opaque here.
+const KNOWN_ORIGINS: readonly string[] = ['original', 'analysis'];
+export function templateOf(item: { origin: string; template: string }): string {
+  if (!KNOWN_ORIGINS.includes(item.origin)) throw new Error(`evidence origin ${item.origin} is unknown`);
+  return item.template;
 }
 
 type Bridge = ReturnType<typeof createBrowserBridge>;
@@ -164,7 +163,7 @@ export function createBrowserHost({ store, bridge, account }: { store: Store; br
       const changes = (await bridge.evidenceChanges(grant, ticketKey, { limit: 1000 })).changes;
       const items: CanvasItem[] = page.items.map((item) => {
         const fragment = publicEvidenceFragment(bridge.evidenceFragment(grant, ticketKey, item.id, item.selector, 0, 0, 1));
-        return { itemId: item.id, template: templateOf(item.origin), label: item.label,
+        return { itemId: item.id, template: templateOf(item), label: item.label,
           source: { sourceId: item.sourceId, sha256: item.digest, selector: item.selector, note: item.note, provenance: fragment.provenance },
           history: changes.flatMap((change) => [
             ...change.added.filter((one) => one.id === item.id).map(() => ({ changeId: change.changeId, revision: change.revision, at: change.createdAt, change: 'added' as const, reason: change.note })),

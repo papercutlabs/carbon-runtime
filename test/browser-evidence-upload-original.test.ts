@@ -58,6 +58,7 @@ test('a bound consultant upload is published as an original with Carbon-derived 
     assert.equal(page.items.length, 3);
     for (const i of items) {
       const item = page.items.find((x) => x.id === i.itemId)!;
+      assert.equal(item.template, 'original');
       assert.equal(item.origin, 'original');
       const frag = readEvidenceFragment(t.store, t.conv(KEY), i.itemId, i.f.selector as never, 0, 0, 100);
       assert.equal(frag.content.kind, i.f.kindOf === 'image' ? 'image' : frag.content.kind);

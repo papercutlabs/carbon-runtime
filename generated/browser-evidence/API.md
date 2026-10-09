@@ -46,23 +46,24 @@ Return fields:
 23. changes[].added[].selector (variant 1) (variant 4).x (number) — Persisted x in the named checked scope.
 24. changes[].added[].selector (variant 1) (variant 4).y (number) — Persisted y in the named checked scope.
 25. changes[].added[].sourceId (string) — Conversation-bound immutable byte custody identity.
-26. changes[].author (object) — Persisted author in the named checked scope.
-27. changes[].author.displayName (string) — Publisher display name.
-28. changes[].author.id (string) — Authenticated publisher.
-29. changes[].changeId (string) — Immutable change UUID.
-30. changes[].createdAt (string) — Server capture timestamp.
-31. changes[].messageId (string) — Public ordinary conversation anchor.
-32. changes[].note (string|null) — Public change explanation.
-33. changes[].releaseId (string) — Actual active Carbon release.
-34. changes[].removed (array<object>) — Persisted removed in the named checked scope.
-35. changes[].removed[].itemId (string) — Explicit removed immutable identity.
-36. changes[].removed[].reason (string) — Public removal reason.
-37. changes[].revision (integer) — Persisted feedback revision, previous revisions retained.
-38. changes[].turnId (string) — Actual native turn.
-39. conversationId (string) — Canonical conversation.
-40. cursor (integer) — Last returned persisted Carbon ordinal.
-41. hasMore (boolean) — More retained messages exist after this page.
-42. revision (integer) — Persisted feedback revision, previous revisions retained.
+26. changes[].added[].template (string) — Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.
+27. changes[].author (object) — Persisted author in the named checked scope.
+28. changes[].author.displayName (string) — Publisher display name.
+29. changes[].author.id (string) — Authenticated publisher.
+30. changes[].changeId (string) — Immutable change UUID.
+31. changes[].createdAt (string) — Server capture timestamp.
+32. changes[].messageId (string) — Public ordinary conversation anchor.
+33. changes[].note (string|null) — Public change explanation.
+34. changes[].releaseId (string) — Actual active Carbon release.
+35. changes[].removed (array<object>) — Persisted removed in the named checked scope.
+36. changes[].removed[].itemId (string) — Explicit removed immutable identity.
+37. changes[].removed[].reason (string) — Public removal reason.
+38. changes[].revision (integer) — Persisted feedback revision, previous revisions retained.
+39. changes[].turnId (string) — Actual native turn.
+40. conversationId (string) — Canonical conversation.
+41. cursor (integer) — Last returned persisted Carbon ordinal.
+42. hasMore (boolean) — More retained messages exist after this page.
+43. revision (integer) — Persisted feedback revision, previous revisions retained.
 
 Refusals:
 1. EVIDENCE_TURN_REFUSED — resolver: agent — evidence turn refused.
@@ -91,33 +92,35 @@ Refusals:
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
 13. EVIDENCE_ORIGINAL_UNREGISTERED — resolver: agent — evidence original unregistered.
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
-14. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
+14. EVIDENCE_TEMPLATE_REFUSED — resolver: agent — evidence template refused.
+   fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
+15. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
    fix: Call a method and path from the API description.
-15. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
+16. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
    fix: Use one of the methods declared for this path.
-16. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
+17. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
    fix: Send a declared action literal, or omit action when the route has none.
-17. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
+18. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
    fix: Send body.action as one of the declared action literals.
-18. JSON_INVALID — resolver: agent — The request body is not valid JSON.
+19. JSON_INVALID — resolver: agent — The request body is not valid JSON.
    fix: Send a JSON object body with the declared fields.
-19. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
+20. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
    fix: Correct every named input fault and retry once.
-20. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
+21. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
    fix: Send the configured service token as Authorization Bearer, or a browser session cookie.
-21. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
+22. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
    fix: Use a configured token or session; do not guess identities in the body.
-22. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
+23. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
    fix: Use a grant that lists this scope, or call a route in the granted scopes.
-23. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
+24. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
    fix: Do not retry this write; read the record and reconcile before any further call.
-24. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
+25. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
    fix: Return only declared fields that satisfy the output schema.
-25. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
+26. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
    fix: Return exactly the declared output fields.
-26. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
+27. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
    fix: Retry only after an operator inspects the server; do not send secrets to diagnose.
-27. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
+28. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
    fix: Call the https origin that serves the API; do not use a redirecting base URL.
 
 Example:
@@ -314,40 +317,41 @@ Return fields:
 170. item.selector (variant 1) (variant 4).x (number) — Persisted x in the named checked scope.
 171. item.selector (variant 1) (variant 4).y (number) — Persisted y in the named checked scope.
 172. item.sourceId (string) — Conversation-bound immutable byte custody identity.
-173. producer (object|null) — Persisted producer in the named checked scope.
-174. producer.conversationId (string) — Exact bound conversation.
-175. producer.path ("/api/evidence/download") — Persisted path in the named checked scope.
-176. producer.sourceId (string) — Immutable accepted source identity.
-177. provenance (object|null) — Persisted provenance in the named checked scope.
-178. provenance.completeness (string|null) — Original source receipt completeness.
-179. provenance.conversion (string|null) — Original source receipt conversion.
-180. provenance.fetchedAt (string|null) — Original source receipt fetchedAt.
-181. provenance.locator (string|null) — Original source receipt locator.
-182. provenance.revision (string|null) — Original source receipt revision.
-183. provenance.sha256 (string|null) — Original source receipt sha256.
-184. provenance.source (string|null) — Original source receipt source.
-185. reference (object) — Persisted reference in the named checked scope.
-186. reference.itemId (string) — Persisted itemId in the named checked scope.
-187. reference.representationId (string) — Persisted representationId in the named checked scope.
-188. reference.representationVersion (string) — Persisted representationVersion in the named checked scope.
-189. reference.selector (object|object|object|object|null) — Persisted selector in the named checked scope.
-190. reference.selector (variant 1) (variant 1).end (integer) — Persisted end in the named checked scope.
-191. reference.selector (variant 1) (variant 1).kind ("lines") — Persisted kind in the named checked scope.
-192. reference.selector (variant 1) (variant 1).start (integer) — Persisted start in the named checked scope.
-193. reference.selector (variant 1) (variant 2).end (integer) — Persisted end in the named checked scope.
-194. reference.selector (variant 1) (variant 2).kind ("rows") — Persisted kind in the named checked scope.
-195. reference.selector (variant 1) (variant 2).start (integer) — Persisted start in the named checked scope.
-196. reference.selector (variant 1) (variant 3).kind ("field") — Persisted kind in the named checked scope.
-197. reference.selector (variant 1) (variant 3).pointer (string) — Persisted pointer in the named checked scope.
-198. reference.selector (variant 1) (variant 4).height (number) — Persisted height in the named checked scope.
-199. reference.selector (variant 1) (variant 4).kind ("region") — Persisted kind in the named checked scope.
-200. reference.selector (variant 1) (variant 4).width (number) — Persisted width in the named checked scope.
-201. reference.selector (variant 1) (variant 4).x (number) — Persisted x in the named checked scope.
-202. reference.selector (variant 1) (variant 4).y (number) — Persisted y in the named checked scope.
-203. reference.sha256 (string) — Persisted sha256 in the named checked scope.
-204. reference.sourceId (string) — Persisted sourceId in the named checked scope.
-205. status ("available"|"unavailable") — Persisted status in the named checked scope.
-206. upstreamHref (string|null) — Safe original upstream URL where supplied; no local paths or credentials.
+173. item.template (string) — Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.
+174. producer (object|null) — Persisted producer in the named checked scope.
+175. producer.conversationId (string) — Exact bound conversation.
+176. producer.path ("/api/evidence/download") — Persisted path in the named checked scope.
+177. producer.sourceId (string) — Immutable accepted source identity.
+178. provenance (object|null) — Persisted provenance in the named checked scope.
+179. provenance.completeness (string|null) — Original source receipt completeness.
+180. provenance.conversion (string|null) — Original source receipt conversion.
+181. provenance.fetchedAt (string|null) — Original source receipt fetchedAt.
+182. provenance.locator (string|null) — Original source receipt locator.
+183. provenance.revision (string|null) — Original source receipt revision.
+184. provenance.sha256 (string|null) — Original source receipt sha256.
+185. provenance.source (string|null) — Original source receipt source.
+186. reference (object) — Persisted reference in the named checked scope.
+187. reference.itemId (string) — Persisted itemId in the named checked scope.
+188. reference.representationId (string) — Persisted representationId in the named checked scope.
+189. reference.representationVersion (string) — Persisted representationVersion in the named checked scope.
+190. reference.selector (object|object|object|object|null) — Persisted selector in the named checked scope.
+191. reference.selector (variant 1) (variant 1).end (integer) — Persisted end in the named checked scope.
+192. reference.selector (variant 1) (variant 1).kind ("lines") — Persisted kind in the named checked scope.
+193. reference.selector (variant 1) (variant 1).start (integer) — Persisted start in the named checked scope.
+194. reference.selector (variant 1) (variant 2).end (integer) — Persisted end in the named checked scope.
+195. reference.selector (variant 1) (variant 2).kind ("rows") — Persisted kind in the named checked scope.
+196. reference.selector (variant 1) (variant 2).start (integer) — Persisted start in the named checked scope.
+197. reference.selector (variant 1) (variant 3).kind ("field") — Persisted kind in the named checked scope.
+198. reference.selector (variant 1) (variant 3).pointer (string) — Persisted pointer in the named checked scope.
+199. reference.selector (variant 1) (variant 4).height (number) — Persisted height in the named checked scope.
+200. reference.selector (variant 1) (variant 4).kind ("region") — Persisted kind in the named checked scope.
+201. reference.selector (variant 1) (variant 4).width (number) — Persisted width in the named checked scope.
+202. reference.selector (variant 1) (variant 4).x (number) — Persisted x in the named checked scope.
+203. reference.selector (variant 1) (variant 4).y (number) — Persisted y in the named checked scope.
+204. reference.sha256 (string) — Persisted sha256 in the named checked scope.
+205. reference.sourceId (string) — Persisted sourceId in the named checked scope.
+206. status ("available"|"unavailable") — Persisted status in the named checked scope.
+207. upstreamHref (string|null) — Safe original upstream URL where supplied; no local paths or credentials.
 
 Refusals:
 1. EVIDENCE_TURN_REFUSED — resolver: agent — evidence turn refused.
@@ -376,33 +380,35 @@ Refusals:
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
 13. EVIDENCE_ORIGINAL_UNREGISTERED — resolver: agent — evidence original unregistered.
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
-14. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
+14. EVIDENCE_TEMPLATE_REFUSED — resolver: agent — evidence template refused.
+   fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
+15. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
    fix: Call a method and path from the API description.
-15. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
+16. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
    fix: Use one of the methods declared for this path.
-16. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
+17. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
    fix: Send a declared action literal, or omit action when the route has none.
-17. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
+18. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
    fix: Send body.action as one of the declared action literals.
-18. JSON_INVALID — resolver: agent — The request body is not valid JSON.
+19. JSON_INVALID — resolver: agent — The request body is not valid JSON.
    fix: Send a JSON object body with the declared fields.
-19. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
+20. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
    fix: Correct every named input fault and retry once.
-20. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
+21. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
    fix: Send the configured service token as Authorization Bearer, or a browser session cookie.
-21. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
+22. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
    fix: Use a configured token or session; do not guess identities in the body.
-22. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
+23. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
    fix: Use a grant that lists this scope, or call a route in the granted scopes.
-23. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
+24. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
    fix: Do not retry this write; read the record and reconcile before any further call.
-24. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
+25. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
    fix: Return only declared fields that satisfy the output schema.
-25. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
+26. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
    fix: Return exactly the declared output fields.
-26. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
+27. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
    fix: Retry only after an operator inspects the server; do not send secrets to diagnose.
-27. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
+28. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
    fix: Call the https origin that serves the API; do not use a redirecting base URL.
 
 Example:
@@ -450,20 +456,21 @@ Return fields:
 22. added[].selector (variant 1) (variant 4).x (number) — Persisted x in the named checked scope.
 23. added[].selector (variant 1) (variant 4).y (number) — Persisted y in the named checked scope.
 24. added[].sourceId (string) — Conversation-bound immutable byte custody identity.
-25. author (object) — Persisted author in the named checked scope.
-26. author.displayName (string) — Publisher display name.
-27. author.id (string) — Authenticated publisher.
-28. changeId (string) — Immutable change UUID.
-29. createdAt (string) — Server capture timestamp.
-30. messageId (string) — Public ordinary conversation anchor.
-31. note (string|null) — Public change explanation.
-32. releaseId (string) — Actual active Carbon release.
-33. removed (array<object>) — Persisted removed in the named checked scope.
-34. removed[].itemId (string) — Explicit removed immutable identity.
-35. removed[].reason (string) — Public removal reason.
-36. revision (integer) — Persisted feedback revision, previous revisions retained.
-37. turnId (string) — Actual native turn.
-38. duplicate (boolean) — Exact previously retained change identity/payload was reused.
+25. added[].template (string) — Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.
+26. author (object) — Persisted author in the named checked scope.
+27. author.displayName (string) — Publisher display name.
+28. author.id (string) — Authenticated publisher.
+29. changeId (string) — Immutable change UUID.
+30. createdAt (string) — Server capture timestamp.
+31. messageId (string) — Public ordinary conversation anchor.
+32. note (string|null) — Public change explanation.
+33. releaseId (string) — Actual active Carbon release.
+34. removed (array<object>) — Persisted removed in the named checked scope.
+35. removed[].itemId (string) — Explicit removed immutable identity.
+36. removed[].reason (string) — Public removal reason.
+37. revision (integer) — Persisted feedback revision, previous revisions retained.
+38. turnId (string) — Actual native turn.
+39. duplicate (boolean) — Exact previously retained change identity/payload was reused.
 
 Refusals:
 1. EVIDENCE_TURN_REFUSED — resolver: agent — evidence turn refused.
@@ -492,33 +499,35 @@ Refusals:
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
 13. EVIDENCE_ORIGINAL_UNREGISTERED — resolver: agent — evidence original unregistered.
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
-14. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
+14. EVIDENCE_TEMPLATE_REFUSED — resolver: agent — evidence template refused.
+   fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
+15. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
    fix: Call a method and path from the API description.
-15. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
+16. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
    fix: Use one of the methods declared for this path.
-16. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
+17. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
    fix: Send a declared action literal, or omit action when the route has none.
-17. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
+18. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
    fix: Send body.action as one of the declared action literals.
-18. JSON_INVALID — resolver: agent — The request body is not valid JSON.
+19. JSON_INVALID — resolver: agent — The request body is not valid JSON.
    fix: Send a JSON object body with the declared fields.
-19. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
+20. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
    fix: Correct every named input fault and retry once.
-20. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
+21. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
    fix: Send the configured service token as Authorization Bearer, or a browser session cookie.
-21. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
+22. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
    fix: Use a configured token or session; do not guess identities in the body.
-22. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
+23. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
    fix: Use a grant that lists this scope, or call a route in the granted scopes.
-23. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
+24. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
    fix: Do not retry this write; read the record and reconcile before any further call.
-24. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
+25. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
    fix: Return only declared fields that satisfy the output schema.
-25. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
+26. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
    fix: Return exactly the declared output fields.
-26. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
+27. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
    fix: Retry only after an operator inspects the server; do not send secrets to diagnose.
-27. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
+28. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
    fix: Call the https origin that serves the API; do not use a redirecting base URL.
 
 Example:
@@ -570,8 +579,9 @@ Return fields:
 26. items[].selector (variant 1) (variant 4).x (number) — Persisted x in the named checked scope.
 27. items[].selector (variant 1) (variant 4).y (number) — Persisted y in the named checked scope.
 28. items[].sourceId (string) — Conversation-bound immutable byte custody identity.
-29. revision (integer) — Persisted feedback revision, previous revisions retained.
-30. total (integer) — Persisted total in the named checked scope.
+29. items[].template (string) — Canvas template name. Opaque to Carbon except original, which Carbon sets for received originals.
+30. revision (integer) — Persisted feedback revision, previous revisions retained.
+31. total (integer) — Persisted total in the named checked scope.
 
 Refusals:
 1. EVIDENCE_TURN_REFUSED — resolver: agent — evidence turn refused.
@@ -600,33 +610,35 @@ Refusals:
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
 13. EVIDENCE_ORIGINAL_UNREGISTERED — resolver: agent — evidence original unregistered.
    fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
-14. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
+14. EVIDENCE_TEMPLATE_REFUSED — resolver: agent — evidence template refused.
+   fix: Read the exact current evidence and repair all named fields; only the executing turn may publish. Never replace original custody with reconstructed metadata.
+15. ROUTE_NOT_FOUND — resolver: agent — No declared route matches this method and path.
    fix: Call a method and path from the API description.
-15. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
+16. METHOD_NOT_ALLOWED — resolver: agent — The path exists but this HTTP method is not declared for it.
    fix: Use one of the methods declared for this path.
-16. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
+17. ACTION_UNKNOWN — resolver: agent — The request action is not declared for this method and path.
    fix: Send a declared action literal, or omit action when the route has none.
-17. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
+18. ACTION_MISSING — resolver: agent — This method and path declare named actions and the request did not name one.
    fix: Send body.action as one of the declared action literals.
-18. JSON_INVALID — resolver: agent — The request body is not valid JSON.
+19. JSON_INVALID — resolver: agent — The request body is not valid JSON.
    fix: Send a JSON object body with the declared fields.
-19. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
+20. INPUT_INVALID — resolver: agent — One or more declared input fields failed structural checks.
    fix: Correct every named input fault and retry once.
-20. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
+21. AUTH_MISSING — resolver: principal — The request did not present a usable credential.
    fix: Send the configured service token as Authorization Bearer, or a browser session cookie.
-21. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
+22. AUTH_INVALID — resolver: principal — The presented credential was not accepted.
    fix: Use a configured token or session; do not guess identities in the body.
-22. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
+23. AUTH_SCOPE_DENIED — resolver: principal — The authenticated principal lacks this route scope.
    fix: Use a grant that lists this scope, or call a route in the granted scopes.
-23. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
+24. WRITE_UNCERTAIN — resolver: operator — The write ran and readback did not confirm the persisted record.
    fix: Do not retry this write; read the record and reconcile before any further call.
-24. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
+25. OUTPUT_INVALID — resolver: operator — The handler result did not match the declared output schema.
    fix: Return only declared fields that satisfy the output schema.
-25. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
+26. OUTPUT_UNDECLARED — resolver: operator — The handler result included fields the output schema does not declare.
    fix: Return exactly the declared output fields.
-26. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
+27. INTERNAL_ERROR — resolver: operator — The handler failed without a named route fault.
    fix: Retry only after an operator inspects the server; do not send secrets to diagnose.
-27. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
+28. HTTP_REDIRECT — resolver: agent — The HTTP client refused to follow a redirect while holding a bearer token.
    fix: Call the https origin that serves the API; do not use a redirecting base URL.
 
 Example:
