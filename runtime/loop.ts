@@ -5,8 +5,8 @@ type IndexFields = { conversation_id?: unknown; message_id?: unknown; revision?:
 import type { Store, MessageRecord, Attachment } from '../stream/store.ts';
 import type { Fault } from '../stream/faults.ts';
 import { nativeFailureEvidence } from '../harness/codex/index.ts';
-import type { Declaration, Channel, Context, Log, Harness, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
-type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string; stopping?: () => boolean; prepareBrowserTurn?: BrowserPreparation; browserThreadOptions?: BrowserThreadOptions; browserEvidenceHooks?: {hooksFile:string;command:string} };
+import type { Declaration, Channel, Context, Log, Harness, TurnInput, CodexInput, Session, Status, TeachHandle, TurnOptions, RecordOrRecords, TurnResult, RenderRecord, RenderRecords } from './types.ts';
+type LoopOptions<S> = { declaration: Declaration; channel: Channel; store: Store; storeDir: string; adapter: object; harness: Harness<S, TurnInput>; session: S; agent: string; checkout: string; work?: string; teach?: TeachHandle | null; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate | null; afterTurn?: () => void; probe?: (url: string) => Promise<boolean>; recordsActionUrl?: string; stopping?: () => boolean; prepareBrowserTurn?: BrowserPreparation; browserThreadOptions?: BrowserThreadOptions; browserEvidenceHooks?: {hooksFile:string;command:string} };
 export type BrowserThreadOptions = (input: { conversationId: string; workspace: BrowserWorkspace }) => { permissions: string; config?: Record<string, unknown> };
 type BrowserActive = { conversationId: string; releaseId: string; threadId: string; turnId: string | null; ended: boolean; permissions?: string; workspace: BrowserWorkspace; updates: Map<string, { phase: unknown; text: string }> };
 type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw?: string; cursor?: { kind: 'message' | 'revision'; position: string } };
@@ -14,7 +14,7 @@ type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
 type TurnIdentity = { unitId: string; threadId: string; releaseId: string };
 type ReleaseTurnOptions = Omit<TurnIdentity, 'releaseId'> & { reissue: boolean; releaseId?: string | null };
-type TakeTurnOptions = TurnIdentity & { input: string | unknown[]; clientUserMessageId: string };
+type TakeTurnOptions = TurnIdentity & { input: TurnInput; clientUserMessageId: string };
 type EnsureReplyOptions = TurnIdentity & { records?: MessageRecord[]; result: TurnResult; completedAt: string };
 
 // The release loop: what turns records in the store into turns of the model, and
@@ -64,6 +64,7 @@ export { unitIdFor } from './unit.ts';
 // through this module, which already names what follows a turn.
 export { ProviderAccountRecorder } from './provider-account.ts';
 import { startTyping } from './typing.ts';
+import { programReleaseInput, applyProgramReply, programTeachCheck } from './program-release.ts';
 import { teachCheckConversation } from './reply-tool.ts';
 import {
   failuresBeforeHold, holdFault, pollFault, pollState,
@@ -521,6 +522,22 @@ export function endsTheProcess(error: unknown) {
   return (error.faults ?? []).some((f) => ENDS_THE_PROCESS.has(f.code));
 }
 
+// A program turn fault is parked like any other release fault. It is not a
+// harness death and it does not fall back to Codex.
+function parkableProgramFault(error: unknown) {
+  const named = error as { name?: string; fault?: { code?: string } };
+  if (named?.name === 'ProgramFault' && typeof named.fault?.code === 'string' && named.fault.code.startsWith('PROGRAM_')) {
+    return new RuntimeFault(named.fault as Fault);
+  }
+  return error;
+}
+
+function codexInputOnly(input: TurnInput, releaseId: string): CodexInput {
+  if (typeof input === 'string' || Array.isArray(input)) return input;
+  throw new RuntimeFault(fault('PROGRAM_INPUT_MISROUTED', releaseId,
+    'a program release envelope reached a browser channel turn', 'program harnesses are not browser harnesses'));
+}
+
 export class ReleaseLoop<S = Session> {
   declare prepareBrowserTurn: BrowserPreparation | undefined;
   declare declaration: Declaration;
@@ -528,7 +545,7 @@ export class ReleaseLoop<S = Session> {
   declare store: Store;
   declare storeDir: string;
   declare adapter: object;
-  declare harness: Harness<S>;
+  declare harness: Harness<S, TurnInput>;
   declare session: S;
   declare agent: string;
   declare checkout: string;
@@ -1172,13 +1189,18 @@ export class ReleaseLoop<S = Session> {
       try {
         outcome = await this.releaseOne(group.records, group);
       } catch (error) {
-        if (endsTheProcess(error)) throw error;
+        const routed = parkableProgramFault(error);
+        if (endsTheProcess(routed)) throw routed;
         // endsTheProcess returned false only for RuntimeFault.
-        const faults = (error as RuntimeFault<unknown, unknown>).faults;
+        const faults = (routed as RuntimeFault<unknown, unknown>).faults;
         // This assumes each earlier record still exists; a missing reread passes null to parkFailed, which throws TypeError deriving its path.
         // Runtime fault fields are passed to Store unchanged, including raw problem text.
         for (const record of group.records) {
           this.store.parkFailed(this.store.read(record.conversation_id, record.message_id, record.revision)!, faults as Fault[]);
+          const closed = this.store.read(record.conversation_id, record.message_id, record.revision);
+          if (closed?.release && faults.some((item) => String(item.code).startsWith('PROGRAM_'))) {
+            this.store.completeRelease(closed, new Date(this.now()).toISOString());
+          }
           parked.push(record.message_id);
         }
         this.log({ event: 'release.parked', message_ids: group.records.map((r) => r.message_id), faults });
@@ -1233,7 +1255,9 @@ export class ReleaseLoop<S = Session> {
     releaseId ??= releaseIdFor(records);
     const messageIds = records.map((r) => r.message_id);
 
-    const input = turnInput(this.channel.kind === 'browser' && record.adapter_fields?.input_kind ? records.map((one) => ({ ...one, attachments: [] })) : records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration });
+    const input = this.declaration.harness?.kind === 'program'
+      ? programReleaseInput(records, { releaseId, threadId, store: this.store, checkout: this.checkout, work: this.work })
+      : turnInput(this.channel.kind === 'browser' && record.adapter_fields?.input_kind ? records.map((one) => ({ ...one, attachments: [] })) : records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration });
     // Written before the turn, always. A restart reads this and knows the model
     // was asked; the record's own turn_id is the release id, because that is the
     // only identifier that exists before turn/start and it is the one the reply
@@ -1365,7 +1389,7 @@ export class ReleaseLoop<S = Session> {
         permissions: this.browserPermissions.get(unitId)?.permissions, updates: new Map() };
       this.publishBrowserActivity(this.browserActive, 'accepted');
       const records = this.store.recordsIn(unitId).filter((record) => record.direction === 'inbound' && record.release?.turn_id === releaseId);
-      try { input = await this.prepareBrowserInput(records, releaseId, unitId, input); } catch (error) {
+      try { input = await this.prepareBrowserInput(records, releaseId, unitId, codexInputOnly(input, releaseId)); } catch (error) {
         if (this.browserActive) this.publishBrowserActivity(this.browserActive, 'failed', nativeFailureEvidence(error));
         this.browserActive = null;
         for (const record of records) { this.store.annotate(record, { model_effect: 'not_started' }); this.store.completeRelease(record, new Date(this.now()).toISOString()); }
@@ -1418,7 +1442,12 @@ export class ReleaseLoop<S = Session> {
         error: result.error ?? null,
         agent_message: typeof result.agent_message === 'string'
           ? result.agent_message.slice(0, AGENT_MESSAGE_KEPT)
-          : null
+          : null,
+        ...(result.program ? { program: {
+          disposition: result.program.disposition,
+          observations: result.program.observations,
+          timings: result.program.timings
+        } } : {})
       }]
     });
     try {
@@ -1532,6 +1561,9 @@ export class ReleaseLoop<S = Session> {
   // The one follow-up, and the three ways it can end.
   async ensureReply(record: MessageRecord, { records = [record], unitId, threadId, releaseId, result, completedAt }: EnsureReplyOptions) {
     if (this.hasOutbound(record, releaseId)) return { outcome: 'replied' };
+    if (this.declaration.harness?.kind === 'program') {
+      return applyProgramReply(this, record, records, releaseId, result);
+    }
 
     this.log({
       event: 'reply.absent', message_id: record.message_id, release_id: releaseId,
@@ -1606,6 +1638,7 @@ export class ReleaseLoop<S = Session> {
       this.store.releaseHeldReply(releaseId);
       return { outcome: 'released' };
     }
+    if (this.declaration.harness?.kind === 'program') return programTeachCheck(this, record, releaseId);
 
     this.log({ event: 'teach_check.nothing_recorded', message_id: record.message_id, release_id: releaseId });
 

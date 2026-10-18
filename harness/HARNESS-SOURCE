@@ -7,6 +7,7 @@ copied on           2026-10-07 (exact vendored route dependency shape contract; 
 Copied verbatim, as whole files, with no edit of any kind:
 
   harness/codex/**        minus verifications/
+  harness/program/**      the program harness (PA-241)
   lib/faults.ts          the fault shape harness/codex/ imports
   tools/lib/mcp.ts       the MCP server scaffold the reply tool is served by
   tools/lib/fault.ts     what mcp.ts imports
@@ -33,3 +34,9 @@ this repository's identifier scan refuses.
 How to change one of these files. Change it in the private repository, land it
 there, copy the file here again, and update the source commit above. An edit
 made here is drift and the authority's test fails on it.
+
+Publisher follow-up (PA-241, not done in this change): the source commit above still
+names the older core commit. Once the core change carrying harness/program/ and the
+tools/shape-check.ts 0.1.2 reconciliation is merged, set it to that merged core commit,
+and cut the runtime release that program declarations require (0.9.7); package.json
+stays at its released version until then.

@@ -530,7 +530,7 @@ export const VENDORED = [
   'tools/shape-check.ts',
   'schema/carbon.message.v1.json'
 ];
-const VENDORED_TREES = ['harness/codex/'];
+const VENDORED_TREES = ['harness/codex/', 'harness/program/'];
 export const isVendored = (rel: string): boolean => VENDORED.includes(rel) || VENDORED_TREES.some((p) => rel.startsWith(p));
 
 // ---- the model -------------------------------------------------------------

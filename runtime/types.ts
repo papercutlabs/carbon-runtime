@@ -43,7 +43,7 @@ export type Declaration = {
   channels?: Channel[];
   secrets?: { name: string; path: string; purpose?: string }[];
   provider?: { name?: string; auth?: string; api_key_ref?: string; api_key_via?: string };
-  harness?: { kind?: string; version?: unknown };
+  harness?: { kind?: string; version?: unknown; entrypoint?: unknown; secret_refs?: unknown };
   model?: string;
   effort?: string;
   sandbox?: { mode?: string; network?: boolean };
@@ -62,27 +62,43 @@ export type Status = { name: string; runtimeStatus?: string | null };
 export type ThreadOpening = {
   cwd: string; model?: string; effort?: string; sandbox?: string; unitId: string; permissions?: string; config?: Record<string, unknown>;
 };
-export type TurnParams = {
-  threadId: string; input: string | unknown[]; text?: string; effort?: string; model?: string;
+export type CodexInput = string | unknown[];
+export type ProgramReply = { conversation_id?: string; request_id?: string; text?: string; attachments?: string[]; about_job?: string; about_move?: string };
+export type ProgramResult = { disposition?: string; replies?: ProgramReply[]; observations?: unknown; timings?: unknown };
+export type ProgramReleaseInput = {
+  schema: 'carbon.program-release.v1'; release_id: string; conversation_id: string; thread_id: string;
+  client_user_message_id: string; checkout: string; work: string;
+  messages: {
+    message_id: string; source_message_id: string; revision: number; caption: string;
+    sender_id: string; sender_name: string | null; received_at: string;
+    attachments: { filename: string | null; mime: string | null; bytes: number | null; sha256: string | null; path: string | null; download_failed: boolean }[];
+  }[];
+};
+export type TurnInput = CodexInput | ProgramReleaseInput;
+export type TurnParams<I = CodexInput> = {
+  threadId: string; input: I; text?: string; effort?: string; model?: string;
   sandboxPolicy?: unknown; permissions?: string; clientUserMessageId: string; timeoutMs?: number; onStarted?: (evidence: { threadId: string; turnId: string }) => void;
 };
 export type TurnResult = {
   thread_id?: unknown; turn_id?: unknown; status?: unknown;
   completed_at?: unknown; agent_message?: unknown; token_usage?: unknown;
   error?: unknown; items?: unknown;
+  program?: ProgramResult;
 };
 export type ChildExit = { code: number | null; signal: string | null };
 export type Session = { stop?(): Promise<unknown>; exit: Promise<ChildExit> };
-export type Harness<S = Session> = {
+export type Harness<S = Session, I = CodexInput> = {
   listHooks?(session:S,options:{cwds:string[]}):Promise<unknown>;
   connect(options: {
     binary: string; codexHome: string; providerKeyPath?: string;
-    providerKeyEnvName?: string; experimentalApi?: boolean; onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;
+    providerKeyEnvName?: string; experimentalApi?: boolean; checkout?: string; work?: string; declaration?: Declaration;
+    sandboxDeny?: { file: string; root: string }; storeDir?: string;
+    onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;
     onStderr(): void;
   }): Promise<S>;
   openThread(session: S, options: ThreadOpening): Promise<{ thread_id: string; [key: string]: unknown }>;
   resumeThread(session: S, options: ThreadOpening & { threadId: string }): Promise<unknown>;
-  turn(session: S, options: TurnParams): Promise<TurnResult>;
+  turn(session: S, options: TurnParams<I>): Promise<TurnResult>;
   steer?(session: S, options: { threadId: string; expectedTurnId: string; input: unknown; clientUserMessageId: string }): Promise<unknown>;
   classifySteerFailure?(error: unknown, context: { threadId: string; expectedTurnId: string; threadRead?: unknown; events?: unknown[] }): { delivery: 'definitely_not_delivered' | 'uncertain'; [key: string]: unknown };
   readThread?(session: S, options: { threadId: string; includeTurns: boolean }): Promise<unknown>;
