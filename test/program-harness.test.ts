@@ -47,9 +47,16 @@ process.stdin.on('end', () => {
   if (caption === 'usekey') { say('keylen:' + (KEY ? KEY.length : 'none') + ' env:' + Object.keys(process.env).sort().join(',')); return; }
   if (caption === 'leakkey') { process.stderr.write('trace token=' + KEY + ' end'); process.exit(3); }
   if (caption === 'echokey') { say('here is ' + KEY); return; }
+  if (caption === 'pidprobe') {
+    const ppid = process.argv[2];
+    let sees = false;
+    try { sees = fs.readdirSync('/proc').includes(ppid) && fs.readFileSync('/proc/' + ppid + '/cmdline', 'utf8').length > 0; } catch {}
+    say('parent_visible=' + sees + ' self=' + process.pid); return;
+  }
   if (caption === 'spawnsleep' || caption === 'spawnhuge') {
-    const kid = child_process.spawn('sleep', ['47'], { stdio: 'ignore' });
-    fs.writeFileSync(new URL('./kid.pid', import.meta.url), String(kid.pid));
+    const mark = '47.' + Math.floor(Math.random() * 1e9);
+    child_process.spawn('sleep', [mark], { stdio: 'ignore' });
+    fs.writeFileSync(new URL('./kid.pid', import.meta.url), mark);
     if (caption === 'spawnhuge') { process.stdout.write('x'.repeat(${1024 * 1024 + 8})); }
     setTimeout(() => {}, 30000); return;
   }
@@ -353,11 +360,15 @@ function outboundText(loop: ReleaseLoop) {
   return String((storeOutbound(loop)[0] as unknown as { body?: string }).body ?? '');
 }
 
-function alive(pid: number) {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+// The child's pid namespace hides its pids from here, so a leftover is found by its unique argument.
+function alive(mark: string) {
+  return fs.readdirSync('/proc').some((one) => {
+    if (!/^\d+$/.test(one)) return false;
+    try { return fs.readFileSync(`/proc/${one}/cmdline`, 'utf8').split('\0').includes(mark); } catch { return false; }
+  });
 }
 
-async function gone(pid: number) {
+async function gone(pid: string) {
   for (let i = 0; i < 40; i += 1) {
     if (!alive(pid)) return true;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -483,16 +494,75 @@ test('a timeout, an overflow and stop kill the handler process group', async () 
     const { loop, session, checkout } = await started(overrides);
     await loop.pass([item('1', caption)]);
     assert.equal(firstParkCode(loop.store.rebuild().find((r) => r.direction === 'inbound')), code);
-    const pid = Number(fs.readFileSync(path.join(checkout, 'kid.pid'), 'utf8'));
+    const pid = fs.readFileSync(path.join(checkout, 'kid.pid'), 'utf8');
     assert.equal(await gone(pid), true, `${caption} child ${pid} survived`);
     await session.stop();
   }
   const { loop, session, checkout } = await started();
   const pass = loop.pass([item('1', 'spawnsleep')]);
   for (let i = 0; i < 100 && !fs.existsSync(path.join(checkout, 'kid.pid')); i += 1) await new Promise((r) => setTimeout(r, 50));
-  const pid = Number(fs.readFileSync(path.join(checkout, 'kid.pid'), 'utf8'));
+  const pid = fs.readFileSync(path.join(checkout, 'kid.pid'), 'utf8');
   assert.equal(alive(pid), true);
   await session.stop();
   assert.equal(await gone(pid), true);
   await pass.catch(() => {});
+});
+
+test('the child runs in its own pid namespace and cannot see the parent pid', async () => {
+  const { loop, session } = await started({ harness: { kind: 'program', version: '1', entrypoint: 'handler.mjs' } });
+  const spawned = program.sandboxedSpawn(session.sandbox, 'node', [], {});
+  const at = spawned.args.indexOf('--unshare-pid');
+  assert.ok(at >= 0);
+  assert.ok(spawned.args.indexOf('--proc') > spawned.args.indexOf('--dev-bind'), '--proc mounts after the root bind');
+  const result = await loop.pass([item('1', 'pidprobe')]);
+  assert.equal(result.parked.length, 0);
+  const text = outboundText(loop);
+  assert.match(text, /self=\d+/);
+  assert.equal(Number(text.match(/self=(\d+)/)![1]) < 50, true, 'pid is small inside a fresh namespace: ' + text);
+  assert.match(text, /parent_visible=false/);
+  await session.stop();
+});
+
+for (const [label, patch] of [
+  ['telegram bot_token_ref', (d: any) => { d.channels = [{ ...d.channels[0], transport: { bot_token_ref: 'other_secret' } }]; }],
+  ['netrc_ref', (d: any) => { d.channels = [{ ...d.channels[0], transport: { netrc_ref: 'other_secret' } }]; }],
+  ['provider api_key_ref', (d: any) => { d.provider = { name: 'openai', auth: 'api_key', api_key_ref: 'other_secret' }; }],
+  ['backup restic password', (d: any) => { d.secrets[0].path = '/x/secrets/restic-password'; }],
+  ['backup r2 box', (d: any) => { d.secrets[0].path = '/x/secrets/r2-backup-box.json'; }]
+] as [string, (d: any) => void][]) {
+  test(`loadSecrets refuses a secret_ref also used by ${label} before reading the key file`, async () => {
+    const { loop, session, decl, dir } = await started({
+      secrets: [{ name: 'other_secret', path: '' }],
+      harness: { kind: 'program', version: '1', entrypoint: 'handler.mjs', secret_refs: ['other_secret'] }
+    });
+    patch(decl);
+    const reads: string[] = [];
+    const original = fs.readFileSync;
+    (fs as any).readFileSync = (file: any, ...rest: any[]) => { if (String(file).startsWith(dir + '/secrets/')) reads.push(String(file)); return (original as any)(file, ...rest); };
+    try {
+      const result = await loop.pass([item('1', 'usekey')]);
+      assert.equal(result.parked.length, 1);
+    } finally { (fs as any).readFileSync = original; }
+    assert.equal(firstParkCode(loop.store.rebuild().find((r) => r.direction === 'inbound')), 'PROGRAM_SECRET_CHANNEL_REFUSED');
+    assert.deepEqual(reads, []);
+    assert.equal(session.lastSpawn, null);
+    await session.stop();
+  });
+}
+
+test('a secret path outside <agentDir>/secrets/ is refused before any read', async () => {
+  for (const suffix of ['../codex-home/x', '../secrets-evil/x']) {
+    const { loop, session, decl, dir } = await started({
+      secrets: [{ name: 'other_secret', path: '' }],
+      harness: { kind: 'program', version: '1', entrypoint: 'handler.mjs', secret_refs: ['other_secret'] }
+    });
+    const outside = path.join(dir, 'secrets', suffix);
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, `${KEY}\n`);
+    decl.secrets![0].path = outside;
+    await loop.pass([item('1', 'usekey')]);
+    assert.equal(firstParkCode(loop.store.rebuild().find((r) => r.direction === 'inbound')), 'PROGRAM_SECRET_REFUSED', suffix);
+    assert.equal(session.lastSpawn, null);
+    await session.stop();
+  }
 });

@@ -224,14 +224,15 @@ type ProgramSession = {
 type ProgramDeclaration = {
   harness?: { entrypoint?: unknown; secret_refs?: unknown };
   secrets?: { name?: string; path?: string }[];
+  channels?: { transport?: { netrc_ref?: unknown; bot_token_ref?: unknown } }[];
   limits?: { max_turn_ms?: unknown };
   teaching?: { enabled?: unknown };
   records?: { enabled?: unknown };
   tool_servers?: { name?: string; kind?: string; required?: boolean }[];
-  provider?: { api_key_via?: string };
+  provider?: { api_key_via?: string; api_key_ref?: unknown };
 };
 
-type Sandbox = { launcher: string[]; storeRoots: string[]; protectedRoots: string[] };
+type Sandbox = { launcher: string[]; storeRoots: string[]; protectedRoots: string[]; secretsDir: string };
 type SandboxGate = { file: string; root: string };
 const SECRET_REF_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 export const SECRET_ENV_PREFIX = 'CARBON_SECRET_';
@@ -283,12 +284,12 @@ export function buildSandbox(options: { gate?: SandboxGate; storeDir?: string; w
   }
   const launcher = launcherArgv();
   try {
-    execFileSync(launcher[0], [...launcher.slice(1), '--die-with-parent', '--dev-bind', '/', '/', '/bin/true'],
+    execFileSync(launcher[0], [...launcher.slice(1), '--die-with-parent', '--unshare-pid', '--dev-bind', '/', '/', '--proc', '/proc', '/bin/true'],
       { stdio: 'ignore', timeout: 30000 });
   } catch {
     sandboxRefused('bwrap', 'bwrap is absent or the sandbox does not start on this box');
   }
-  return { launcher, storeRoots, protectedRoots };
+  return { launcher, storeRoots, protectedRoots, secretsDir: path.join(root, 'secrets') };
 }
 
 function existingMasks(sandbox: Sandbox) {
@@ -324,38 +325,71 @@ export function sandboxedSpawn(sandbox: Sandbox, command: string, args: string[]
   const masks = existingMasks(sandbox);
   return {
     command: sandbox.launcher[0],
-    args: [...sandbox.launcher.slice(1), '--die-with-parent', '--dev-bind', '/', '/',
+    args: [...sandbox.launcher.slice(1), '--die-with-parent', '--unshare-pid', '--dev-bind', '/', '/', '--proc', '/proc',
       ...maskArgs(masks), ...attachmentArgs(sandbox, masks, envelope), command, ...args]
   };
 }
 
 // Read here, as the agent user, at turn time. The values go to the child's
 // environment only; they are never in argv, the envelope, a log or a fault.
-function loadSecrets(declaration: ProgramDeclaration) {
+const BACKUP_SECRET_FILE_NAMES = ['r2-backup-box.json', 'restic-password'];
+
+// Secrets another consumer holds are never handed to a network-enabled child.
+function otherConsumerSecretNames(declaration: ProgramDeclaration) {
+  const names = new Set<unknown>();
+  for (const channel of declaration.channels ?? []) {
+    names.add(channel?.transport?.netrc_ref);
+    names.add(channel?.transport?.bot_token_ref);
+  }
+  names.add(declaration.provider?.api_key_ref);
+  for (const secret of declaration.secrets ?? []) {
+    if (typeof secret.path === 'string' && BACKUP_SECRET_FILE_NAMES.includes(path.basename(secret.path))) names.add(secret.name);
+  }
+  names.delete(undefined);
+  return names;
+}
+
+function readSecretFile(file: string, ref: string) {
+  let value: string;
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) throw new Error('symlink');
+    value = fs.readFileSync(file, 'utf8').replace(/\r?\n$/, '');
+  } catch {
+    refused('PROGRAM_SECRET_UNREADABLE', `harness.secret_refs.${ref}`,
+      'the secret file cannot be read by the agent user as a regular file',
+      'place the secret with carbon-apply secret place; program secrets are agent-owned');
+  }
+  if (value.length === 0) {
+    refused('PROGRAM_SECRET_UNREADABLE', `harness.secret_refs.${ref}`, 'the secret file is empty', 'place the secret');
+  }
+  return value;
+}
+
+function loadSecrets(declaration: ProgramDeclaration, secretsDir: string) {
   const refs = declaration.harness?.secret_refs;
   const env: Record<string, string> = {};
   const values: string[] = [];
   if (refs === undefined) return { env, values };
   if (!Array.isArray(refs)) refused('PROGRAM_SECRET_REFUSED', 'harness.secret_refs', 'secret_refs is a list of declared secret names', 'list secret names');
+  const held = otherConsumerSecretNames(declaration);
   for (const ref of refs) {
+    if (held.has(ref)) {
+      refused('PROGRAM_SECRET_CHANNEL_REFUSED', `harness.secret_refs.${String(ref)}`,
+        'a channel transport, provider or backup secret is never delivered to the program child, which has network access',
+        'give the program its own secret');
+    }
     const secret = (declaration.secrets ?? []).find((one) => one.name === ref);
     if (typeof ref !== 'string' || !SECRET_REF_PATTERN.test(ref) || !secret || typeof secret.path !== 'string' || !path.isAbsolute(secret.path)) {
       refused('PROGRAM_SECRET_REFUSED', `harness.secret_refs.${String(ref)}`,
         'a program secret ref is a lowercase name of a secret the declaration lists with an absolute path',
         'declare the secret under secrets and name it in harness.secret_refs');
     }
-    let value: string;
-    try {
-      if (fs.lstatSync(secret.path).isSymbolicLink()) throw new Error('symlink');
-      value = fs.readFileSync(secret.path, 'utf8').replace(/\r?\n$/, '');
-    } catch {
-      refused('PROGRAM_SECRET_UNREADABLE', `harness.secret_refs.${ref}`,
-        'the secret file cannot be read by the agent user as a regular file',
-        'place the secret with carbon-apply secret place; program secrets are agent-owned');
+    if (!contained(secretsDir, path.resolve(secret.path)) || path.resolve(secret.path) === secretsDir) {
+      refused('PROGRAM_SECRET_REFUSED', `harness.secret_refs.${ref}`,
+        'a program secret lives inside the agent secrets directory',
+        'declare the secret at <agentDir>/secrets/<file>');
     }
-    if (value.length === 0) {
-      refused('PROGRAM_SECRET_UNREADABLE', `harness.secret_refs.${ref}`, 'the secret file is empty', 'place the secret');
-    }
+    const value = readSecretFile(secret.path, ref);
     env[secretEnvName(ref)] = value;
     values.push(value);
   }
@@ -387,7 +421,7 @@ function assertTimeout(timeoutMs: unknown, subject: string) {
 
 function runHandler(session: ProgramSession, envelope: unknown, timeoutMs: number) {
   assertTimeout(timeoutMs, 'turn.timeoutMs');
-  const secrets = loadSecrets(session.declaration);
+  const secrets = loadSecrets(session.declaration, session.sandbox.secretsDir);
   const spawned = sandboxedSpawn(session.sandbox, process.execPath, [session.entrypoint], envelope);
   session.lastSpawn = { command: spawned.command, args: [...spawned.args] };
   const clean = (text: string) => redactSecrets(text, secrets.values);
