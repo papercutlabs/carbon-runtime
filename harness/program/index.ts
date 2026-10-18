@@ -1,10 +1,13 @@
 // A program harness runs one pinned entrypoint inside the installed checkout.
 // Node is the process. There is no Codex binary and no fallback to one.
 // The child receives one carbon.program-release.v1 document on stdin and
-// writes one carbon.program-result.v1 document on stdout. Credentials are not
-// loaded here; the child inherits only PATH, HOME, LANG and TMPDIR.
+// writes one carbon.program-result.v1 document on stdout. The child inherits only
+// PATH, HOME, LANG and TMPDIR, plus one CARBON_SECRET_<NAME> variable per ref in
+// harness.secret_refs. This process reads those files, as the agent user, and the
+// child never can: it runs inside bwrap with the HC-14 deny paths (and the store,
+// except the release's own attachment files) hidden. There is no unsandboxed run.
 
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fault } from '../../lib/faults.ts';
@@ -13,6 +16,7 @@ export const HARNESS_KIND = 'program';
 export const PROGRAM_ENTRYPOINT_PATTERN = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.(?:mjs|ts)$/;
 export const OUTPUT_CAP = 1024 * 1024;
 const STDERR_TAIL = 500;
+const STDERR_WINDOW = 8192;
 const INHERITED = ['PATH', 'HOME', 'LANG', 'TMPDIR'];
 const DISPOSITIONS = new Set(['reply', 'no_reply', 'missing_case']);
 
@@ -96,12 +100,12 @@ export function resolveEntrypoint(checkout: unknown, entrypoint: unknown) {
   return at;
 }
 
-function childEnv() {
+function childEnv(secrets: Record<string, string>) {
   const env: NodeJS.ProcessEnv = {};
   for (const name of INHERITED) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
-  return env;
+  return { ...env, ...secrets };
 }
 
 function invalid(subject: string, problem: string): never {
@@ -113,6 +117,22 @@ function underWork(work: string, given: string) {
   const root = path.resolve(work);
   const resolved = path.resolve(given);
   return contained(root, resolved);
+}
+
+function validateAttachments(value: unknown, work: string) {
+  if (!Array.isArray(value) || value.length > 100) invalid('replies[0].attachments', 'attachments is a list of at most 100 absolute work paths');
+  for (const given of value) {
+    if (typeof given !== 'string' || !path.isAbsolute(given) || !underWork(work, given)) {
+      invalid('replies[0].attachments', 'each attachment is an absolute path inside the work directory');
+    }
+  }
+  return value as string[];
+}
+
+function optionalString(item: Record<string, unknown>, key: 'about_job' | 'about_move') {
+  const value = item[key];
+  if (value !== undefined && typeof value !== 'string') invalid(`replies[0].${key}`, `${key} is a string when the handler sends one`);
+  return value as string | undefined;
 }
 
 function validateReply(reply: unknown, envelope: { conversation_id?: unknown; release_id?: unknown }, work: string): ProgramReply {
@@ -132,23 +152,11 @@ function validateReply(reply: unknown, envelope: { conversation_id?: unknown; re
     request_id: item.request_id as string,
     text: item.text
   };
-  if (item.attachments !== undefined) {
-    if (!Array.isArray(item.attachments) || item.attachments.length > 100) invalid('replies[0].attachments', 'attachments is a list of at most 100 absolute work paths');
-    for (const given of item.attachments) {
-      if (typeof given !== 'string' || !path.isAbsolute(given) || !underWork(work, given)) {
-        invalid('replies[0].attachments', 'each attachment is an absolute path inside the work directory');
-      }
-    }
-    ready.attachments = item.attachments as string[];
-  }
-  if (item.about_job !== undefined) {
-    if (typeof item.about_job !== 'string') invalid('replies[0].about_job', 'about_job is a string when the handler sends one');
-    ready.about_job = item.about_job;
-  }
-  if (item.about_move !== undefined) {
-    if (typeof item.about_move !== 'string') invalid('replies[0].about_move', 'about_move is a string when the handler sends one');
-    ready.about_move = item.about_move;
-  }
+  if (item.attachments !== undefined) ready.attachments = validateAttachments(item.attachments, work);
+  const aboutJob = optionalString(item, 'about_job');
+  if (aboutJob !== undefined) ready.about_job = aboutJob;
+  const aboutMove = optionalString(item, 'about_move');
+  if (aboutMove !== undefined) ready.about_move = aboutMove;
   return ready;
 }
 
@@ -206,19 +214,168 @@ type ProgramSession = {
   work: string;
   timeoutMs: number;
   declaration: ProgramDeclaration;
+  sandbox: Sandbox;
+  active: Set<ChildProcess>;
   lastSpawn: { command: string; args: string[] } | null;
   stop(): Promise<unknown>;
   exit: Promise<{ code: number | null; signal: string | null }>;
 };
 
 type ProgramDeclaration = {
-  harness?: { entrypoint?: unknown };
+  harness?: { entrypoint?: unknown; secret_refs?: unknown };
+  secrets?: { name?: string; path?: string }[];
   limits?: { max_turn_ms?: unknown };
   teaching?: { enabled?: unknown };
   records?: { enabled?: unknown };
   tool_servers?: { name?: string; kind?: string; required?: boolean }[];
   provider?: { api_key_via?: string };
 };
+
+type Sandbox = { launcher: string[]; storeRoots: string[]; protectedRoots: string[] };
+type SandboxGate = { file: string; root: string };
+const SECRET_REF_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+export const SECRET_ENV_PREFIX = 'CARBON_SECRET_';
+
+export function secretEnvName(ref: string) {
+  return `${SECRET_ENV_PREFIX}${ref.toUpperCase()}`;
+}
+
+function sandboxRefused(subject: string, problem: string): never {
+  refused('PROGRAM_SANDBOX_UNAVAILABLE', subject, problem,
+    'a program turn runs only inside bwrap with the HC-14 deny paths; fix the box (bootstrap.sh) and restart, there is no unsandboxed run');
+}
+
+function denyPaths(gate: SandboxGate) {
+  let body: string;
+  try {
+    body = fs.readFileSync(gate.file, 'utf8');
+  } catch {
+    return sandboxRefused(gate.file, 'the HC-14 deny file cannot be read, so the program child has no deny list to run under');
+  }
+  const listed = body.match(/^deny_read = \[(.*)\]$/m)?.[1];
+  if (listed === undefined) sandboxRefused(gate.file, 'the HC-14 deny file has no deny_read list');
+  const paths = [...listed.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  if (paths.length === 0 || paths.some((one) => !path.isAbsolute(one))) {
+    sandboxRefused(gate.file, 'the HC-14 deny file deny_read is empty or names a relative path');
+  }
+  return paths;
+}
+
+function launcherArgv() {
+  let setpriv = true;
+  try { execFileSync('sh', ['-c', 'command -v setpriv'], { stdio: 'ignore' }); } catch { setpriv = false; }
+  return setpriv ? ['setpriv', '--no-new-privs', 'bwrap'] : ['bwrap'];
+}
+
+// The sandbox this harness refuses to run without. The probe is the shape the
+// child runs in, so a box where bwrap answers --version and cannot start fails here.
+export function buildSandbox(options: { gate?: SandboxGate; storeDir?: string; work: string; checkout: string }): Sandbox {
+  if (!options.gate) sandboxRefused('sandboxDeny', 'no HC-14 deny gate was passed to the program harness');
+  const root = path.resolve(options.gate.root);
+  const storeRoots = [path.resolve(options.storeDir ?? path.join(root, 'store')), path.join(root, 'store')];
+  const protectedRoots = [...new Set([
+    ...denyPaths(options.gate), path.join(root, 'codex-home'), path.join(root, 'secrets'), ...storeRoots
+  ].map((one) => path.resolve(one)))];
+  for (const own of [options.work, options.checkout].map((one) => path.resolve(one))) {
+    if (protectedRoots.some((one) => contained(one, own))) {
+      sandboxRefused(own, 'the work directory or checkout is inside a path the deny list hides, so the child could not run');
+    }
+  }
+  const launcher = launcherArgv();
+  try {
+    execFileSync(launcher[0], [...launcher.slice(1), '--die-with-parent', '--dev-bind', '/', '/', '/bin/true'],
+      { stdio: 'ignore', timeout: 30000 });
+  } catch {
+    sandboxRefused('bwrap', 'bwrap is absent or the sandbox does not start on this box');
+  }
+  return { launcher, storeRoots, protectedRoots };
+}
+
+function existingMasks(sandbox: Sandbox) {
+  return sandbox.protectedRoots.filter((one) => fs.existsSync(one));
+}
+
+function maskArgs(masks: string[]) {
+  return masks.flatMap((mask) => (fs.statSync(mask).isDirectory() ? ['--tmpfs', mask] : ['--ro-bind', '/dev/null', mask]));
+}
+
+// Only the release's own attachment files come back through the hidden store.
+function attachmentArgs(sandbox: Sandbox, masks: string[], envelope: unknown) {
+  const messages = (envelope as { messages?: { attachments?: { path?: unknown }[] }[] })?.messages ?? [];
+  const args: string[] = [];
+  const seen = new Set<string>();
+  for (const attachment of messages.flatMap((message) => message.attachments ?? [])) {
+    const given = attachment.path;
+    if (typeof given !== 'string' || !path.isAbsolute(given) || seen.has(given)) continue;
+    seen.add(given);
+    let real: string;
+    try {
+      real = fs.realpathSync(given);
+      if (!fs.statSync(real).isFile()) continue;
+    } catch { continue; }
+    if (real !== path.resolve(given) || !sandbox.storeRoots.some((one) => contained(one, real))) continue;
+    if (!masks.some((mask) => contained(mask, real))) continue;
+    args.push('--ro-bind', real, real);
+  }
+  return args;
+}
+
+export function sandboxedSpawn(sandbox: Sandbox, command: string, args: string[], envelope: unknown) {
+  const masks = existingMasks(sandbox);
+  return {
+    command: sandbox.launcher[0],
+    args: [...sandbox.launcher.slice(1), '--die-with-parent', '--dev-bind', '/', '/',
+      ...maskArgs(masks), ...attachmentArgs(sandbox, masks, envelope), command, ...args]
+  };
+}
+
+// Read here, as the agent user, at turn time. The values go to the child's
+// environment only; they are never in argv, the envelope, a log or a fault.
+function loadSecrets(declaration: ProgramDeclaration) {
+  const refs = declaration.harness?.secret_refs;
+  const env: Record<string, string> = {};
+  const values: string[] = [];
+  if (refs === undefined) return { env, values };
+  if (!Array.isArray(refs)) refused('PROGRAM_SECRET_REFUSED', 'harness.secret_refs', 'secret_refs is a list of declared secret names', 'list secret names');
+  for (const ref of refs) {
+    const secret = (declaration.secrets ?? []).find((one) => one.name === ref);
+    if (typeof ref !== 'string' || !SECRET_REF_PATTERN.test(ref) || !secret || typeof secret.path !== 'string' || !path.isAbsolute(secret.path)) {
+      refused('PROGRAM_SECRET_REFUSED', `harness.secret_refs.${String(ref)}`,
+        'a program secret ref is a lowercase name of a secret the declaration lists with an absolute path',
+        'declare the secret under secrets and name it in harness.secret_refs');
+    }
+    let value: string;
+    try {
+      if (fs.lstatSync(secret.path).isSymbolicLink()) throw new Error('symlink');
+      value = fs.readFileSync(secret.path, 'utf8').replace(/\r?\n$/, '');
+    } catch {
+      refused('PROGRAM_SECRET_UNREADABLE', `harness.secret_refs.${ref}`,
+        'the secret file cannot be read by the agent user as a regular file',
+        'place the secret with carbon-apply secret place; program secrets are agent-owned');
+    }
+    if (value.length === 0) {
+      refused('PROGRAM_SECRET_UNREADABLE', `harness.secret_refs.${ref}`, 'the secret file is empty', 'place the secret');
+    }
+    env[secretEnvName(ref)] = value;
+    values.push(value);
+  }
+  return { env, values };
+}
+
+export function redactSecrets(text: string, values: string[]) {
+  let out = text;
+  for (const value of values) {
+    for (const form of new Set([value, JSON.stringify(value).slice(1, -1)])) out = out.split(form).join('[redacted]');
+  }
+  return out;
+}
+
+function killGroup(child: ChildProcess) {
+  if (child.pid === undefined) return;
+  try { process.kill(-child.pid, 'SIGKILL'); } catch {
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+  }
+}
 
 function assertTimeout(timeoutMs: unknown, subject: string) {
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 1000) {
@@ -230,19 +387,26 @@ function assertTimeout(timeoutMs: unknown, subject: string) {
 
 function runHandler(session: ProgramSession, envelope: unknown, timeoutMs: number) {
   assertTimeout(timeoutMs, 'turn.timeoutMs');
-  const command = process.execPath;
-  const args = [session.entrypoint];
-  session.lastSpawn = { command, args: [...args] };
+  const secrets = loadSecrets(session.declaration);
+  const spawned = sandboxedSpawn(session.sandbox, process.execPath, [session.entrypoint], envelope);
+  session.lastSpawn = { command: spawned.command, args: [...spawned.args] };
+  const clean = (text: string) => redactSecrets(text, secrets.values);
   return new Promise<ProgramBody>((resolve, reject) => {
-    const child = spawn(command, args, { cwd: session.work, env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(spawned.command, spawned.args, { cwd: session.work, env: childEnv(secrets.env), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    session.active.add(child);
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
+    let stderrCut = false;
     let settled = false;
-    const fail = (error: ProgramFault) => {
-      if (settled) return;
+    const finish = () => {
       settled = true;
       clearTimeout(timer);
-      child.kill('SIGKILL');
+      killGroup(child);
+      session.active.delete(child);
+    };
+    const fail = (error: ProgramFault) => {
+      if (settled) return;
+      finish();
       reject(error);
     };
     const timer = setTimeout(() => fail(new ProgramFault(fault('PROGRAM_TURN_TIMED_OUT', session.entrypoint,
@@ -257,26 +421,31 @@ function runHandler(session: ProgramSession, envelope: unknown, timeoutMs: numbe
       }
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr = Buffer.concat([stderr, chunk]).subarray(-4096);
+      const joined = Buffer.concat([stderr, chunk]);
+      stderrCut = stderrCut || joined.length > STDERR_WINDOW;
+      stderr = joined.subarray(-STDERR_WINDOW);
     });
     child.stdin.on('error', () => {
       // The handler may exit before the document is consumed. The close path reports that exit.
     });
     child.on('error', (error) => fail(new ProgramFault(fault('PROGRAM_HANDLER_EXITED', session.entrypoint,
-      error.message, 'the entrypoint must be runnable by node'))));
+      clean(error.message), 'the entrypoint must be runnable by node'))));
     child.on('close', (code) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+      finish();
       if (code !== 0) {
-        const tail = stderr.toString('utf8').slice(-STDERR_TAIL);
+        // A window cut may leave a secret's tail at the front, so a cut buffer loses its first longest-secret bytes.
+        const drop = stderrCut ? Math.max(0, ...secrets.values.map((value) => Buffer.byteLength(value))) : 0;
+        const tail = clean(stderr.subarray(drop).toString('utf8')).slice(-STDERR_TAIL);
         reject(new ProgramFault(fault('PROGRAM_HANDLER_EXITED', session.entrypoint,
           `the handler exited ${code}${tail ? `: ${tail}` : ''}`,
           'fix the entrypoint; a program turn does not fall back to Codex')));
         return;
       }
       try {
-        resolve(parseProgramResult(stdout.toString('utf8'), envelope as { conversation_id?: unknown; release_id?: unknown }, session.work));
+        const text = stdout.toString('utf8');
+        if (clean(text) !== text) invalid('stdout', 'the handler result carries a delivered secret value');
+        resolve(parseProgramResult(text, envelope as { conversation_id?: unknown; release_id?: unknown }, session.work));
       } catch (error) {
         reject(error);
       }
@@ -287,21 +456,26 @@ function runHandler(session: ProgramSession, envelope: unknown, timeoutMs: numbe
 
 export async function connect(options: {
   checkout?: string; work?: string; declaration?: ProgramDeclaration;
-  binary?: string; codexHome?: string; onEvent?: (event: unknown) => unknown; onStderr?: () => void;
+  binary?: string; codexHome?: string; sandboxDeny?: SandboxGate; storeDir?: string; onEvent?: (event: unknown) => unknown; onStderr?: () => void;
 }) {
   const declaration = options.declaration ?? {};
   assertTimeout(declaration.limits?.max_turn_ms, 'limits.max_turn_ms');
   const entrypoint = resolveEntrypoint(options.checkout, declaration.harness?.entrypoint);
+  const work = path.resolve(String(options.work ?? ''));
+  const sandbox = buildSandbox({ gate: options.sandboxDeny, storeDir: options.storeDir, work, checkout: String(options.checkout) });
   let resolveExit: (exit: { code: number | null; signal: string | null }) => void = () => {};
   const exit = new Promise<{ code: number | null; signal: string | null }>((resolve) => { resolveExit = resolve; });
   const session: ProgramSession = {
     kind: 'program',
     entrypoint,
-    work: path.resolve(String(options.work ?? '')),
+    work,
     timeoutMs: declaration.limits?.max_turn_ms as number,
     declaration,
+    sandbox,
+    active: new Set(),
     lastSpawn: null,
     stop() {
+      for (const child of session.active) killGroup(child);
       resolveExit({ code: 0, signal: null });
       return Promise.resolve();
     },

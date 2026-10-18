@@ -354,6 +354,8 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       checkout,
       work,
       declaration,
+      sandboxDeny,
+      storeDir,
       ...(options.browserThreadOptions ? { experimentalApi: true } : {}),
       providerKeyPath: key?.path,
       providerKeyEnvName: key?.env,

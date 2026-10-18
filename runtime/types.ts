@@ -43,7 +43,7 @@ export type Declaration = {
   channels?: Channel[];
   secrets?: { name: string; path: string; purpose?: string }[];
   provider?: { name?: string; auth?: string; api_key_ref?: string; api_key_via?: string };
-  harness?: { kind?: string; version?: unknown };
+  harness?: { kind?: string; version?: unknown; entrypoint?: unknown; secret_refs?: unknown };
   model?: string;
   effort?: string;
   sandbox?: { mode?: string; network?: boolean };
@@ -92,6 +92,7 @@ export type Harness<S = Session, I = CodexInput> = {
   connect(options: {
     binary: string; codexHome: string; providerKeyPath?: string;
     providerKeyEnvName?: string; experimentalApi?: boolean; checkout?: string; work?: string; declaration?: Declaration;
+    sandboxDeny?: { file: string; root: string }; storeDir?: string;
     onEvent(event: { kind?: unknown; threadId?: unknown; turnId?: unknown; params?: unknown }): unknown;
     onStderr(): void;
   }): Promise<S>;
