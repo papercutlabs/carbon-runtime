@@ -1,8 +1,8 @@
 // shape: justified this existing runtime composition point coordinates store, harness, channels, tools and the typed browser turn preparation contract
 import type { BrowserPreparation } from './browser.ts';
 import type { BrowserReplyValidator } from './reply-tool.ts';
-import type { Declaration, Channel, Log, Harness, Session, ChildExit } from './types.ts';
-type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator; browserThreadOptions?: BrowserThreadOptions; browserEvidenceHooks?: {hooksFile:string;command:string} };
+import type { Declaration, Channel, Log, Harness, TurnInput, Session, ChildExit } from './types.ts';
+type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S, TurnInput>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator; browserThreadOptions?: BrowserThreadOptions; browserEvidenceHooks?: {hooksFile:string;command:string} };
 
 // The runtime process: the one thing a unit starts.
 //
@@ -343,13 +343,17 @@ export async function run<S extends Session>(options: RunOptions<S>) {
     // out of CODEX_HOME and refreshes it there, which is why that directory is
     // writable by the agent user and why install checks the file's presence and
     // never its contents.
-    const key = providerKey(declaration);
+    const programKind = declaration.harness?.kind === 'program';
+    const key = programKind ? null : providerKey(declaration);
     // HC-14 (PA-259): no harness starts on a box whose deny file is not exactly placed.
     checkSandboxDeny(sandboxDeny, 'before the harness started');
     const browserLoops: ReleaseLoop<S>[] = [];
     session = await harness.connect({
-      binary: harnessBinary(declaration, { harnessRoot, binary }),
+      binary: programKind ? process.execPath : harnessBinary(declaration, { harnessRoot, binary }),
       codexHome,
+      checkout,
+      work,
+      declaration,
       ...(options.browserThreadOptions ? { experimentalApi: true } : {}),
       providerKeyPath: key?.path,
       providerKeyEnvName: key?.env,

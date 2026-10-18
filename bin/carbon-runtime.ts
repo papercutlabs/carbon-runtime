@@ -12,8 +12,9 @@ import { run, placesUnder, readDeclaration } from '../runtime/index.ts';
 import { REPLY_PORT } from '../runtime/reply-tool.ts';
 import { TEACH_PORT } from '../runtime/teach-tool.ts';
 import { registeredKinds } from '../runtime/registry.ts';
-import type { Declaration, Harness, Log } from '../runtime/types.ts';
+import type { Declaration, Harness, Log, Session, TurnInput } from '../runtime/types.ts';
 import * as codex from '../harness/codex/index.ts';
+import * as program from '../harness/program/index.ts';
 
 const HELP = `carbon-runtime — run one client agent: the harness, the adapters and the release loop
 
@@ -123,6 +124,15 @@ function parse(argv: string[]) {
   return { args, faults };
 }
 
+function harnessFor(declaration: Declaration): Harness<Session, TurnInput> {
+  const kind = declaration.harness?.kind;
+  if (kind === 'program') return program as Harness<Session, TurnInput>;
+  if (kind === 'codex-app-server') return codex as Harness<Session, TurnInput>;
+  throw new RuntimeFault(fault('HARNESS_KIND_UNKNOWN', String(kind),
+    `harness.kind ${JSON.stringify(kind)} is not a harness carbon-runtime can start`,
+    'declare harness.kind as codex-app-server or program'));
+}
+
 function places(args: ParsedArgs, faults: ReturnType<typeof fault>[]) {
   if (args['agent-dir']) {
     for (const name of ['declaration', 'store', 'codex-home', 'checkout', 'work', 'harness-root'] as const) {
@@ -191,8 +201,8 @@ async function main(argv: string[]) {
 
   const log: Log = (line) => process.stdout.write(JSON.stringify({ at: new Date().toISOString(), ...line }) + '\n');
 
-  // The unconverted harness module already supplies the operations run() calls.
-  const harness = codex as Harness;
+  // Codex stays the app-server harness. program is the pinned entrypoint and never a Codex spawn.
+  const harness = harnessFor(declaration);
   return run({
     declaration,
     declarationPath: where.declarationPath!,
