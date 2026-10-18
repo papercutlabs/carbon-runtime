@@ -1,4 +1,5 @@
-import { test } from 'node:test';
+import { test, afterEach, type TestContext } from 'node:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -11,6 +12,17 @@ import { turnInput } from '../runtime/loop.ts';
 import * as program from '../harness/program/index.ts';
 import * as fixture from '../adapters/fixture/index.ts';
 import type { Declaration, Channel } from '../runtime/types.ts';
+
+const probe = spawnSync('setpriv', ['--no-new-privs', 'bwrap', '--die-with-parent',
+  '--unshare-pid', '--dev-bind', '/', '/', '--proc', '/proc', '/bin/true'],
+{ timeout: 5000, encoding: 'utf8' });
+const sandboxSkip = probe.status === 0 ? false
+  : `runner cannot start the required bwrap PID namespace: ${probe.error?.message ?? probe.stderr.trim()}`;
+const sessions: { stop(): Promise<unknown> }[] = [];
+afterEach(async () => { await Promise.all(sessions.splice(0).map((session) => session.stop())); });
+function sandboxTest(name: string, fn: (t: TestContext) => void | Promise<void>) {
+  return test(name, { skip: sandboxSkip, timeout: 30000 }, fn);
+}
 
 const KEY = 'tsk_synthetic_key_0123456789abcdef';
 const AGENT = 'test-agent';
@@ -124,6 +136,7 @@ async function started(overrides: Record<string, unknown> = {}) {
     sandboxDeny: { file: path.join(dir, 'deny.toml'), root: dir }, storeDir: path.join(dir, 'store'),
     onEvent() {}, onStderr() {}
   });
+  sessions.push(session);
   const store = Store.open(path.join(dir, 'store'));
   const loop = new ReleaseLoop({
     declaration: decl, channel: decl.channels![0], store, storeDir: store.dir,
@@ -148,7 +161,7 @@ function seen(checkout: string) {
   return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 }
 
-test('program startup spawns node on the entrypoint and never codex', async () => {
+sandboxTest('program startup spawns node on the entrypoint and never codex', async () => {
   const { loop, session, checkout } = await started();
   assert.equal(spawnOf(session), null);
   const result = await loop.pass([item('1', 'hello')]);
@@ -173,7 +186,7 @@ function storeOutbound(loop: ReleaseLoop) {
   return loop.store.rebuild().filter((record) => record.direction === 'outbound');
 }
 
-test('the envelope carries the stored attachment path and digest', async () => {
+sandboxTest('the envelope carries the stored attachment path and digest', async () => {
   const { loop, checkout, session } = await started();
   const bytes = Buffer.from('png-bytes');
   await loop.pass([item('1', 'photo caption', {
@@ -190,7 +203,7 @@ test('the envelope carries the stored attachment path and digest', async () => {
   await session.stop();
 });
 
-test('no_reply and missing_case close without a follow-up turn', async () => {
+sandboxTest('no_reply and missing_case close without a follow-up turn', async () => {
   const { loop, checkout, session } = await started();
   const silent = await loop.pass([item('1', 'no')]);
   assert.equal(silent.released[0].reply, 'no-reply-declared');
@@ -205,7 +218,7 @@ test('no_reply and missing_case close without a follow-up turn', async () => {
   await session.stop();
 });
 
-test('a sent reply is not sent again and an unknown send is not retried', async () => {
+sandboxTest('a sent reply is not sent again and an unknown send is not retried', async () => {
   let sends = 0;
   let explode = false;
   const { dir, checkout, work, store, decl } = await started();
@@ -240,7 +253,7 @@ test('a sent reply is not sent again and an unknown send is not retried', async 
   await session.stop();
 });
 
-test('the same thread id is resumed for the same unit', async () => {
+sandboxTest('the same thread id is resumed for the same unit', async () => {
   const { loop, checkout, session } = await started();
   await loop.pass([item('1', 'hello')]);
   await loop.pass([item('2', 'next')]);
@@ -250,7 +263,7 @@ test('the same thread id is resumed for the same unit', async () => {
   await session.stop();
 });
 
-test('a foreign thread id is refused and the release is not retried as Codex', async () => {
+sandboxTest('a foreign thread id is refused and the release is not retried as Codex', async () => {
   const { loop, store, session, decl, checkout, work } = await started();
   await loop.pass([item('1', 'hello')]);
   store.writeThread(`${ACCOUNT}:c1`, { thread_id: 'codex-thread', completed_turns: 1, turns: [] });
@@ -291,7 +304,7 @@ test('missing, escaping, and symlink entrypoints are refused before any spawn', 
   }), (error: { fault?: { code?: string } }) => error.fault?.code === 'PROGRAM_ENTRYPOINT_SYMLINK');
 });
 
-test('timeout, oversized stdout, nonzero exit, and invalid JSON park and do not spawn codex', async () => {
+sandboxTest('timeout, oversized stdout, nonzero exit, and invalid JSON park and do not spawn codex', async () => {
   const cases = [
     ['sleep', 'PROGRAM_TURN_TIMED_OUT', { limits: { max_turn_ms: 1000 } }],
     ['huge', 'PROGRAM_OUTPUT_TOO_LARGE', {}],
@@ -310,11 +323,12 @@ test('timeout, oversized stdout, nonzero exit, and invalid JSON park and do not 
   }
 });
 
-test('records-enabled reply without about_job is refused by the existing gate and not sent', async () => {
+sandboxTest('records-enabled reply without about_job is refused by the existing gate and not sent', async (t) => {
   const server = http.createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ kind: 'other' }));
   });
+  t.after(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
@@ -323,6 +337,7 @@ test('records-enabled reply without about_job is refused by the existing gate an
     checkout, work, declaration: decl as never, onEvent() {}, onStderr() {},
     sandboxDeny: { file: path.join(dir, 'deny.toml'), root: dir }, storeDir: path.join(dir, 'store-records')
   });
+  sessions.push(session);
   const store = Store.open(path.join(dir, 'store-records'));
   const loop = new ReleaseLoop({
     declaration: decl, channel: decl.channels![0], store, storeDir: store.dir, adapter: fixture,
@@ -335,7 +350,7 @@ test('records-enabled reply without about_job is refused by the existing gate an
   assert.equal(firstParkCode(inbound), 'JOB_ACTION_CONTEXT_REQUIRED');
   assert.equal(store.rebuild().some((record) => record.direction === 'outbound'), false);
   await session.stop();
-  await new Promise((resolve) => server.close(resolve));
+
 });
 
 test('a rendered Codex turn input is unchanged by the program envelope path', () => {
@@ -376,7 +391,7 @@ async function gone(pid: string) {
   return false;
 }
 
-test('the sandboxed child cannot read secrets, codex-home or the store, and sees only release attachments', async () => {
+sandboxTest('the sandboxed child cannot read secrets, codex-home or the store, and sees only release attachments', async () => {
   const { dir, loop, session } = await started();
   fs.writeFileSync(path.join(dir, 'secrets', 'telegram-bot-token'), CANARY, { mode: 0o600 });
   fs.writeFileSync(path.join(dir, 'codex-home', 'auth.json'), CANARY);
@@ -397,7 +412,7 @@ test('the sandboxed child cannot read secrets, codex-home or the store, and sees
   await session.stop();
 });
 
-test('only attachment files of this release are bound back through the hidden store', async () => {
+sandboxTest('only attachment files of this release are bound back through the hidden store', async () => {
   const { dir, loop, session, checkout } = await started();
   await loop.pass([item('1', 'photo', { attachments: [{ bytes: Buffer.from('page-bytes'), mime: 'image/png', filename: 'page.png' }] })]);
   const attachmentPath = seen(checkout)[0].attachment.path as string;
@@ -410,7 +425,7 @@ test('only attachment files of this release are bound back through the hidden st
   await session.stop();
 });
 
-test('a delivered key reaches the child environment only and appears nowhere else', async () => {
+sandboxTest('a delivered key reaches the child environment only and appears nowhere else', async () => {
   const { dir, loop, session, checkout } = await startedWithKey();
   await loop.pass([item('1', 'usekey')]);
   const said = outboundText(loop);
@@ -431,7 +446,7 @@ test('a delivered key reaches the child environment only and appears nowhere els
   await session.stop();
 });
 
-test('a stderr trace carrying the key is redacted from the parked fault and a stdout echo is refused', async () => {
+sandboxTest('a stderr trace carrying the key is redacted from the parked fault and a stdout echo is refused', async () => {
   const { dir, loop, session } = await startedWithKey();
   await loop.pass([item('1', 'leakkey')]);
   await loop.pass([item('2', 'echokey')]);
@@ -477,7 +492,7 @@ test('no sandbox gate, no bwrap, or an unreadable deny file refuse to connect', 
   await refuses({ sandboxDeny: { file: path.join(dir, 'deny.toml'), root: path.dirname(work) }, work: path.join(dir, 'store', 'w'), storeDir: path.join(dir, 'store') });
 });
 
-test('an undeclared or missing key file parks the turn without a spawn', async () => {
+sandboxTest('an undeclared or missing key file parks the turn without a spawn', async () => {
   const { loop, session } = await started({ harness: { kind: 'program', version: '1', entrypoint: 'handler.mjs', secret_refs: ['typesafe_api_key'] } });
   const result = await loop.pass([item('1', 'usekey')]);
   assert.equal(result.parked.length, 1);
@@ -486,7 +501,7 @@ test('an undeclared or missing key file parks the turn without a spawn', async (
   await session.stop();
 });
 
-test('a timeout, an overflow and stop kill the handler process group', async () => {
+sandboxTest('a timeout, an overflow and stop kill the handler process group', async () => {
   for (const [caption, overrides, code] of [
     ['spawnsleep', { limits: { max_turn_ms: 1000 } }, 'PROGRAM_TURN_TIMED_OUT'],
     ['spawnhuge', {}, 'PROGRAM_OUTPUT_TOO_LARGE']
@@ -508,7 +523,7 @@ test('a timeout, an overflow and stop kill the handler process group', async () 
   await pass.catch(() => {});
 });
 
-test('the child runs in its own pid namespace and cannot see the parent pid', async () => {
+sandboxTest('the child runs in its own pid namespace and cannot see the parent pid', async () => {
   const { loop, session } = await started({ harness: { kind: 'program', version: '1', entrypoint: 'handler.mjs' } });
   const spawned = program.sandboxedSpawn(session.sandbox, 'node', [], {});
   const at = spawned.args.indexOf('--unshare-pid');
@@ -531,7 +546,7 @@ for (const [label, patch] of [
   ['backup restic password', (d: any) => { d.secrets[0].path = '/x/secrets/restic-password'; }],
   ['backup r2 box', (d: any) => { d.secrets[0].path = '/x/secrets/r2-backup-box.json'; }]
 ] as [string, (d: any) => void][]) {
-  test(`loadSecrets refuses a secret_ref also used by ${label} before reading the key file`, async () => {
+  sandboxTest(`loadSecrets refuses a secret_ref also used by ${label} before reading the key file`, async () => {
     const { loop, session, decl, dir } = await started({
       secrets: [{ name: 'other_secret', path: '' }],
       harness: { kind: 'program', version: '1', entrypoint: 'handler.mjs', secret_refs: ['other_secret'] }
@@ -551,7 +566,7 @@ for (const [label, patch] of [
   });
 }
 
-test('a secret path outside <agentDir>/secrets/ is refused before any read', async () => {
+sandboxTest('a secret path outside <agentDir>/secrets/ is refused before any read', async () => {
   for (const suffix of ['../codex-home/x', '../secrets-evil/x']) {
     const { loop, session, decl, dir } = await started({
       secrets: [{ name: 'other_secret', path: '' }],
