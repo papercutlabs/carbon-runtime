@@ -525,6 +525,7 @@ test('the child runs in its own pid namespace and cannot see the parent pid', as
 
 for (const [label, patch] of [
   ['telegram bot_token_ref', (d: any) => { d.channels = [{ ...d.channels[0], transport: { bot_token_ref: 'other_secret' } }]; }],
+  ['aliased Telegram path', (d: any) => { const original = d.secrets[0].path; d.secrets.push({ name: 'transport_key', path: original }); d.secrets[0].path = path.dirname(original) + '/nested/../' + path.basename(original); d.channels = [{ ...d.channels[0], transport: { bot_token_ref: 'transport_key' } }]; }],
   ['netrc_ref', (d: any) => { d.channels = [{ ...d.channels[0], transport: { netrc_ref: 'other_secret' } }]; }],
   ['provider api_key_ref', (d: any) => { d.provider = { name: 'openai', auth: 'api_key', api_key_ref: 'other_secret' }; }],
   ['backup restic password', (d: any) => { d.secrets[0].path = '/x/secrets/restic-password'; }],

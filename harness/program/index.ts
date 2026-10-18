@@ -1,11 +1,7 @@
-// A program harness runs one pinned entrypoint inside the installed checkout.
-// Node is the process. There is no Codex binary and no fallback to one.
-// The child receives one carbon.program-release.v1 document on stdin and
-// writes one carbon.program-result.v1 document on stdout. The child inherits only
-// PATH, HOME, LANG and TMPDIR, plus one CARBON_SECRET_<NAME> variable per ref in
-// harness.secret_refs. This process reads those files, as the agent user, and the
-// child never can: it runs inside bwrap with the HC-14 deny paths (and the store,
-// except the release's own attachment files) hidden. There is no unsandboxed run.
+// Runs a pinned Node entrypoint through bwrap; no Codex or unsandboxed fallback.
+// Stdin/stdout use carbon.program-release.v1 / carbon.program-result.v1.
+// Parent loads declared CARBON_SECRET_<NAME> values; child cannot read secret files.
+// HC-14 paths and store are hidden except this release’s own attachments.
 
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
@@ -346,6 +342,11 @@ function otherConsumerSecretNames(declaration: ProgramDeclaration) {
     if (typeof secret.path === 'string' && BACKUP_SECRET_FILE_NAMES.includes(path.basename(secret.path))) names.add(secret.name);
   }
   names.delete(undefined);
+  const secrets = (declaration.secrets ?? []);
+  const heldPaths = new Set(secrets.flatMap((s) => names.has(s.name) && typeof s.path === 'string' ? [path.normalize(s.path)] : []));
+  for (const secret of secrets) {
+    if (typeof secret.path === 'string' && heldPaths.has(path.normalize(secret.path))) names.add(secret.name);
+  }
   return names;
 }
 
