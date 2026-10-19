@@ -1,8 +1,8 @@
 Where the copied files under this repository came from, and what may be done to them.
 
 source repository   the private half of Carbon, named in that repository's README
-source commit       7b8dcd33554c7c4d75b9177be3131ef7c50ac201
-copied on           2026-10-19 (program harness, PA-241; tools/shape-check.ts 0.1.2 reconciliation)
+source commit       21e82b92763f260d7342fb8289271d9b2aa47b85
+copied on           2026-10-19 (program harness completed_at in seconds, PA-241)
 
 Copied verbatim, as whole files, with no edit of any kind:
 

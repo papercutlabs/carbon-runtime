@@ -550,7 +550,7 @@ export async function turn(session: ProgramSession, params: {
     thread_id: params.threadId,
     turn_id: turnId,
     status: 'completed',
-    completed_at: Date.now(),
+    completed_at: Math.floor(Date.now() / 1000), // Unix seconds, as the turn contract is read (PA-241)
     agent_message: null,
     token_usage: null,
     error: null,

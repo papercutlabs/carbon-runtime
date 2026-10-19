@@ -1330,7 +1330,15 @@ export class ReleaseLoop<S = Session> {
       thread_id: threadId, turn_id: result.turn_id, status: result.status,
       token_usage: result.token_usage ?? null,
       tool_calls: toolCallsIn(result.items),
-      commands: commandsIn(result.items)
+      commands: commandsIn(result.items),
+      // A program turn's own timings and observations, for the same reason: the
+      // harness refuses a result carrying a delivered secret value, so both are
+      // safe to log, and they are what a timed test reads from outside (PA-241).
+      ...(result.program ? { program: {
+        disposition: result.program.disposition ?? null,
+        observations: result.program.observations ?? [],
+        timings: result.program.timings ?? []
+      } } : {})
     });
 
     if (result.status !== 'completed') {

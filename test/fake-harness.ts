@@ -81,6 +81,8 @@ export function fakeHarness({ onTurn = () => 'completed', statuses = () => [] }:
         // that could not express this could not test the rule that reads it.
         agent_message: result.agent_message ?? null,
         token_usage: result.token_usage ?? null,
+        // A program harness's result body, passed through as the real one returns it.
+        ...(result.program ? { program: result.program } : {}),
         events: []
       };
     },

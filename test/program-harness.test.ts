@@ -200,6 +200,9 @@ sandboxTest('the envelope carries the stored attachment path and digest', async 
   const turns = loop.store.readThread(`${ACCOUNT}:c1`)?.turns;
   const observations = (turns as { program: { observations: { detail: string }[] } }[])[0].program.observations;
   assert.equal(observations[0].detail, row.attachment.path);
+  // completed_at is Unix seconds in the turn contract; milliseconds stored year 58768 (PA-241).
+  const completed = (turns as { completed_at: string }[])[0].completed_at;
+  assert.equal(new Date(completed).getUTCFullYear(), new Date().getUTCFullYear(), completed);
   await session.stop();
 });
 
