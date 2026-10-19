@@ -550,7 +550,9 @@ export async function turn(session: ProgramSession, params: {
     thread_id: params.threadId,
     turn_id: turnId,
     status: 'completed',
-    completed_at: Date.now(),
+    // The turn contract's completed_at is Unix seconds, as Codex reports it and as
+    // lib/runner-harness-result.ts reads it; milliseconds read back as year 58768 (PA-241).
+    completed_at: Math.floor(Date.now() / 1000),
     agent_message: null,
     token_usage: null,
     error: null,

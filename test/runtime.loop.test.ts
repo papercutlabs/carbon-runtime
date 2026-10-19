@@ -887,6 +887,33 @@ test('what a turn cost is in the log, because the store is not readable from out
   assert.deepEqual(turn.token_usage, { input: 100, cached: 40, output: 7, reasoning: 3 });
 });
 
+test('a program turn\'s timings and observations are in the turn log line (PA-241)', async () => {
+  const lines: Record<string, unknown>[] = [];
+  const { loop } = makeLoop({
+    onTurn: (s) => (session, params) => {
+      replyHandler({ store: s, agent: AGENT })({
+        conversation_id: `${ACCOUNT}:c1`, request_id: params.clientUserMessageId, text: 'the answer'
+      });
+      return { status: 'completed', token_usage: null, program: {
+        disposition: 'reply',
+        observations: [{ name: 'evidence', detail: 'sha256:abc' }],
+        timings: [{ name: 'ocr', ms: 1200 }, { name: 'total', ms: 3400 }]
+      } };
+    }
+  });
+  loop.log = (line) => lines.push(line);
+
+  await loop.pass([item(1, 'a question')]);
+
+  const turn = lines.find((l) => l.event === 'turn') as { program?: unknown } | undefined;
+  assert.ok(turn, `no turn line in ${JSON.stringify(lines.map((l) => l.event))}`);
+  assert.deepEqual(turn.program, {
+    disposition: 'reply',
+    observations: [{ name: 'evidence', detail: 'sha256:abc' }],
+    timings: [{ name: 'ocr', ms: 1200 }, { name: 'total', ms: 3400 }]
+  });
+});
+
 // The defect this test exists for cost the first live WhatsApp reply: the loop
 // called an adapter whose send is asynchronous, read a status off the promise it
 // got back, found none, and wrote the send down as failed. The store said the
