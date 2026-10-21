@@ -45,7 +45,7 @@ import type { Fields, Context, Transport, ArrivedItem, Media, FetchedMedia } fro
 // handoff and the watermark that follows it.
 
 import { fault } from '../../stream/faults.ts';
-import { ALLOWED_UPDATES, DEFAULT_API_HOST, TelegramFault, call, download, readToken } from './api.ts';
+import { ALLOWED_UPDATES, ATTACHMENT_TOO_LARGE, DEFAULT_API_HOST, TelegramFault, call, download, readToken } from './api.ts';
 import { albumOf, mediaOf, messageOf } from './content.ts';
 import { nextOffset, positionOf } from './cursors.ts';
 
@@ -129,9 +129,7 @@ class Lanes {
     const next = this.#queue.shift();
     if (next) next(true); else this.#free = Math.min(DOWNLOAD_CHAINS, this.#free + 1);
   }
-  release() { for (const next of this.#queue.splice(0)) next(false); }
 }
-export { Lanes };
 
 const LATENCY_SCHEMA = 'carbon.latency-experiment.v1';
 // Source ids named on one record; the count says how many there were.
@@ -174,15 +172,18 @@ export async function stop(context: Pick<Context, 'agent' | 'account'>) {
   if (!entry) return;
   entry.stopped = true;
   entry.ending.abort();
-  entry.lanes.release();
   channels.delete(key);
   if (entry.worker) await entry.worker;
+  // Every eager fetch is aborted by the signal above; wait until each has settled.
+  while (entry.inflight.size > 0) await Promise.allSettled([...entry.inflight.values()]);
 }
 
+// Synchronous, so it cannot wait: the abort settles every eager fetch on its own,
+// none of which caches after the abort. Only stop() waits for that to be done.
 // For a test, and for a process that stops one agent and starts another in the
 // same process, which nothing does today.
 export function forget() {
-  for (const entry of channels.values()) { entry.stopped = true; entry.ending.abort(); entry.lanes.release(); }
+  for (const entry of channels.values()) { entry.stopped = true; entry.ending.abort(); }
   channels.clear();
 }
 
@@ -230,9 +231,8 @@ export async function arrivals(context: Context, retryWait: RetryWait = producti
   return entry.items.slice();
 }
 
-// Tell the runtime a settled, non-empty batch is waiting, so it need not sleep out
-// its interval. Only a hint: the batch is still handed over by `arrivals`, the
-// offset still moves only on consume, and a missed hint costs one interval.
+// Speculative members now held and their reserved bytes; for tests to observe the
+// resource bound. The channel is gone after stop().
 export function speculativeState(context: Pick<Context, 'agent' | 'account'>) {
   const entry = channels.get(keyOf(context));
   let bytes = 0;
@@ -246,6 +246,9 @@ function hint(listener: () => void) {
   try { listener(); return true; } catch { return false; }
 }
 
+// Tell the runtime a settled, non-empty batch is waiting, so it need not sleep out
+// its interval. Only a hint: the batch is still handed over by `arrivals`, the
+// offset still moves only on consume, and a missed hint costs one interval.
 export function onReady(context: Context, listener: () => void) {
   const entry = entryFor(context);
   entry.ready.add(listener);
@@ -360,8 +363,10 @@ async function settledBatch(entry: PollEntry, transport: Transport, context: Con
     const items = retained(entry, offset);
     // Downloads start as members are first seen, inside the album window, and are
     // never awaited here: this loop must make its next same-offset ask on time.
-    startEager(entry, transport, context, items);
     const remaining = albumWait(items, albumQuiet);
+    // Not on the iteration that settles: expiry there would discard good or
+    // in-flight members the batch is about to use.
+    if (remaining !== 0) startEager(entry, transport, context, items);
     if (remaining === 0) {
       const settled = performance.now();
       const ids = items.map(idOf);
@@ -470,6 +475,7 @@ function mediaFor(entry: PollEntry, transport: Transport, context: Context, upda
   if (!speculative) entry.spec.delete(updateId);
   // has/get are adjacent with no mutation; null is retained as a cached failure.
   if (entry.media.has(updateId)) return Promise.resolve(entry.media.get(updateId)!);
+  if (entry.stopped) return Promise.resolve(null);
   const running = entry.inflight.get(updateId);
   if (running !== undefined) return running;
   const ctl = new AbortController();
@@ -482,10 +488,9 @@ function mediaFor(entry: PollEntry, transport: Transport, context: Context, upda
     try {
       if (!await entry.lanes.take(signal)) return null;
       try {
-        const got = await fetchMedia(transport, media, signal);
-        const outcome = judge(entry, updateId, got, limit, signal.aborted, ctl.signal.aborted);
-        const { fetched, status, keep } = outcome;
-        if (keep) entry.media.set(updateId, fetched);
+        const got = await fetchMedia(transport, media, signal, limit);
+        const { fetched, status, keep } = judge(entry, updateId, got, limit, signal.aborted);
+        if (keep && !entry.stopped) entry.media.set(updateId, fetched);
         emit(entry, context, 'download', [updateId], queued, !keep && status !== 'dropped' ? 'cancelled' : status);
         return fetched;
       } finally {
@@ -502,11 +507,14 @@ function mediaFor(entry: PollEntry, transport: Transport, context: Context, upda
 // Size and budget verdict for a finished fetch: oversize is a failure, an
 // over-budget speculative body is dropped (never cached), a cancelled fetch is
 // not kept.
-function judge(entry: PollEntry, updateId: unknown, got: FetchedMedia | null, limit: number, ended: boolean, cancelled: boolean) {
-  let fetched = got;
-  let status = fetched === null ? 'failed' : 'ok';
-  let keep = !(ended && fetched === null) && !cancelled;
+function judge(entry: PollEntry, updateId: unknown, got: FetchedMedia | null | 'oversize', limit: number, ended: boolean) {
+  let fetched = got === 'oversize' ? null : got;
+  let status = got === 'oversize' ? 'oversize' : fetched === null ? 'failed' : 'ok';
+  let keep = !ended;
   if (fetched !== null && fetched.bytes.length > limit) { fetched = null; status = 'oversize'; }
+  // A permanent oversize result is cached as a failure and leaves the budget now,
+  // so expiry has nothing to delete and nothing is downloaded again.
+  if (status === 'oversize') entry.spec.delete(updateId);
   const member = entry.spec.get(updateId);
   if (keep && fetched !== null && member !== undefined) {
     member.reserved = fetched.bytes.length;
@@ -520,15 +528,19 @@ function judge(entry: PollEntry, updateId: unknown, got: FetchedMedia | null, li
   return { fetched, status, keep };
 }
 
-async function fetchMedia(transport: Transport, media: Media, signal: AbortSignal) {
+async function fetchMedia(transport: Transport, media: Media, signal: AbortSignal, limit: number): Promise<FetchedMedia | null | 'oversize'> {
   try {
     const file = await call(transport, 'getFile', { file_id: media.file_id }, { signal });
     // getFile returns provider JSON; this read checks only the file path before downloading.
     if (typeof (file as Fields | null)?.file_path !== 'string') return null;
+    // A size getFile reports over the limit is refused before any body is asked for.
+    const reported = Number((file as Fields).file_size);
+    if (reported > limit) return 'oversize';
     // The preceding typeof check establishes this file path, not the rest of the response.
-    const bytes = await download(transport, (file as Fields).file_path as string, { signal });
+    const bytes = await download(transport, (file as Fields).file_path as string, { signal, maxBytes: limit });
     return { bytes, mime: media.mime, filename: media.file_name };
-  } catch {
+  } catch (error) {
+    if (error instanceof TelegramFault && error.faults?.[0]?.code === ATTACHMENT_TOO_LARGE) return 'oversize';
     // A download that failed is not a failed poll: the message itself arrived and
     // is worth capturing. index.ts writes the attachment as download_failed.
     return null;

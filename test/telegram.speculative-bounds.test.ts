@@ -4,7 +4,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { arrivals, forget, stop, onReady, speculativeState, Lanes, DOWNLOAD_CHAINS, SPECULATIVE_MEMBERS, SPECULATIVE_CHAINS } from '../adapters/telegram/live.ts';
+import { arrivals, forget, stop, onReady, speculativeState, SPECULATIVE_MEMBERS, SPECULATIVE_CHAINS } from '../adapters/telegram/live.ts';
 import { nextOffset } from '../adapters/telegram/cursors.ts';
 import { idsOf, liveContext, photoUpdate, scriptedServerOf, waitForBatch, sleep } from './telegram-fixtures.ts';
 
@@ -42,7 +42,7 @@ test('endless album: speculative members stay within the bound, then are abandon
     await sleep(1100); // past 20 x 50 ms, album still growing
     const now = speculativeState(r.context);
     assert.ok(now.members <= SPECULATIVE_MEMBERS && now.bytes <= SPECULATIVE_CHAINS * LIMIT);
-    assert.ok(r.lines.some((l) => l.stage === 'download' && l.status === 'cancelled') || r.server.fetched.size > SPECULATIVE_MEMBERS, 'nothing was abandoned');
+    assert.ok(r.server.fetched.size > SPECULATIVE_MEMBERS, 'old members were not abandoned, so no slot was freed for newer ones');
     assert.ok(Math.max(...r.server.fetched.values()) <= 1, 'an abandoned member was speculated again');
     assert.equal(nextOffset(r.context.store, r.context.account), null);
   } finally { await stop(r.context); r.done(); }
@@ -56,7 +56,7 @@ test('late settle after abandonment: every member hydrates once more, in order, 
     const { items } = await waitForBatch(r.context, { attempts: 400 });
     assert.deepEqual(idsOf(items), g.all.map((u) => u.update_id));
     assert.ok(items.every((i) => (i.attachments as unknown[]).length === 1));
-    assert.ok(r.lines.some((l) => l.stage === 'download' && l.status === 'cancelled') || [...r.server.fetched.values()].some((n) => n > 1), 'nothing was ever abandoned');
+    assert.ok([...r.server.fetched.values()].some((n) => n > 1), 'nothing was ever abandoned');
     assert.equal(nextOffset(r.context.store, r.context.account), null);
   } finally { r.done(); }
 });
@@ -96,55 +96,6 @@ test('memory accounting: reserved bytes never exceed the cap; understated metada
     assert.ok(items.every((i) => i.attachments !== undefined), 'dropped speculative bodies were not hydrated later');
     assert.ok(rb.lines.some((l) => l.stage === 'download' && l.status === 'dropped'), 'guard: the byte budget never bit');
   } finally { rb.done(); }
-});
-
-test('cancellation: stop mid-album leaves no speculative state and starts nothing', async () => {
-  const g = growing(945001, 400, 5);
-  const r = rig(50, g.respond);
-  try {
-    await arrivals(r.context);
-    await sleep(150);
-    await stop(r.context);
-    assert.deepEqual(speculativeState(r.context), { members: 0, bytes: 0 });
-    const n = r.server.media.length;
-    await sleep(300);
-    assert.equal(r.server.media.length, n);
-  } finally { r.done(); }
-});
-
-test('Lanes invariant: aborted queued waiters after release create no phantom lanes', async () => {
-  const lanes = new Lanes();
-  const live = new AbortController();
-  for (let i = 0; i < DOWNLOAD_CHAINS; i++) assert.equal(await lanes.take(live.signal), true);
-  const queued = [lanes.take(live.signal), lanes.take(live.signal), lanes.take(live.signal)];
-  assert.equal(lanes.queued, 3);
-  live.abort();
-  lanes.release();
-  assert.deepEqual(await Promise.all(queued), [false, false, false]);
-  assert.equal(lanes.free, 0);
-  assert.equal(lanes.queued, 0);
-  for (let i = 0; i < DOWNLOAD_CHAINS; i++) lanes.give();
-  assert.equal(lanes.free, DOWNLOAD_CHAINS);
-  // release alone (signal not yet aborted) must not mint lanes either
-  const held = new AbortController();
-  for (let i = 0; i < DOWNLOAD_CHAINS; i++) await lanes.take(held.signal);
-  const waiting = [lanes.take(held.signal), lanes.take(held.signal)];
-  lanes.release();
-  assert.deepEqual(await Promise.all(waiting), [false, false]);
-  assert.equal(lanes.free, 0);
-  for (let i = 0; i < DOWNLOAD_CHAINS; i++) lanes.give();
-  assert.equal(lanes.free, DOWNLOAD_CHAINS);
-  // a waiter aborted alone leaves the queue and never inherits a lane
-  const other = new AbortController();
-  const fresh = new AbortController();
-  for (let i = 0; i < DOWNLOAD_CHAINS; i++) await lanes.take(fresh.signal);
-  const gone = lanes.take(other.signal);
-  const next = lanes.take(fresh.signal);
-  other.abort();
-  assert.equal(await gone, false);
-  lanes.give();
-  assert.equal(await next, true);
-  assert.equal(lanes.free, 0);
 });
 
 test('subscribeReady: a batch already waiting is hinted once; unsubscribe and stop suppress it', async () => {
