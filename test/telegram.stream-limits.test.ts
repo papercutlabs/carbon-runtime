@@ -116,7 +116,7 @@ test('stop(): resolves only after every eager fetch has settled, and nothing is 
     await sleep(100);
     assert.equal(s.st.started, started);
     assert.equal(lines.length, n);
-    assert.ok(lines.every((l) => l.status !== 'ok'), 'a body completed and was recorded after the abort');
+    assert.ok(lines.filter((l) => l.stage !== 'album-member-sighted').every((l) => l.status !== 'ok'), 'a body completed and was recorded after the abort');
   } finally { s.restore(); }
 });
 

@@ -1,9 +1,11 @@
+// shape: justified the capture-time prepare child shares this harness's one sandbox, spawn, redaction and process-group kill path with the turn, so it stays beside it
 // Runs a pinned Node entrypoint through bwrap; no Codex or unsandboxed fallback.
 // Stdin/stdout use carbon.program-release.v1 / carbon.program-result.v1.
 // Parent loads declared CARBON_SECRET_<NAME> values; child cannot read secret files.
 // HC-14 paths and store are hidden except this release’s own attachments.
 
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fault } from '../../lib/faults.ts';
@@ -213,12 +215,15 @@ type ProgramSession = {
   sandbox: Sandbox;
   active: Set<ChildProcess>;
   lastSpawn: { command: string; args: string[] } | null;
+  prepareEntrypoint: string | null;
+  workFd: number | null;
+  stopped: boolean;
   stop(): Promise<unknown>;
   exit: Promise<{ code: number | null; signal: string | null }>;
 };
 
 type ProgramDeclaration = {
-  harness?: { entrypoint?: unknown; secret_refs?: unknown };
+  harness?: { entrypoint?: unknown; prepare_entrypoint?: unknown; secret_refs?: unknown };
   secrets?: { name?: string; path?: string }[];
   channels?: { transport?: { netrc_ref?: unknown; bot_token_ref?: unknown } }[];
   limits?: { max_turn_ms?: unknown };
@@ -317,11 +322,11 @@ function attachmentArgs(sandbox: Sandbox, masks: string[], envelope: unknown) {
   return args;
 }
 
-export function sandboxedSpawn(sandbox: Sandbox, command: string, args: string[], envelope: unknown) {
+export function sandboxedSpawn(sandbox: Sandbox, command: string, args: string[], envelope: unknown, extra: string[] = []) {
   const masks = existingMasks(sandbox);
   return {
     command: sandbox.launcher[0],
-    args: [...sandbox.launcher.slice(1), '--die-with-parent', '--unshare-pid', '--dev-bind', '/', '/', '--proc', '/proc',
+    args: [...sandbox.launcher.slice(1), '--die-with-parent', '--unshare-pid', ...extra, '--dev-bind', '/', '/', '--proc', '/proc',
       ...maskArgs(masks), ...attachmentArgs(sandbox, masks, envelope), command, ...args]
   };
 }
@@ -489,6 +494,195 @@ function runHandler(session: ProgramSession, envelope: unknown, timeoutMs: numbe
   });
 }
 
+// ---- capture-time prepare (opportunistic, no secrets, no network) -----------
+// One optional program entrypoint the loop may run once per captured set. Its
+// stdout is opaque to this harness: it is only bound to the attachments it was
+// given and written under work. A turn child treats every file as untrusted.
+
+export const PREPARE_TIMEOUT_MS = 10000;
+export const PREPARE_MAX_ARTIFACTS = 16;
+export const PREPARE_ARTIFACT_BYTES = 256 * 1024;
+export const PREPARE_KEEP_MS = 60 * 60 * 1000;
+export const PREPARE_KEEP_FILES = 64;
+export const PREPARED_DIR = 'prepared';
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+export function preparedName(sourceMessageId: string, revision: number, sha256: string) {
+  return `${String(sourceMessageId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80)}.r${revision}.${sha256}.json`;
+}
+
+export type PrepareMessage = {
+  source_message_id?: unknown; revision?: unknown;
+  attachments?: { sha256?: unknown; path?: unknown; mime?: unknown; bytes?: unknown; filename?: unknown; download_failed?: unknown }[];
+};
+export type PrepareOutcome = { status: 'ready' | 'failed' | 'timeout' | 'cancelled' | 'absent'; artifacts: string[]; ms: number; detail?: string };
+
+export function preparable(messages: PrepareMessage[]) {
+  const kept = [];
+  for (const message of messages) {
+    const attachments = (message.attachments ?? []).filter((one) => typeof one.path === 'string' && one.download_failed !== true
+      && typeof one.sha256 === 'string' && SHA256_PATTERN.test(one.sha256));
+    if (attachments.length > 0 && typeof message.source_message_id === 'string' && Number.isInteger(message.revision)) {
+      kept.push({ source_message_id: message.source_message_id, revision: message.revision as number,
+        attachments: attachments.map((one) => ({ sha256: one.sha256, path: one.path, mime: one.mime ?? null, bytes: one.bytes ?? null, filename: one.filename ?? null })) });
+    }
+  }
+  return kept;
+}
+
+// work/ is writable by every sandboxed child, including a background descendant
+// of an earlier turn, so nothing under it is trusted at any instant. The parent
+// therefore never resolves a path through work/prepared: it holds a descriptor on
+// work (taken at connect), opens `prepared` relative to it with O_NOFOLLOW |
+// O_DIRECTORY (a link or non-directory is refused, atomically), and does every
+// create, rename, list and unlink as a bare name inside that descriptor via
+// /proc/self/fd. Renaming or re-linking work/, work/prepared or an entry later
+// cannot redirect an operation, because the descriptor names the inode. Entries
+// are created O_EXCL | O_NOFOLLOW and removed only when the name is one this
+// harness writes and an lstat says it is a regular file; unlink and rename act on
+// the entry itself and never follow a link. Remaining trust boundary: the host
+// owns the ancestors of work/ when connect runs, and the child can still fill
+// work/prepared with its own files, which costs it only its own optimisation.
+const PREPARED_NAME = /^[A-Za-z0-9_-]{1,80}\.r\d+\.[0-9a-f]{64}\.json(\.\d+\.[0-9a-f]{16}\.tmp)?$/;
+const DIR_OPEN = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
+const FILE_CREATE = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+
+function pinWork(work: string): number | null {
+  try { return fs.openSync(fs.realpathSync(work), fs.constants.O_RDONLY | fs.constants.O_DIRECTORY); } catch { return null; }
+}
+
+function openPrepared(session: ProgramSession, create: boolean) {
+  if (session.stopped) throw new Error('session is stopped');
+  session.workFd ??= pinWork(session.work);
+  if (session.workFd === null) throw new Error('work is not a pinned directory');
+  const at = `/proc/self/fd/${session.workFd}/${PREPARED_DIR}`;
+  let fd: number;
+  try { fd = fs.openSync(at, DIR_OPEN); } catch (error) {
+    if (!create || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`work/prepared is not a real directory: ${(error as NodeJS.ErrnoException).code}`);
+    try { fs.mkdirSync(at); } catch (made) { if ((made as NodeJS.ErrnoException).code !== 'EEXIST') throw made; }
+    fd = fs.openSync(at, DIR_OPEN);
+  }
+  if (!fs.fstatSync(fd).isDirectory()) { fs.closeSync(fd); throw new Error('work/prepared is not a directory'); }
+  return { dir: `/proc/self/fd/${fd}`, close: () => fs.closeSync(fd) };
+}
+
+function removeIfOurs(dir: string, name: string) {
+  if (!PREPARED_NAME.test(name)) return;
+  try {
+    if (!fs.lstatSync(`${dir}/${name}`).isFile()) return;
+    fs.unlinkSync(`${dir}/${name}`);
+  } catch { /* best effort */ }
+}
+
+export function sweepPrepared(session: ProgramSession, now = Date.now()) {
+  let prepared: ReturnType<typeof openPrepared>;
+  try { prepared = openPrepared(session, false); } catch { return; }
+  try {
+    const rows = fs.readdirSync(prepared.dir).filter((name) => PREPARED_NAME.test(name)).flatMap((name) => {
+      try { const st = fs.lstatSync(`${prepared.dir}/${name}`); return st.isFile() ? [{ name, at: st.mtimeMs }] : []; } catch { return []; }
+    }).sort((a, b) => b.at - a.at);
+    rows.forEach((row, index) => {
+      if (index >= PREPARE_KEEP_FILES || now - row.at > PREPARE_KEEP_MS) removeIfOurs(prepared.dir, row.name);
+    });
+  } catch { /* best effort */ } finally { prepared.close(); }
+}
+
+export function discardPrepared(session: ProgramSession, files: string[]) {
+  if (files.length === 0) return;
+  let prepared: ReturnType<typeof openPrepared>;
+  try { prepared = openPrepared(session, false); } catch { return; }
+  try { for (const file of files) removeIfOurs(prepared.dir, path.basename(file)); } finally { prepared.close(); }
+}
+
+function bindArtifacts(text: string, sent: ReturnType<typeof preparable>) {
+  const doc = JSON.parse(text) as { schema?: unknown; artifacts?: unknown };
+  if (!doc || doc.schema !== 'carbon.program-prepare-result.v1' || !Array.isArray(doc.artifacts) || doc.artifacts.length > PREPARE_MAX_ARTIFACTS) {
+    throw new Error('prepare result is not carbon.program-prepare-result.v1 with a bounded artifacts list');
+  }
+  const allowed = new Set(sent.flatMap((m) => m.attachments.map((a) => `${m.source_message_id}\n${m.revision}\n${a.sha256}`)));
+  const seen = new Set<string>();
+  return doc.artifacts.map((item) => {
+    const row = item as { source_message_id?: unknown; revision?: unknown; sha256?: unknown; body?: unknown };
+    const key = `${String(row.source_message_id)}\n${String(row.revision)}\n${String(row.sha256)}`;
+    if (!allowed.has(key) || seen.has(key)) throw new Error('prepare artifact is not bound to a unique attachment it was given');
+    seen.add(key);
+    const content = JSON.stringify({ schema: 'carbon.program-prepared.v1', source_message_id: row.source_message_id,
+      revision: row.revision, sha256: row.sha256, body: row.body ?? null });
+    if (Buffer.byteLength(content) > PREPARE_ARTIFACT_BYTES) throw new Error('prepare artifact is over its size bound');
+    return { name: preparedName(row.source_message_id as string, row.revision as number, row.sha256 as string), content };
+  });
+}
+
+// Never rejects: a failed, slow or cancelled prepare is only a missing artifact.
+export function prepare(session: ProgramSession, messages: PrepareMessage[], options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<PrepareOutcome> {
+  const started = performance.now();
+  const done = (status: PrepareOutcome['status'], artifacts: string[] = [], detail?: string): PrepareOutcome =>
+    ({ status, artifacts, ms: Math.round(performance.now() - started), ...(detail ? { detail } : {}) });
+  const sent = preparable(messages);
+  if (!session.prepareEntrypoint || sent.length === 0) return Promise.resolve(done('absent'));
+  if (session.stopped || options.signal?.aborted) return Promise.resolve(done('cancelled'));
+  sweepPrepared(session);
+  const envelope = { schema: 'carbon.program-prepare.v1', work: session.work, messages: sent };
+  // Same sandbox as a turn, plus no network; env carries no delivered secret.
+  const spawned = sandboxedSpawn(session.sandbox, process.execPath, [session.prepareEntrypoint], envelope, ['--unshare-net']);
+  const timeoutMs = Math.min(options.timeoutMs ?? PREPARE_TIMEOUT_MS, session.timeoutMs);
+  return new Promise<PrepareOutcome>((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(spawned.command, spawned.args, { cwd: session.work, env: childEnv({}), stdio: ['pipe', 'pipe', 'ignore'], detached: true });
+    } catch (error) { resolve(done('failed', [], (error as Error).message)); return; }
+    session.active.add(child);
+    let stdout = Buffer.alloc(0);
+    let settled = false;
+    const finish = (outcome: PrepareOutcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
+      killGroup(child);
+      session.active.delete(child);
+      resolve(outcome);
+    };
+    const onAbort = () => finish(done('cancelled'));
+    const timer = setTimeout(() => finish(done('timeout')), timeoutMs);
+    options.signal?.addEventListener('abort', onAbort);
+    child.stdout!.on('data', (chunk: Buffer) => {
+      stdout = Buffer.concat([stdout, chunk]);
+      if (stdout.length > OUTPUT_CAP) finish(done('failed', [], 'prepare stdout over cap'));
+    });
+    child.stdin!.on('error', () => { /* the close path reports the exit */ });
+    child.on('error', (error) => finish(done('failed', [], error.message)));
+    child.on('close', (code) => {
+      if (settled) return;
+      if (session.stopped) { finish(done('cancelled')); return; }
+      if (code !== 0) { finish(done('failed', [], `prepare exited ${code}`)); return; }
+      try {
+        const bound = bindArtifacts(stdout.toString('utf8'), sent);
+        const prepared = openPrepared(session, true);
+        const files: string[] = [];
+        try {
+          for (const item of bound) {
+            const tmp = `${prepared.dir}/${item.name}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+            let fd: number;
+            try { fd = fs.openSync(tmp, FILE_CREATE, 0o600); } catch (error) { throw new Error(`prepared temp refused: ${(error as NodeJS.ErrnoException).code}`); }
+            try {
+              try { fs.writeFileSync(fd, item.content); } finally { fs.closeSync(fd); }
+              fs.renameSync(tmp, `${prepared.dir}/${item.name}`);
+            } catch (error) { try { fs.unlinkSync(tmp); } catch { /* gone */ } throw error; }
+            files.push(path.join(session.work, PREPARED_DIR, item.name));
+          }
+        } catch (error) {
+          for (const file of files) removeIfOurs(prepared.dir, path.basename(file));
+          throw error;
+        } finally { prepared.close(); }
+        finish(done('ready', files));
+      } catch (error) { finish(done('failed', [], (error as Error).message)); }
+    });
+    if (session.stopped) { finish(done('cancelled')); return; }
+    child.stdin!.end(JSON.stringify(envelope));
+  });
+}
+
 export async function connect(options: {
   checkout?: string; work?: string; declaration?: ProgramDeclaration;
   binary?: string; codexHome?: string; sandboxDeny?: SandboxGate; storeDir?: string; onEvent?: (event: unknown) => unknown; onStderr?: () => void;
@@ -509,13 +703,20 @@ export async function connect(options: {
     sandbox,
     active: new Set(),
     lastSpawn: null,
+    prepareEntrypoint: declaration.harness?.prepare_entrypoint === undefined
+      ? null : resolveEntrypoint(options.checkout, declaration.harness.prepare_entrypoint),
+    workFd: pinWork(work),
+    stopped: false,
     stop() {
+      session.stopped = true;
       for (const child of session.active) killGroup(child);
+      if (session.workFd !== null) { try { fs.closeSync(session.workFd); } catch { /* closed */ } session.workFd = null; }
       resolveExit({ code: 0, signal: null });
       return Promise.resolve();
     },
     exit
   };
+  sweepPrepared(session);
   return session;
 }
 

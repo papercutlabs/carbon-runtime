@@ -43,7 +43,7 @@ export type Declaration = {
   channels?: Channel[];
   secrets?: { name: string; path: string; purpose?: string }[];
   provider?: { name?: string; auth?: string; api_key_ref?: string; api_key_via?: string };
-  harness?: { kind?: string; version?: unknown; entrypoint?: unknown; secret_refs?: unknown };
+  harness?: { kind?: string; version?: unknown; entrypoint?: unknown; prepare_entrypoint?: unknown; secret_refs?: unknown };
   model?: string;
   effort?: string;
   sandbox?: { mode?: string; network?: boolean };
@@ -110,6 +110,8 @@ export type Harness<S = Session, I = CodexInput> = {
   // harness without it records nothing and runs as before.
   readAccount?(session: S, options: { timeoutMs: number }): Promise<AccountRead>;
   rateLimitsFrom?(snapshot: unknown): RateLimitsRecord | null;
+  prepare?(session: S, messages: unknown[], options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<{ status: string; artifacts: string[]; ms: number; detail?: string }>;
+  discardPrepared?(session: S, files: string[]): void;
 };
 export type TeachHandle = { setRelease(id: string | null): void };
 export type TurnOptions = { store?: Store | null; checkout?: string | null; declaration?: Declaration | null };

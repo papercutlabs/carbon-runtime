@@ -44,6 +44,7 @@ import type { Fields, Context, Transport, ArrivedItem, Media, FetchedMedia } fro
 // the retained set is the single authority for the waiting, the downloads, the
 // handoff and the watermark that follows it.
 
+import { createHash } from 'node:crypto';
 import { fault } from '../../stream/faults.ts';
 import { ALLOWED_UPDATES, ATTACHMENT_TOO_LARGE, DEFAULT_API_HOST, TelegramFault, call, download, readToken } from './api.ts';
 import { albumOf, mediaOf, messageOf } from './content.ts';
@@ -138,12 +139,12 @@ const SOURCE_ID_CAP = 8;
 // One record in the runtime log under its own event name. Ids are Telegram
 // update ids only: no text, bytes, token or file path. Both clocks are this
 // process's performance.now(), so a duration is one clock's difference.
-function emit(entry: PollEntry, context: Context, stage: string, ids: unknown[], started: number, status: string) {
+function emit(entry: PollEntry, context: Context, stage: string, ids: unknown[], started: number, status: string, extra: Fields = {}) {
   try {
     context.log?.({
       event: 'latency_experiment', schema: LATENCY_SCHEMA, run_id: entry.run_id, variant: 'default', stage,
       source_ids: ids.filter((id) => Number.isSafeInteger(id)).slice(0, SOURCE_ID_CAP), source_count: ids.length,
-      started_monotonic_ms: Math.round(started * 1000) / 1000, ended_monotonic_ms: Math.round(performance.now() * 1000) / 1000, status
+      started_monotonic_ms: Math.round(started * 1000) / 1000, ended_monotonic_ms: Math.round(performance.now() * 1000) / 1000, status, ...extra
     });
   } catch { return; /* a log fault must not fail the poll */ }
 }
@@ -359,7 +360,7 @@ async function settledBatch(entry: PollEntry, transport: Transport, context: Con
       timeout: requestTimeout,
       allowed_updates: ALLOWED_UPDATES
     }, { timeoutMs: (requestTimeout + 20) * 1000, signal: entry.ending.signal });
-    remember(entry, updates);
+    remember(entry, context, updates);
     const items = retained(entry, offset);
     // Downloads start as members are first seen, inside the album window, and are
     // never awaited here: this loop must make its next same-offset ask on time.
@@ -387,7 +388,7 @@ async function settledBatch(entry: PollEntry, transport: Transport, context: Con
 // it: the first sighting is what the album window is measured from, and a repeat
 // that reset it would hold an album open for as long as the server kept
 // repeating it.
-function remember(entry: PollEntry, updates: unknown) {
+function remember(entry: PollEntry, context: Context, updates: unknown) {
   // Iterate the provider value unchanged: a non-iterable still throws here.
   // This assertion describes the attempted operation, not a validated result.
   for (const update of updates as Iterable<unknown>) {
@@ -400,7 +401,29 @@ function remember(entry: PollEntry, updates: unknown) {
       received_at: new Date().toISOString(),
       update
     });
+    sightAlbumMember(entry, context, update);
   }
+}
+
+// One record per newly remembered album update: the hash of the group id (no
+// content) and the poll-side gap from the earliest sighting this worker still
+// remembers for that group. Not a send-side arrival gap; a member whose earlier
+// siblings were already confirmed measures from the earliest one left.
+function sightAlbumMember(entry: PollEntry, context: Context, update: unknown) {
+  try {
+    const album = albumOf(messageOf(update).message);
+    if (album === null) return;
+    const own = entry.sighted.get((update as Fields).update_id)!;
+    let first = own;
+    for (const [id, item] of entry.seen) {
+      if (albumOf(messageOf(item.update).message) !== album) continue;
+      first = Math.min(first, entry.sighted.get(id) ?? own);
+    }
+    emit(entry, context, 'album-member-sighted', [(update as Fields).update_id], own, 'ok', {
+      album_ref: createHash('sha256').update(album).digest('hex').slice(0, 16),
+      gap_from_first_ms: Math.round((own - first) * 1000) / 1000
+    });
+  } catch { return; /* instrumentation must not fail the poll */ }
 }
 
 // Fetch attachments only after the update membership has settled. A getFile call
