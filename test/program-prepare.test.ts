@@ -15,7 +15,7 @@ import type { Declaration, Channel } from '../runtime/types.ts';
 const probe = spawnSync('setpriv', ['--no-new-privs', 'bwrap', '--die-with-parent', '--unshare-pid', '--unshare-net',
   '--dev-bind', '/', '/', '--proc', '/proc', '/bin/true'], { timeout: 5000, encoding: 'utf8' });
 const skip = probe.status === 0 ? false
-  : `runner cannot start bwrap with --unshare-pid --unshare-net: ${probe.error?.message ?? probe.stderr.trim()}`;
+  : `runner cannot start the required bwrap PID namespace: combined --unshare-pid and --unshare-net probe failed: ${probe.error?.message ?? probe.stderr.trim()}`;
 const sessions: { stop(): Promise<unknown> }[] = [];
 afterEach(async () => { await Promise.all(sessions.splice(0).map((session) => session.stop())); });
 const sandboxTest = (name: string, fn: (t: TestContext) => void | Promise<void>) => test(name, { skip, timeout: 40000 }, fn);
