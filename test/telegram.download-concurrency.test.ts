@@ -132,7 +132,7 @@ test('timing records are readable log lines: schema, stages, monotonic order, bo
     await arrivals(r.context);
     await waitForBatch(r.context);
     const stages = new Set(latency(r.lines).map((l) => l.stage));
-    assert.deepEqual([...stages].sort(), ['batch-ready', 'collection', 'download']);
+    assert.deepEqual([...stages].sort(), ['album-member-sighted', 'batch-ready', 'collection', 'download']);
     for (const l of latency(r.lines)) {
       assert.equal(l.schema, 'carbon.latency-experiment.v1');
       assert.ok((l.ended_monotonic_ms as number) >= (l.started_monotonic_ms as number));
@@ -142,6 +142,7 @@ test('timing records are readable log lines: schema, stages, monotonic order, bo
     assert.equal(latency(r.lines, 'collection').length, 1);
     assert.equal(latency(r.lines, 'collection')[0].source_count, 12);
     assert.equal(latency(r.lines, 'download').length, 12);
+    assert.equal(latency(r.lines, 'album-member-sighted').length, 12);
     const text = JSON.stringify(r.lines);
     assert.ok(!text.includes(TOKEN) && !text.includes('files/') && !text.includes('/file/bot'));
   } finally { r.done(); }

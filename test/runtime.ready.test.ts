@@ -209,7 +209,7 @@ test('SIMULATED: album with eager downloads and ready hint releases once, in ord
     assert.deepEqual(inbound.map((r) => r.platform_message_id ?? r.message_id).length, 3);
     assert.deepEqual(records.filter((r) => r.direction === 'outbound').map((r) => r.delivery?.status), ['sent']);
     const mine = lines.filter((l) => l.event === 'latency_experiment');
-    assert.deepEqual([...new Set(mine.map((l) => l.stage))].sort(), ['batch-ready', 'capture-admission', 'collection', 'download']);
+    assert.deepEqual([...new Set(mine.map((l) => l.stage))].sort(), ['album-member-sighted', 'batch-ready', 'capture-admission', 'collection', 'download']);
     assert.equal(mine.filter((l) => l.stage === 'download').length, 3);
     assert.ok(started > 0 && Date.now() - started < INTERVAL);
     // hint woke the sweep: the turn began well inside the 3000 ms interval of a single poll

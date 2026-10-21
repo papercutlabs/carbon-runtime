@@ -13,7 +13,73 @@ type Candidate = { record: Record<string, unknown>; attachments?: unknown[]; raw
 type ParkedCandidate = Candidate & { reason: string };
 type ReleaseGroup = { records: MessageRecord[]; reissue: boolean; releaseId: string | null; unitId?: string };
 type TurnIdentity = { unitId: string; threadId: string; releaseId: string };
-type ReleaseTurnOptions = Omit<TurnIdentity, 'releaseId'> & { reissue: boolean; releaseId?: string | null };
+type ReleaseTurnOptions = Omit<TurnIdentity, 'releaseId'> & { reissue: boolean; releaseId?: string | null; trace?: ReleaseTrace };
+
+// Experiment timing for the interval between releaseOne starting on a release group
+// and its `release` log line (PA-241). Same event and process clock as the capture
+// record; outside the turn log. Correlation is the Carbon release_id and message_ids
+// (the same values the `release` line carries), never a Telegram update id.
+// The enclosing stage `release-group-to-release` begins at releaseOne entry, AFTER
+// batch-ready, capture-admission and the releasePass scan; that earlier interval is
+// not instrumented. Bound it from existing records: batch-ready.ended_monotonic_ms
+// (and capture-admission.ended_monotonic_ms) to this stage's started_monotonic_ms,
+// same process clock. Do not read this stage as the whole batch-ready-to-release gap.
+// Status `held` means releaseOne returned without releasing (hold/proxy/records
+// fault); `ok` means the `release` line was written; `error` means it threw first.
+// A throw after the `release` line keeps status `ok`: the stage is already closed.
+// Trace output never alters control flow: a throwing logger is swallowed.
+export type ReleaseTrace = {
+  span: <T>(stage: string, run: () => T, extra?: Record<string, unknown>) => T;
+  note: (fields: Record<string, unknown>) => void;
+  finish: (status?: 'ok' | 'error' | 'held') => void;
+};
+
+const NO_TRACE: ReleaseTrace = { span: (_stage, run) => run(), note: () => {}, finish: () => {} };
+
+export function releaseTracer(log: Log, kind: string, releaseId: string, messageIds: string[]): ReleaseTrace {
+  const began = performance.now();
+  let attributed = 0;
+  let finished = false;
+  let notes: Record<string, unknown> = {};
+  const emit = (stage: string, started: number, ended: number, status: string, extra: Record<string, unknown>) => {
+    try { log({
+    event: 'latency_experiment', schema: 'carbon.latency-experiment.v1', run_id: `${kind}:release`, variant: 'default',
+    stage, release_id: releaseId, message_ids: messageIds.slice(0, 16), source_count: messageIds.length, pid: process.pid,
+    started_monotonic_ms: Math.round(started * 1000) / 1000, ended_monotonic_ms: Math.round(ended * 1000) / 1000, status, ...extra
+    }); } catch { return; /* tracing must not fail, park or retry work, or mask the original error */ }
+  };
+  const settle = (stage: string, started: number, status: string, extra: Record<string, unknown> | undefined) => {
+    const ended = performance.now();
+    attributed += ended - started;
+    emit(stage, started, ended, status, { ...extra });
+  };
+  return {
+    span: (stage, run, extra) => {
+      const started = performance.now();
+      let result;
+      try { result = run(); } catch (error) { settle(stage, started, 'error', extra); throw error; }
+      if (result && typeof (result as { then?: unknown }).then === 'function') {
+        return (result as unknown as Promise<unknown>).then(
+          (value) => { settle(stage, started, 'ok', extra); return value; },
+          (error) => { settle(stage, started, 'error', extra); throw error; }
+        ) as never;
+      }
+      settle(stage, started, 'ok', extra);
+      return result as never;
+    },
+    note: (fields) => { notes = { ...notes, ...fields }; },
+    finish: (status = 'ok') => {
+      if (finished) return;
+      finished = true;
+      const ended = performance.now();
+      emit('release-group-to-release', began, ended, status, {
+        ...notes,
+        attributed_ms: Math.round(attributed * 1000) / 1000,
+        unattributed_ms: Math.round((ended - began - attributed) * 1000) / 1000
+      });
+    }
+  };
+}
 type TakeTurnOptions = TurnIdentity & { input: TurnInput; clientUserMessageId: string };
 type EnsureReplyOptions = TurnIdentity & { records?: MessageRecord[]; result: TurnResult; completedAt: string };
 
@@ -538,8 +604,19 @@ function codexInputOnly(input: TurnInput, releaseId: string): CodexInput {
     'a program release envelope reached a browser channel turn', 'program harnesses are not browser harnesses'));
 }
 
+// A release never waits for capture-time preparation: it takes what is already
+// bound and ready, and cancels the rest. Cancelling kills the child at once; this
+// only bounds how long the release waits to see that the cancel has landed.
+const PREPARE_CANCEL_DRAIN_MS = 1000;
+const PREPARE_TRACKED = 64;
+type PrepareJob = { done: Promise<unknown>; controller: AbortController; files: string[]; settled: boolean; outcome: { status: string; ms: number } | null };
+
 export class ReleaseLoop<S = Session> {
   declare prepareBrowserTurn: BrowserPreparation | undefined;
+  declare prepareActive: boolean;
+  declare proxyBranch: string;
+  declare prepareSeen: Set<string>;
+  declare prepareJobs: Map<string, PrepareJob>;
   declare declaration: Declaration;
   declare channel: Channel;
   declare store: Store;
@@ -566,6 +643,7 @@ export class ReleaseLoop<S = Session> {
   declare intervalMs: number | undefined;
   declare afterTurn: () => void;
   declare collectedSynced: boolean;
+  declare syncStats: { mode: string; candidates: number; posted: number; rebuild_ms: number } | null;
   declare recordsActionUrl: string | undefined;
   declare stopping: () => boolean;
   declare browserThreadOptions: BrowserThreadOptions | undefined;
@@ -587,6 +665,10 @@ export class ReleaseLoop<S = Session> {
     }
     this.declaration = declaration;
     this.prepareBrowserTurn = prepareBrowserTurn;
+    this.prepareActive = false;
+    this.proxyBranch = 'unchecked';
+    this.prepareSeen = new Set();
+    this.prepareJobs = new Map();
     this.browserThreadOptions = browserThreadOptions;this.browserEvidenceHooks=browserEvidenceHooks;
     if (channel.kind === 'browser') {
       const wrong = declaration.unit_of_work?.kind !== 'conversation' || channel.default_conversation_kind !== 'ops'
@@ -601,6 +683,7 @@ export class ReleaseLoop<S = Session> {
         'browser isolation must deny authoritative store and native sessions', 'place browser-qualified requirements through the host contract'));
     }
     this.collectedSynced = false;
+    this.syncStats = null;
     this.recordsActionUrl = recordsActionUrl;
     // Null only where a caller builds a loop by hand; run() always passes the gate.
     this.sandboxDeny = sandboxDeny;
@@ -796,7 +879,7 @@ export class ReleaseLoop<S = Session> {
   // a fresh thread: a thread that has never taken a turn has no rollout on disk
   // and cannot be resumed, so resuming it is an error where starting again is
   // free.
-  async threadFor(unitId: string): Promise<unknown> {
+  async threadFor(unitId: string, trace?: ReleaseTrace): Promise<unknown> {
     if (this.sandboxDeny) checkSandboxDeny(this.sandboxDeny, 'before a thread was opened or resumed');
     if (this.channel.kind === 'browser' && this.sandboxDeny && this.declaration.sandbox?.mode === 'read-only') {
       const unexpected = fs.readdirSync(this.work).filter((name) => name !== 'AGENTS.md' && name !== '.agents');
@@ -805,7 +888,7 @@ export class ReleaseLoop<S = Session> {
         'place a clean client-guidance work directory; keep ticket/source/companion files in their denied private roots'));
     }
 
-    if (this.threads.has(unitId)) return this.threads.get(unitId);
+    if (this.threads.has(unitId)) { trace?.note({ thread: 'cached' }); return this.threads.get(unitId); }
     // Thread state is not schema-validated. These local operation fields preserve its old use.
     const existing = this.store.readThread(unitId) as { thread_id?: unknown; completed_turns: number } | null;
     const workspace = this.channel.kind === 'browser' && this.declaration.sandbox?.mode === 'workspace-write'
@@ -824,17 +907,21 @@ export class ReleaseLoop<S = Session> {
     };
     let threadId;
     if (existing && existing.thread_id && existing.completed_turns > 0) {
-      await this.harness.resumeThread(this.session, { ...opening, threadId: existing.thread_id as string }); // Only the harness operation assumes an id; persisted values remain unknown.
+      const resume = () => this.harness.resumeThread(this.session, { ...opening, threadId: existing.thread_id as string });
+      trace?.note({ thread: 'resumed' });
+      await (trace ? trace.span('thread-resume', resume) : resume()); // Only the harness operation assumes an id; persisted values remain unknown.
       threadId = existing.thread_id;
       this.log({ event: 'thread.resumed', unit_id: unitId, thread_id: threadId });
     } else {
-      const record = await this.harness.openThread(this.session, opening);
+      trace?.note({ thread: 'opened' });
+      const record = await (trace ? trace.span('thread-open', () => this.harness.openThread(this.session, opening)) : this.harness.openThread(this.session, opening));
       threadId = record.thread_id;
       this.store.writeThread(unitId, { ...this.store.readThread(unitId), ...record, completed_turns: 0, turns: [] });
       this.log({ event: 'thread.opened', unit_id: unitId, thread_id: threadId });
     }
     this.threads.set(unitId, threadId);
-    await this.readToolServerStatus(threadId);
+    const firstRead = !this.toolStatusRead;
+    await (trace ? trace.span('tool-status', () => this.readToolServerStatus(threadId), { first_read: firstRead }) : this.readToolServerStatus(threadId));
     return threadId;
   }
 
@@ -898,9 +985,10 @@ export class ReleaseLoop<S = Session> {
   // again before every turn, and while nothing answers, release is held by name.
   async checkProviderProxy() {
     const via = this.declaration.provider?.api_key_via;
-    if (!via) return (this.proxyFaults = []);
+    if (!via) { this.proxyBranch = 'no-api-key-via'; return (this.proxyFaults = []); }
     const server = (this.declaration.tool_servers ?? []).find((s) => s.name === via);
     const up = server?.url ? await this.probe(server.url) : false;
+    this.proxyBranch = !server?.url ? 'no-server-url' : up ? 'probed-up' : 'probed-down';
     this.proxyFaults = up ? [] : [fault('PROVIDER_PROXY_DOWN', `tool_servers.${via}`,
       `the provider proxy does not answer on ${server?.url ?? 'its url'}, so a turn now would wait on a provider it cannot reach`,
       `read the unit: systemctl status carbon-tool@${this.declaration.agent?.id}-${via}. Release is held until it answers.`)];
@@ -1038,7 +1126,12 @@ export class ReleaseLoop<S = Session> {
 
   async syncCollected(captured: MessageRecord[]) {
     if (this.declaration.records?.enabled !== true) return;
+    const rebuildStarted = performance.now();
     const candidates = this.collectedSynced ? captured : this.store.rebuild();
+    // candidates: records examined (the whole store on the first call, so it includes outbound
+    // and historical records); posted: inbound records actually POSTed to the records service.
+    this.syncStats = { mode: this.collectedSynced ? 'incremental' : 'full-store', candidates: candidates.length, posted: 0,
+      rebuild_ms: Math.round((performance.now() - rebuildStarted) * 1000) / 1000 };
     for (const record of candidates) {
       if (record.direction !== 'inbound' || record.historical
         || !/^[a-z][a-z0-9_-]{0,63}$/.test(record.source)) continue;
@@ -1051,6 +1144,7 @@ export class ReleaseLoop<S = Session> {
       }
       await recordCollectedEvent({ source_id: record.message_id, channel: record.source, unit },
         { baseUrl: this.recordsActionUrl });
+      this.syncStats.posted++;
     }
     this.collectedSynced = true;
   }
@@ -1116,6 +1210,76 @@ export class ReleaseLoop<S = Session> {
     }
     for (const item of pending) adapter.consume(this.context(items), item);
     return { captured, parked: parked.map((p) => p.record.message_id) };
+  }
+
+  // ---- capture-time preparation ---------------------------------------------
+  // Opportunistic and never awaited by capture: one secret-less, network-less
+  // child per loop for a newly captured set. A failure, timeout or cancel is a
+  // missing artifact and the handler does the work itself.
+
+  // Called from pass() after the capture timing record. Nothing here may throw
+  // into the pass: a preparation fault is a log line and an ordinary release.
+  startPrepare(captured: MessageRecord[]) {
+    try { this.beginPrepare(captured); } catch (error) {
+      try { this.log({ event: 'prepare', status: 'failed', detail: String((error as Error)?.message ?? error).slice(0, 200) }); } catch { return; /* logging must not fail the pass */ }
+    }
+  }
+
+  beginPrepare(captured: MessageRecord[]) {
+    const harnessDeclaration = this.declaration.harness;
+    if (harnessDeclaration?.kind !== 'program' || harnessDeclaration.prepare_entrypoint === undefined) return;
+    const harness = this.harness as { prepare?: (session: S, messages: unknown[], options: { signal: AbortSignal }) => Promise<{ status: string; artifacts: string[]; ms: number; detail?: string }> };
+    if (typeof harness.prepare !== 'function' || this.prepareActive || this.stopping()) return;
+    const fresh = captured.filter((record) => !this.prepareSeen.has(`${record.message_id}@${record.revision ?? 0}`)
+      && ((record.attachments ?? []) as { file?: unknown; download_failed?: boolean }[]).some((one) => typeof one.file === 'string' && one.download_failed !== true));
+    if (fresh.length === 0) return;
+    if (this.prepareSeen.size > PREPARE_TRACKED * 4) this.prepareSeen.clear();
+    for (const record of fresh) this.prepareSeen.add(`${record.message_id}@${record.revision ?? 0}`);
+    const messages = programReleaseInput(fresh, { releaseId: 'prepare', threadId: 'prepare', store: this.store, checkout: this.checkout, work: this.work }).messages;
+    const controller = new AbortController();
+    const job: PrepareJob = { done: Promise.resolve(), controller, files: [], settled: false, outcome: null };
+    this.prepareActive = true;
+    const ids = fresh.map((one) => one.message_id);
+    job.done = Promise.resolve().then(() => harness.prepare!(this.session, messages, { signal: controller.signal }))
+      .then((outcome) => {
+        job.files = outcome.artifacts;
+        job.outcome = { status: outcome.status, ms: outcome.ms };
+        this.log({ event: 'prepare', status: outcome.status, ms: outcome.ms, message_ids: ids, ...(outcome.detail ? { detail: outcome.detail } : {}) });
+      }, (error: unknown) => {
+        job.outcome = { status: 'failed', ms: 0 };
+        this.log({ event: 'prepare', status: 'failed', message_ids: ids, detail: String((error as Error)?.message ?? error).slice(0, 200) });
+      })
+      .catch(() => { /* a throwing logger must not leave the job unsettled or unhandled */ })
+      .finally(() => { job.settled = true; this.prepareActive = false; });
+    for (const record of fresh) this.prepareJobs.set(record.message_id, job);
+    while (this.prepareJobs.size > PREPARE_TRACKED) this.prepareJobs.delete(this.prepareJobs.keys().next().value as string);
+  }
+
+  // Never waits for a running child and never throws. Returns the artifacts of
+  // jobs that were already ready; a job still running is cancelled and its
+  // release falls back to ordinary work. The log line reports what happened.
+  async joinPrepare(messageIds: string[]) {
+    const began = performance.now();
+    try {
+      const jobs = [...new Set(messageIds.flatMap((id) => this.prepareJobs.get(id) ?? []))];
+      for (const id of messageIds) this.prepareJobs.delete(id);
+      if (jobs.length === 0) return [] as string[];
+      const running = jobs.filter((job) => !job.settled);
+      for (const job of running) job.controller.abort();
+      if (running.length > 0) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([Promise.all(running.map((job) => job.done)),
+          new Promise((resolve) => { timer = setTimeout(resolve, PREPARE_CANCEL_DRAIN_MS); })]);
+        clearTimeout(timer);
+      }
+      const rows = jobs.map((job) => ({ status: running.includes(job) ? 'abandoned' : job.outcome?.status ?? 'failed', prepare_ms: job.outcome?.ms ?? null }));
+      const status = rows.find((row) => row.status !== 'ready')?.status ?? 'ready';
+      this.log({ event: 'prepare.join', status, jobs: rows, join_ms: Math.round((performance.now() - began) * 1000) / 1000 });
+      const keep = jobs.filter((job) => !running.includes(job)).flatMap((job) => job.files);
+      const drop = running.flatMap((job) => job.files);
+      (this.harness as { discardPrepared?: (session: S, files: string[]) => void }).discardPrepared?.(this.session, drop);
+      return keep;
+    } catch { return [] as string[]; }
   }
 
   // ---- release ------------------------------------------------------------
@@ -1258,34 +1422,52 @@ export class ReleaseLoop<S = Session> {
     const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
     const record = records[0];
     unitId ??= unitIdFor(this.declaration, record);
-    const threadId = await this.threadFor(unitId);
-    if (this.holdFaults.length > 0) return null;
-    if ((await this.checkProviderProxy()).length > 0) return null;
-    if (!(await this.syncCollectedOrHold(records))) return null;
-    const typing = startTyping({
-      adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
-    });
+    // Only the program harness is under experiment; other harnesses and channels log nothing new.
+    const trace = this.declaration.harness?.kind === 'program'
+      ? releaseTracer(this.log, this.channel.kind, releaseId ?? releaseIdFor(records), records.map((r) => r.message_id)) : NO_TRACE;
     try {
-      return await this.releaseTurn(records, { unitId, threadId: threadId as string, reissue, releaseId }); // Operation-local id contract; threadFor itself returns unknown.
+      const threadId = await this.threadFor(unitId, trace);
+      if (this.holdFaults.length > 0) { trace.finish('held'); return null; }
+      const proxyFaults = await this.checkProviderProxy();
+      trace.note({ proxy: this.proxyBranch });
+      if (proxyFaults.length > 0) { trace.finish('held'); return null; }
+      this.syncStats = null;
+      const synced = await trace.span('records-sync', () => this.syncCollectedOrHold(records),
+        this.declaration.records?.enabled === true ? { disposition: 'enabled' } : { disposition: 'disabled' });
+      trace.note({ records_sync: this.syncStats ?? { mode: 'disabled' } });
+      if (!synced) { trace.finish('held'); return null; }
+      const typing = trace.span('typing-start', () => startTyping({
+        adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
+      }));
+      try {
+        return await this.releaseTurn(records, { unitId, threadId: threadId as string, reissue, releaseId, trace }); // Operation-local id contract; threadFor itself returns unknown.
+      } finally {
+        typing.stop();
+      }
+    } catch (error) {
+      trace.finish('error');
+      throw error;
     } finally {
-      typing.stop();
+      trace.finish();
     }
   }
 
-  async releaseTurn(recordOrRecords: RecordOrRecords, { unitId, threadId, reissue, releaseId = null }: ReleaseTurnOptions) {
+  async releaseTurn(recordOrRecords: RecordOrRecords, { unitId, threadId, reissue, releaseId = null, trace }: ReleaseTurnOptions) {
     const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
     const record = records[0];
     releaseId ??= releaseIdFor(records);
     const messageIds = records.map((r) => r.message_id);
 
-    const input = this.declaration.harness?.kind === 'program'
+    const buildInput = () => this.declaration.harness?.kind === 'program'
       ? programReleaseInput(records, { releaseId, threadId, store: this.store, checkout: this.checkout, work: this.work })
       : turnInput(this.channel.kind === 'browser' && record.adapter_fields?.input_kind ? records.map((one) => ({ ...one, attachments: [] })) : records, releaseId, { store: this.store, checkout: this.checkout, declaration: this.declaration });
+    const input = trace ? trace.span('program-input', buildInput, { harness: this.declaration.harness?.kind ?? 'codex' }) : buildInput();
     // Written before the turn, always. A restart reads this and knows the model
     // was asked; the record's own turn_id is the release id, because that is the
     // only identifier that exists before turn/start and it is the one the reply
     // is fenced on. The harness's turn id is written on the thread record, where
     // the transcript is.
+    const writeReleases = () => {
     if (!reissue) {
       const releasedAt = new Date(this.now()).toISOString();
       for (const one of records) {
@@ -1302,10 +1484,13 @@ export class ReleaseLoop<S = Session> {
         });
       }
     }
+    };
+    if (trace) trace.span('release-write', writeReleases, { reissue }); else writeReleases();
     this.log({
       event: 'release', message_ids: messageIds, message_id: record.message_id,
       release_id: releaseId, thread_id: threadId, reissue
     });
+    trace?.finish();
 
     if (this.declaration.records?.enabled === true) {
       const admissionStarted = performance.now();
@@ -1315,6 +1500,7 @@ export class ReleaseLoop<S = Session> {
         waited_ms: Math.round(performance.now() - admissionStarted) });
     }
     let taken: Awaited<ReturnType<typeof this.takeTurn>>;
+    const preparedFiles = await this.joinPrepare(messageIds);
     try {
       taken = await this.takeTurn({
         unitId, threadId, releaseId,
@@ -1322,6 +1508,7 @@ export class ReleaseLoop<S = Session> {
         clientUserMessageId: releaseId
       });
     } finally {
+      (this.harness as { discardPrepared?: (session: S, files: string[]) => void }).discardPrepared?.(this.session, preparedFiles);
       if (this.declaration.records?.enabled === true) {
         await endRecordsTurn(releaseId, { baseUrl: this.recordsActionUrl });
       }
@@ -1812,6 +1999,7 @@ export class ReleaseLoop<S = Session> {
         stage: 'capture-admission', source_ids: [], source_count: Number((polled.items as { length: number }).length) || 0,
         started_monotonic_ms: Math.round(captureStart * 1000) / 1000, ended_monotonic_ms: Math.round(performance.now() * 1000) / 1000, status: 'ok' });
     }
+    this.startPrepare(captured.captured as MessageRecord[]);
     const recovered = this.recovering ?? { reissue: [] };
     this.recovering = null;
     const released = await this.releasePass({ reissue: recovered.reissue });
