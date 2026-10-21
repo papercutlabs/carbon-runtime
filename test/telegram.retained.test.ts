@@ -86,7 +86,7 @@ test('a duplicated identifier and a repeated member are one item and do not exte
   }
 });
 
-test('a failed repeat ask loses no retained photo and fetches nothing before the album settles', async () => {
+test('a failed repeat ask loses no retained photo and fetches each once, eagerly', async () => {
   forget();
   const context = liveContext('carbon-telegram-retained-retry-');
   const album = Array.from({ length: 6 }, (_, index) =>
@@ -116,10 +116,7 @@ test('a failed repeat ask loses no retained photo and fetches nothing before the
     }
     assert.deepEqual([...new Set(server.asked.map((one) => one.offset))], [null],
       'an offset moved while the poll was failing');
-    const settledAt = server.asked.at(-1)!.at;
     assert.ok(server.media.length > 0);
-    assert.ok(Math.min(...server.media.map((one) => one.at)) >= settledAt,
-      'media was fetched before the membership settled');
     assert.equal(server.fetched.size, 6);
     assert.deepEqual([...new Set(server.fetched.values())], [1]);
   } finally {

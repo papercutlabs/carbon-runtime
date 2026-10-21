@@ -79,7 +79,76 @@ type PollEntry = {
   items: ArrivedItem[]; highest: number | null; worker: Promise<void> | null;
   stopped: boolean; ending: AbortController; fault: unknown; started_at: number | null;
   seen: Map<unknown, ArrivedItem>; media: Map<unknown, FetchedMedia | null>;
+  inflight: Map<unknown, Promise<FetchedMedia | null>>; sighted: Map<unknown, number>;
+  lanes: Lanes; ready: Set<() => void>; run_id: string;
+  spec: Map<unknown, Speculative>; abandoned: Set<unknown>;
 };
+type Speculative = { reserved: number; since: number; ctl: AbortController };
+
+// Download chains one account may have running at once. Fixed, not configuration.
+export const DOWNLOAD_CHAINS = 4;
+
+// Resource bound for speculative (eager, pre-settlement) downloads, in memory only:
+//  - at most SPECULATIVE_MEMBERS members cached or in flight and not yet handed to
+//    a settled batch (this also bounds the queue waiting for a lane);
+//  - at most SPECULATIVE_CHAINS x max_attachment_bytes of speculative bytes, counted
+//    as the provider's size (or the per-file limit if it gave none) until the body
+//    arrives, then as the actual length; a body over the per-file limit is oversize;
+//  - a speculative member older than SPECULATIVE_QUIET_FACTOR x album_quiet_ms that
+//    has not been handed to a settled batch is abandoned: its fetch is aborted, its
+//    buffer dropped, and it is never speculated again. The update itself stays
+//    retained, so cursors and holds are untouched and a later settlement fetches it
+//    normally. An over-budget body is dropped the same way, not cached as a failure.
+export const SPECULATIVE_MEMBERS = 16;
+export const SPECULATIVE_CHAINS = 4;
+const SPECULATIVE_QUIET_FACTOR = 20;
+
+// A bounded set of lanes. A waiter whose signal has ended leaves the queue and
+// never starts; a lane is handed straight to the next live waiter, so free +
+// held always equals DOWNLOAD_CHAINS.
+class Lanes {
+  #free = DOWNLOAD_CHAINS;
+  #queue: ((granted: boolean) => void)[] = [];
+  get free() { return this.#free; }
+  get queued() { return this.#queue.length; }
+  take(signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+    if (this.#free > 0) { this.#free -= 1; return Promise.resolve(true); }
+    return new Promise<boolean>((resolve) => {
+      const waiter = (granted: boolean) => { signal.removeEventListener('abort', onAbort); resolve(granted); };
+      const onAbort = () => {
+        const at = this.#queue.indexOf(waiter);
+        if (at >= 0) this.#queue.splice(at, 1);
+        resolve(false);
+      };
+      this.#queue.push(waiter);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+  give() {
+    const next = this.#queue.shift();
+    if (next) next(true); else this.#free = Math.min(DOWNLOAD_CHAINS, this.#free + 1);
+  }
+  release() { for (const next of this.#queue.splice(0)) next(false); }
+}
+export { Lanes };
+
+const LATENCY_SCHEMA = 'carbon.latency-experiment.v1';
+// Source ids named on one record; the count says how many there were.
+const SOURCE_ID_CAP = 8;
+
+// One record in the runtime log under its own event name. Ids are Telegram
+// update ids only: no text, bytes, token or file path. Both clocks are this
+// process's performance.now(), so a duration is one clock's difference.
+function emit(entry: PollEntry, context: Context, stage: string, ids: unknown[], started: number, status: string) {
+  try {
+    context.log?.({
+      event: 'latency_experiment', schema: LATENCY_SCHEMA, run_id: entry.run_id, variant: 'default', stage,
+      source_ids: ids.filter((id) => Number.isSafeInteger(id)).slice(0, SOURCE_ID_CAP), source_count: ids.length,
+      started_monotonic_ms: Math.round(started * 1000) / 1000, ended_monotonic_ms: Math.round(performance.now() * 1000) / 1000, status
+    });
+  } catch { return; /* a log fault must not fail the poll */ }
+}
 const channels = new Map<string, PollEntry>();
 
 function keyOf(context: Pick<Context, 'agent' | 'account'>) {
@@ -105,6 +174,7 @@ export async function stop(context: Pick<Context, 'agent' | 'account'>) {
   if (!entry) return;
   entry.stopped = true;
   entry.ending.abort();
+  entry.lanes.release();
   channels.delete(key);
   if (entry.worker) await entry.worker;
 }
@@ -112,7 +182,7 @@ export async function stop(context: Pick<Context, 'agent' | 'account'>) {
 // For a test, and for a process that stops one agent and starts another in the
 // same process, which nothing does today.
 export function forget() {
-  for (const entry of channels.values()) { entry.stopped = true; entry.ending.abort(); }
+  for (const entry of channels.values()) { entry.stopped = true; entry.ending.abort(); entry.lanes.release(); }
   channels.clear();
 }
 
@@ -132,7 +202,9 @@ function entryFor(context: Context) {
   if (!entry) {
     entry = {
       items: [], highest: null, worker: null, stopped: false, ending: new AbortController(), fault: null,
-      started_at: null, seen: new Map(), media: new Map()
+      started_at: null, seen: new Map(), media: new Map(),
+      inflight: new Map(), sighted: new Map(), lanes: new Lanes(), ready: new Set(), spec: new Map(), abandoned: new Set(),
+      run_id: `${key}:${Date.now().toString(36)}`
     };
     channels.set(key, entry);
   }
@@ -156,6 +228,36 @@ export async function arrivals(context: Context, retryWait: RetryWait = producti
     throw carried;
   }
   return entry.items.slice();
+}
+
+// Tell the runtime a settled, non-empty batch is waiting, so it need not sleep out
+// its interval. Only a hint: the batch is still handed over by `arrivals`, the
+// offset still moves only on consume, and a missed hint costs one interval.
+export function speculativeState(context: Pick<Context, 'agent' | 'account'>) {
+  const entry = channels.get(keyOf(context));
+  let bytes = 0;
+  for (const member of entry?.spec.values() ?? []) bytes += member.reserved;
+  return { members: entry?.spec.size ?? 0, bytes };
+}
+
+// A listener's fault is its own: it must not fail the poll, and the batch is
+// still handed over by `arrivals`. Returns whether the hint was delivered.
+function hint(listener: () => void) {
+  try { listener(); return true; } catch { return false; }
+}
+
+export function onReady(context: Context, listener: () => void) {
+  const entry = entryFor(context);
+  entry.ready.add(listener);
+  // A batch already waiting when the listener arrives gets its hint now, unless
+  // the listener left or the channel stopped first.
+  if (entry.items.length > 0) {
+    queueMicrotask(() => {
+      if (entry.stopped || !entry.ready.has(listener)) return;
+      hint(listener);
+    });
+  }
+  return () => { entry.ready.delete(listener); };
 }
 
 // The worker. One long poll at a time, and never one that would confirm an update
@@ -182,6 +284,7 @@ async function work(entry: PollEntry, context: Context, retryWait: RetryWait) {
       const { items } = await settledBatch(entry, transport, context, {
         offset, timeout, albumQuiet
       });
+      if (entry.stopped) break;
       entry.items = items;
       // The handed set is the only authority for the watermark. Reading it off
       // the last response instead would confirm updates this batch does not
@@ -192,6 +295,7 @@ async function work(entry: PollEntry, context: Context, retryWait: RetryWait) {
         // limited to its argument and does not type any provider field.
         Math.max(...items.map((item) => (item.update as Fields).update_id as number));
       entry.fault = null;
+      if (items.length > 0) for (const listener of [...entry.ready]) hint(listener);
     } catch (error) {
       entry.fault = error instanceof TelegramFault
         ? error
@@ -213,6 +317,11 @@ function dropConfirmed(entry: PollEntry, offset: number | null) {
   }
   for (const updateId of entry.media.keys()) {
     if ((updateId as number) < offset) entry.media.delete(updateId);
+  }
+  for (const updateId of [...entry.spec.keys()]) if ((updateId as number) < offset) entry.spec.delete(updateId);
+  for (const updateId of [...entry.abandoned]) if ((updateId as number) < offset) entry.abandoned.delete(updateId);
+  for (const updateId of entry.sighted.keys()) {
+    if ((updateId as number) < offset) entry.sighted.delete(updateId);
   }
 }
 
@@ -249,9 +358,18 @@ async function settledBatch(entry: PollEntry, transport: Transport, context: Con
     }, { timeoutMs: (requestTimeout + 20) * 1000, signal: entry.ending.signal });
     remember(entry, updates);
     const items = retained(entry, offset);
+    // Downloads start as members are first seen, inside the album window, and are
+    // never awaited here: this loop must make its next same-offset ask on time.
+    startEager(entry, transport, context, items);
     const remaining = albumWait(items, albumQuiet);
     if (remaining === 0) {
-      return { items: await withAttachments(entry, transport, context, items) };
+      const settled = performance.now();
+      const ids = items.map(idOf);
+      const first = Math.min(...items.map((item) => entry.sighted.get((item.update as Fields).update_id) ?? settled));
+      if (items.length > 0) emit(entry, context, 'collection', ids, first, 'ok');
+      const hydrated = await withAttachments(entry, transport, context, items);
+      if (items.length > 0) emit(entry, context, 'batch-ready', ids, settled, entry.stopped ? 'cancelled' : 'ok');
+      return { items: hydrated };
     }
     await sleep(Math.min(IDLE_MS, remaining), entry.ending.signal);
     requestTimeout = 0;
@@ -269,6 +387,7 @@ function remember(entry: PollEntry, updates: unknown) {
   // This assertion describes the attempted operation, not a validated result.
   for (const update of updates as Iterable<unknown>) {
     if (entry.seen.has((update as Fields).update_id)) continue;
+    entry.sighted.set((update as Fields).update_id, performance.now());
     const { message } = messageOf(update);
     entry.seen.set((update as Fields).update_id, {
       conversation: ((message as Fields | null)?.chat as Fields | null)?.id === undefined ? null : String(((message as Fields).chat as Fields).id),
@@ -290,41 +409,124 @@ function remember(entry: PollEntry, updates: unknown) {
 // because the words of a message with a file on it are usually the part that
 // matters and a stalled disk is a worse outcome than a missing picture.
 async function withAttachments(entry: PollEntry, transport: Transport, context: Context, items: ArrivedItem[]) {
-  const limit = context.channel?.max_attachment_bytes ?? 0;
-  const hydrated = [];
-  for (const item of items) {
-    const { message } = messageOf(item.update);
+  // Every fetch is already running or cached; awaiting by index keeps source order.
+  return Promise.all(items.map(async (item) => {
     const complete = { ...item };
-    const media = message === null ? null : mediaOf(message);
-    // The comparison keeps JavaScript coercion; the media bytes field stays unknown.
-    if (media !== null && ((media.bytes ?? 0) as number) <= limit) {
-      const fetched = await mediaFor(entry, transport, (item.update as Fields).update_id, media);
+    const media = wanted(context, item);
+    if (media !== null) {
+      const fetched = await mediaFor(entry, transport, context, (item.update as Fields).update_id, media, false);
       if (fetched !== null) complete.attachments = [fetched];
     }
-    hydrated.push(complete);
+    return complete;
+  }));
+}
+
+const idOf = (item: ArrivedItem) => (item.update as Fields).update_id;
+
+// The media of an item that is to be fetched at all: one over the channel limit
+// is not.
+function wanted(context: Context, item: ArrivedItem) {
+  const limit = context.channel?.max_attachment_bytes ?? 0;
+  const { message } = messageOf(item.update);
+  const media = message === null ? null : mediaOf(message);
+  // The comparison keeps JavaScript coercion; the media bytes field stays unknown.
+  return media !== null && ((media.bytes ?? 0) as number) <= limit ? media : null;
+}
+
+function startEager(entry: PollEntry, transport: Transport, context: Context, items: ArrivedItem[]) {
+  const limit = (context.channel?.max_attachment_bytes ?? 0) as number;
+  const quiet = (context.channel?.album_quiet_ms ?? ALBUM_QUIET_MS) as number;
+  const now = performance.now();
+  for (const [id, member] of [...entry.spec]) {
+    if (now - member.since <= quiet * SPECULATIVE_QUIET_FACTOR) continue;
+    entry.spec.delete(id);
+    entry.abandoned.add(id);
+    entry.media.delete(id);
+    entry.inflight.delete(id);
+    member.ctl.abort();
   }
-  return hydrated;
+  const cap = SPECULATIVE_CHAINS * limit;
+  let held = 0;
+  for (const member of entry.spec.values()) held += member.reserved;
+  for (const item of items) {
+    const media = wanted(context, item);
+    const id = idOf(item);
+    if (media === null || entry.media.has(id) || entry.inflight.has(id) || entry.abandoned.has(id)) continue;
+    const size = Number(media.bytes ?? limit);
+    const reserved = Number.isFinite(size) ? size : limit;
+    if (entry.spec.size >= SPECULATIVE_MEMBERS || held + reserved > cap) continue;
+    held += reserved;
+    void mediaFor(entry, transport, context, id, media, true, reserved);
+  }
 }
 
 // What was fetched for an update this worker still remembers, fetched once. A
-// retained update can settle into more than one batch — a repeat ask, a failed
-// poll, a later member arriving — and the bytes are the expensive half of a
-// poll; they are dropped with the update itself when the store confirms it.
-async function mediaFor(entry: PollEntry, transport: Transport, updateId: unknown, media: Media) {
+// retained update can settle into more than one batch, and a fetch started
+// early is the same fetch the settled batch awaits (which also takes it out of
+// the speculative budget); the bytes are dropped with the update itself when the
+// store confirms it. A failure is cached as null. Only a fetch that actually
+// ran emits a record, so cached polls stay quiet.
+function mediaFor(entry: PollEntry, transport: Transport, context: Context, updateId: unknown, media: Media, speculative: boolean, reserved = 0): Promise<FetchedMedia | null> {
+  if (!speculative) entry.spec.delete(updateId);
   // has/get are adjacent with no mutation; null is retained as a cached failure.
-  if (entry.media.has(updateId)) return entry.media.get(updateId)!;
-  const fetched = await fetchMedia(transport, media);
-  entry.media.set(updateId, fetched);
-  return fetched;
+  if (entry.media.has(updateId)) return Promise.resolve(entry.media.get(updateId)!);
+  const running = entry.inflight.get(updateId);
+  if (running !== undefined) return running;
+  const ctl = new AbortController();
+  if (speculative) entry.spec.set(updateId, { reserved, since: performance.now(), ctl });
+  const signal = AbortSignal.any([entry.ending.signal, ctl.signal]);
+  const limit = (context.channel?.max_attachment_bytes ?? 0) as number;
+  let chain!: Promise<FetchedMedia | null>;
+  chain = (async () => {
+    const queued = performance.now();
+    try {
+      if (!await entry.lanes.take(signal)) return null;
+      try {
+        const got = await fetchMedia(transport, media, signal);
+        const outcome = judge(entry, updateId, got, limit, signal.aborted, ctl.signal.aborted);
+        const { fetched, status, keep } = outcome;
+        if (keep) entry.media.set(updateId, fetched);
+        emit(entry, context, 'download', [updateId], queued, !keep && status !== 'dropped' ? 'cancelled' : status);
+        return fetched;
+      } finally {
+        entry.lanes.give();
+      }
+    } finally {
+      if (entry.inflight.get(updateId) === chain) entry.inflight.delete(updateId);
+    }
+  })();
+  entry.inflight.set(updateId, chain);
+  return chain;
 }
 
-async function fetchMedia(transport: Transport, media: Media) {
+// Size and budget verdict for a finished fetch: oversize is a failure, an
+// over-budget speculative body is dropped (never cached), a cancelled fetch is
+// not kept.
+function judge(entry: PollEntry, updateId: unknown, got: FetchedMedia | null, limit: number, ended: boolean, cancelled: boolean) {
+  let fetched = got;
+  let status = fetched === null ? 'failed' : 'ok';
+  let keep = !(ended && fetched === null) && !cancelled;
+  if (fetched !== null && fetched.bytes.length > limit) { fetched = null; status = 'oversize'; }
+  const member = entry.spec.get(updateId);
+  if (keep && fetched !== null && member !== undefined) {
+    member.reserved = fetched.bytes.length;
+    let held = 0;
+    for (const other of entry.spec.values()) held += other.reserved;
+    if (held > SPECULATIVE_CHAINS * limit) {
+      entry.spec.delete(updateId); entry.abandoned.add(updateId);
+      fetched = null; keep = false; status = 'dropped';
+    }
+  }
+  return { fetched, status, keep };
+}
+
+async function fetchMedia(transport: Transport, media: Media, signal: AbortSignal) {
   try {
-    const file = await call(transport, 'getFile', { file_id: media.file_id });
+    const file = await call(transport, 'getFile', { file_id: media.file_id }, { signal });
     // getFile returns provider JSON; this read checks only the file path before downloading.
     if (typeof (file as Fields | null)?.file_path !== 'string') return null;
     // The preceding typeof check establishes this file path, not the rest of the response.
-    const bytes = await download(transport, (file as Fields).file_path as string);
+    const bytes = await download(transport, (file as Fields).file_path as string, { signal });
     return { bytes, mime: media.mime, filename: media.file_name };
   } catch {
     // A download that failed is not a failed poll: the message itself arrived and

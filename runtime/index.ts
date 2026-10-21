@@ -1,7 +1,7 @@
 // shape: justified this existing runtime composition point coordinates store, harness, channels, tools and the typed browser turn preparation contract
 import type { BrowserPreparation } from './browser.ts';
 import type { BrowserReplyValidator } from './reply-tool.ts';
-import type { Declaration, Channel, Log, Harness, TurnInput, Session, ChildExit } from './types.ts';
+import type { Declaration, Channel, Log, Harness, TurnInput, Session, ChildExit, Context } from './types.ts';
 type RunOptions<S extends Session> = { declaration: Declaration; declarationPath: string; storeDir: string; codexHome: string; checkout: string; work: string; harnessRoot: string; binary?: string | null; replyPort?: number; teachPort?: number; harness: Harness<S, TurnInput>; adapters?: Record<string, object> | null; items?: (channel: Channel) => unknown; passes?: number; log?: Log; now?: () => number; sandboxDeny?: SandboxDenyGate; store?: Store; prepareBrowserTurn?: BrowserPreparation; validateBrowserReply?: BrowserReplyValidator; browserThreadOptions?: BrowserThreadOptions; browserEvidenceHooks?: {hooksFile:string;command:string} };
 
 // The runtime process: the one thing a unit starts.
@@ -233,6 +233,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
   if (intervalFaults.length > 0) throw new RuntimeFault(intervalFaults);
 
   let unsubscribeBrowser: (() => void) | null = null;
+  const unsubscribeReady: (() => void)[] = [];
   const locks: ReturnType<typeof takeLock>[] = [];
   const toolServers: ReturnType<typeof startToolServers> = [];
   let reply: Awaited<ReturnType<typeof serveReplyTool>> | null = null;
@@ -246,6 +247,7 @@ export async function run<S extends Session>(options: RunOptions<S>) {
   });
   const stop = async () => {
     unsubscribeBrowser?.();
+    for (const off of unsubscribeReady.splice(0)) off();
     providerAccount.close();
     if (reply) await reply.close();
     if (teach) await teach.close();
@@ -431,6 +433,20 @@ export async function run<S extends Session>(options: RunOptions<S>) {
       }
       draining.wake?.();
     });
+    // An adapter that can say a settled batch is waiting wakes its own loop. The
+    // hint only moves the next pass earlier; the same sequential sweep runs it,
+    // so there is one pass at a time, and a hint that is lost or repeated changes
+    // nothing but timing. A hint during a pass is kept by the generation.
+    for (const loop of loops) {
+      const subscribe = (loop.adapter as { subscribeReady?: (context: Context, listener: () => void) => () => void }).subscribeReady;
+      if (typeof subscribe !== 'function' || loop.channel.kind === 'browser') continue;
+      unsubscribeReady.push(subscribe(loop.context(), () => {
+        if (draining.signal) return;
+        browserGeneration.set(loop, browserGeneration.get(loop)! + 1);
+        dueAt.set(loop, 0);
+        draining.wake?.();
+      }));
+    }
     let done = 0;
     while (done < passes) {
       if (childExit || draining.signal) break;
@@ -445,9 +461,10 @@ export async function run<S extends Session>(options: RunOptions<S>) {
           childExit = childExit ?? { code: null, signal: 'unknown' };
           break;
         }
+        const hinted = browserGeneration.get(loop)! !== generation;
         dueAt.set(loop, loop.channel.kind === 'browser'
-          ? browserGeneration.get(loop)! === generation ? Infinity : 0
-          : now() + loop.intervalMs!); // Every scheduled loop received its checked interval before this sweep.
+          ? hinted ? 0 : Infinity
+          : hinted ? 0 : now() + loop.intervalMs!); // Every scheduled loop received its checked interval before this sweep.
         if (childExit) break;
       }
       done += 1;

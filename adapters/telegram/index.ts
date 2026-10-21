@@ -50,7 +50,7 @@ import { StreamFault } from '../../stream/store.ts';
 import { albumOf, bodyOf, conversationKind, mediaOf, messageOf, readable, senderOf, serviceKindOf } from './content.ts';
 import { TelegramFault, call, readToken } from './api.ts';
 import { nextOffset, offsetPositionOf, positionOf, updatesConversation } from './cursors.ts';
-import { ALBUM_QUIET_MS, arrivals, stop, transportFor } from './live.ts';
+import { ALBUM_QUIET_MS, arrivals, onReady, stop, transportFor } from './live.ts';
 export const capabilities = ['inbound', 'outbound'];
 export const SOURCE = 'telegram';
 // The Bot API refuses a `text` longer than this outright, with a 400 and no
@@ -562,6 +562,9 @@ export function outcomeOf(error: unknown, sentSoFar = 0) {
 export async function poll(context: Context) {
   return { items: await arrivals({ ...context, channel: channelOf(context) }) };
 }
+
+// Optional readiness hint for the runtime; polling stays the fallback.
+export const subscribeReady = (context: Context, listener: () => void) => onReady({ ...context, channel: channelOf(context) }, listener);
 
 // ---- 8. the signal that a turn is running -------------------------------------
 

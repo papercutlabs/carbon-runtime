@@ -652,7 +652,8 @@ export class ReleaseLoop<S = Session> {
       declaration: this.declaration,
       items,
       dry_run: false,
-      now: this.now()
+      now: this.now(),
+      log: (line) => this.log(line)
     };
   }
 
@@ -1803,7 +1804,14 @@ export class ReleaseLoop<S = Session> {
       };
     }
     if (this.recovering) await this.inspectBrowserRecovery();
+    const captureStart = performance.now();
     const captured = this.capture(polled.items);
+    // Capture and admission are one synchronous step here; reported combined, one clock.
+    if ((polled.items as { length?: number } | null)?.length) {
+      this.log({ event: 'latency_experiment', schema: 'carbon.latency-experiment.v1', run_id: `${this.channel.kind}:capture`, variant: 'default',
+        stage: 'capture-admission', source_ids: [], source_count: Number((polled.items as { length: number }).length) || 0,
+        started_monotonic_ms: Math.round(captureStart * 1000) / 1000, ended_monotonic_ms: Math.round(performance.now() * 1000) / 1000, status: 'ok' });
+    }
     const recovered = this.recovering ?? { reissue: [] };
     this.recovering = null;
     const released = await this.releasePass({ reissue: recovered.reissue });

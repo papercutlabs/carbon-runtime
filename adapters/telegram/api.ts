@@ -151,10 +151,13 @@ export async function call(transport: Transport, method: string, params: Fields 
 
 // The bytes of a file, by the path getFile answered with. The download URL
 // carries the token the way a method call does, so the same scrubbing applies.
-export async function download(transport: Transport, filePath: string, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
+export async function download(transport: Transport, filePath: string, { timeoutMs = CALL_TIMEOUT_MS, signal }: { timeoutMs?: number; signal?: AbortSignal } = {}) {
   const { token, apiHost = DEFAULT_API_HOST } = transport;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     const response = await fetch(`https://${apiHost}/file/bot${token}/${filePath}`, { signal: controller.signal });
     if (!response.ok) {
@@ -171,5 +174,6 @@ export async function download(transport: Transport, filePath: string, { timeout
       'the record keeps the attachment as download_failed and is released anyway')]);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
