@@ -266,6 +266,54 @@ test('captured inbound facts are registered with their declared work unit before
   }
 });
 
+test('a records action service that does not answer holds release by name, and the next pass tries again', async () => {
+  const closed = http.createServer();
+  await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+  const address = closed.address();
+  if (!address || typeof address === 'string') throw new Error('test listener has no port');
+  await new Promise<void>((resolve) => closed.close(() => resolve()));
+  const { loop, store, harness } = makeLoop({ decl: declaration({ records: { enabled: true } }),
+    onTurn: (s) => answering(s), recordsActionUrl: `http://127.0.0.1:${address.port}`,
+    statuses: () => [...REPLY_LISTED(), { name: 'carbon-records', runtimeStatus: 'connected' }] });
+  const lines: Record<string, unknown>[] = [];
+  loop.log = (line) => lines.push(line);
+
+  const first = await loop.pass([item(1, 'a fact while the records tool waits for its database')]);
+  const second = await loop.pass([]);
+
+  for (const result of [first, second]) {
+    assert.equal(result.released.length, 0);
+    assert.equal(result.parked.length, 0);
+    assert.equal(result.held.length, 1);
+    assert.deepEqual(result.holding, [`http://127.0.0.1:${address.port}`]);
+  }
+  assert.equal(harness.session.turns.length, 0);
+  assert.equal(lines.filter((line) => line.event === 'records_action.hold').length, 2);
+  const inbound = store.rebuild().find((r) => r.direction === 'inbound')!;
+  assert.equal(inbound.release, undefined);
+});
+
+test('once the records action service answers, the hold clears', async () => {
+  const server = http.createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'collected' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('test listener has no port');
+    const { loop } = makeLoop({ decl: declaration({ records: { enabled: true } }),
+      recordsActionUrl: `http://127.0.0.1:${address.port}` });
+    loop.recordsFaults = [{ code: 'RECORDS_ACTION_UNAVAILABLE', subject: 'earlier', problem: 'p', fix: 'f' }];
+    loop.capture([item(1, 'a client fact')]);
+    assert.equal(await loop.syncCollectedOrHold([]), true);
+    assert.deepEqual(loop.recordsFaults, []);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('records from two conversations in one pass become two releases', async () => {
   const { loop, store, harness } = makeLoop({
     onTurn: (s) => {

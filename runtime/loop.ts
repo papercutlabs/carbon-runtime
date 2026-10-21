@@ -559,6 +559,7 @@ export class ReleaseLoop<S = Session> {
   declare toolStatusStale: boolean;
   declare holdFaults: Fault[];
   declare proxyFaults: Fault[];
+  declare recordsFaults: Fault[];
   declare probe: (url: string) => Promise<boolean>;
   declare items: () => unknown[];
   declare recovering: ReturnType<ReleaseLoop<S>['recover']> | null | undefined;
@@ -628,6 +629,7 @@ export class ReleaseLoop<S = Session> {
     this.toolStatusStale = true;
     this.holdFaults = [];
     this.proxyFaults = [];
+    this.recordsFaults = [];
     this.probe = probe;
     this.items = () => [];
     // What happens once a turn has completed and its thread record is written:
@@ -1052,6 +1054,26 @@ export class ReleaseLoop<S = Session> {
     this.collectedSynced = true;
   }
 
+  // The records action service (PA-241). syncCollected posts to it before every
+  // turn. While it does not answer — its unit not started, or the records tool
+  // still waiting for its database — release is held by name and tried again next
+  // pass, as for a down provider proxy, instead of the process exiting into a
+  // restart loop that takes no turn and says only RUNTIME_THREW.
+  async syncCollectedOrHold(records: MessageRecord[]) {
+    try {
+      await this.syncCollected(records);
+    } catch (error) {
+      const faults = ((error as { name?: string; faults?: Fault[] }).name === 'ToolFault'
+        ? (error as { faults: Fault[] }).faults : []);
+      if (!faults.some((item) => item.code === 'RECORDS_ACTION_UNAVAILABLE')) throw error;
+      this.recordsFaults = faults;
+      this.log({ event: 'records_action.hold', faults });
+      return false;
+    }
+    this.recordsFaults = [];
+    return true;
+  }
+
   // ---- capture ------------------------------------------------------------
 
   capture(items: unknown) {
@@ -1222,7 +1244,7 @@ export class ReleaseLoop<S = Session> {
         if (this.holdFaults.length > 0) break;
       }
     }
-    return { released, held, parked, holding: [...this.holdFaults, ...this.proxyFaults].map((f) => f.subject) };
+    return { released, held, parked, holding: [...this.holdFaults, ...this.proxyFaults, ...this.recordsFaults].map((f) => f.subject) };
   }
 
   // One release, wrapped in the signal that says a turn is running. The signal
@@ -1238,7 +1260,7 @@ export class ReleaseLoop<S = Session> {
     const threadId = await this.threadFor(unitId);
     if (this.holdFaults.length > 0) return null;
     if ((await this.checkProviderProxy()).length > 0) return null;
-    await this.syncCollected(records);
+    if (!(await this.syncCollectedOrHold(records))) return null;
     const typing = startTyping({
       adapter: this.adapter, context: this.context(), record, log: (line) => this.log(line)
     });
