@@ -151,10 +151,16 @@ export async function call(transport: Transport, method: string, params: Fields 
 
 // The bytes of a file, by the path getFile answered with. The download URL
 // carries the token the way a method call does, so the same scrubbing applies.
-export async function download(transport: Transport, filePath: string, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
+// With maxBytes the body is refused on a larger Content-Length and otherwise read
+// incrementally, cancelled as soon as the running count passes the limit.
+export const ATTACHMENT_TOO_LARGE = 'ATTACHMENT_TOO_LARGE';
+export async function download(transport: Transport, filePath: string, { timeoutMs = CALL_TIMEOUT_MS, signal, maxBytes }: { timeoutMs?: number; signal?: AbortSignal; maxBytes?: number } = {}) {
   const { token, apiHost = DEFAULT_API_HOST } = transport;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     const response = await fetch(`https://${apiHost}/file/bot${token}/${filePath}`, { signal: controller.signal });
     if (!response.ok) {
@@ -162,7 +168,30 @@ export async function download(transport: Transport, filePath: string, { timeout
         `the file endpoint answered ${response.status} ${response.statusText}`,
         'the record keeps the attachment as download_failed and is released anyway')], { errorCode: response.status });
     }
-    return Buffer.from(await response.arrayBuffer());
+    const tooLarge = () => {
+      controller.abort();
+      return new TelegramFault([fault(ATTACHMENT_TOO_LARGE, filePath, `the file is larger than the ${maxBytes} byte limit`,
+        'the record keeps the attachment as download_failed and is released anyway')]);
+    };
+    if (maxBytes === undefined) return Buffer.from(await response.arrayBuffer());
+    const declared = Number(response.headers?.get?.('content-length') ?? NaN);
+    if (declared > maxBytes) throw tooLarge();
+    const reader = response.body?.getReader?.();
+    if (reader === undefined) {
+      const whole = Buffer.from(await response.arrayBuffer());
+      if (whole.length > maxBytes) throw tooLarge();
+      return whole;
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) { await reader.cancel().catch(() => undefined); throw tooLarge(); }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks);
   } catch (error) {
     if (error instanceof TelegramFault) throw error;
     throw new TelegramFault([fault('ATTACHMENT_DOWNLOAD_FAILED', filePath,
@@ -171,5 +200,6 @@ export async function download(transport: Transport, filePath: string, { timeout
       'the record keeps the attachment as download_failed and is released anyway')]);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 }

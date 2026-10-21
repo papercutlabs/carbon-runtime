@@ -298,7 +298,7 @@ test('an album is settled across repeat asks at one offset and every photo is fe
   }
 });
 
-test('album membership settles before a slow first photo fetch begins', async (t) => {
+test('album membership settles while a slow first photo fetch is in flight', async (t) => {
   for (const [name, delay] of [
     ['getFile response', { firstGetFileDelayMs: 150 }],
     ['file response body', { firstBodyDelayMs: 150 }]
@@ -327,9 +327,9 @@ test('album membership settles before a slow first photo fetch begins', async (t
         assert.equal(items.length, 6, 'media work expired the membership window');
         assert.ok(server.asked.length >= 3);
         assert.deepEqual([...new Set(server.asked.slice(0, 3).map((one) => one.offset))], [null]);
-        const firstMediaAt = Math.min(...server.media.map((one) => one.began_ms));
-        assert.ok(server.asked.some((one) => one.count === 6 && one.at_ms < firstMediaAt),
-          'the full raw album was not observed before media fetching began');
+        // Downloads now begin eagerly inside the window (PA-241). The slow first
+        // photo must still not stop the loop from seeing the whole album.
+        assert.ok(server.asked.some((one) => one.count === 6), 'the full raw album was never observed');
         assert.deepEqual([...server.fetched.values()], [1, 1, 1, 1, 1, 1]);
       } finally {
         server.restore();

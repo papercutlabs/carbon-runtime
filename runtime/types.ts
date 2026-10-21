@@ -56,7 +56,7 @@ export type Declaration = {
 };
 export type Context = {
   store: Store; agent: string; account: string; channel: Channel;
-  declaration: Declaration; items: unknown; dry_run: boolean; now: number;
+  declaration: Declaration; items: unknown; dry_run: boolean; now: number; log?: Log;
 };
 export type Status = { name: string; runtimeStatus?: string | null };
 export type ThreadOpening = {

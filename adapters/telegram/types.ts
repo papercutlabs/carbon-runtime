@@ -20,7 +20,7 @@ export type ArrivedItem = Item & { received_at: string };
 export type Context = {
   agent: string; account: string; store: Store; channel?: Channel;
   fixtures?: { 'channel.json'?: Channel }; items?: Item[]; now?: number;
-  dry_run?: boolean; transport?: Transport;
+  dry_run?: boolean; transport?: Transport; log?: (line: Record<string, unknown>) => unknown;
 };
 export type Media = { file_id: unknown; bytes: unknown; mime: unknown; file_name: unknown; kind: string };
 export type FetchedMedia = { bytes: Buffer; mime: unknown; filename: unknown };
