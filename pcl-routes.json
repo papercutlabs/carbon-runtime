@@ -1,0 +1,14 @@
+{
+  "exceptions": [
+    {
+      "file": "runtime/records-action-http.ts",
+      "kind": "node-server",
+      "reason": "The runtime's internal channel to its own tool processes (turn-start, collect, classify and the rest). It binds 127.0.0.1 only and is not an operation offered to people or agents."
+    },
+    {
+      "file": "tools/lib/mcp.ts",
+      "kind": "node-server",
+      "reason": "Carbon's MCP scaffold, the transport PA-351 names for generated interfaces. It refuses any host that is not loopback."
+    }
+  ]
+}
