@@ -603,7 +603,7 @@ function runtimePackage(pkg: unknown, out: FaultRow[]): void {
       `this repository declares ${names.length === 0 ? 'no dependency' : names.join(', ')}, and this release names ${expected.join(' and ')}`,
       'name every runtime dependency here and explain it in the release contract'));
   }
-  for (const name of expected) if (!(name === '@pcl/routes' ? field(declared,name) === 'file:vendor/pcl-routes-0.1.2.tgz' : isExactPin(field(declared, name)))) {
+  for (const name of expected) if (!(name === '@pcl/routes' ? field(declared,name) === 'file:vendor/pcl-routes-0.3.0.tgz' : isExactPin(field(declared, name)))) {
     out.push(fault('SHAPE_ONE_DEPENDENCY', 'package.json',
       `${name} is declared as ${field(declared, name)}, which is absent or not an exact version`,
       'pin the exact version, so the tarball that goes on a box is the one that was tested'));
